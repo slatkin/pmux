@@ -2,9 +2,13 @@
 
 pi integration for [tmux](https://github.com/tmux/tmux).
 
-Subagent panes open next to their parent in tmux. The split anchors on the
-caller's own pane (`$TMUX_PANE`), so a subagent opens beside its parent even
-when another client is attached to another window of the same server.
+Subagent panes open in the caller's own tmux window. The split anchors on the
+caller's newest living child pane, or on the caller's own pane (`$TMUX_PANE`)
+when it has none — the first child opens beside its parent, later children
+beside the previous child. The anchor is always the caller's own pane id,
+never a client-dependent current pane, so a subagent still opens in the
+caller's window even when another client is attached to another window of
+the same server.
 
 - Reports live status per pane. Each child writes `working` or `idle` (and `done` or `blocked` at exit) to a status file next to its session file, and an unfocused parent pane pushes a tmux status-line notification when its turn ends.
 
