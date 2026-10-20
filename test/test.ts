@@ -598,13 +598,13 @@ describe("status.ts", () => {
     });
   });
 
-  it("resolves the surface placement default: right/down/tab as given, legacy pane, junk and absent -> right", () => {
+  it("resolves the surface placement default: tab as given, legacy right/down/pane, junk and absent -> pane", () => {
     assert.equal(parseSurfaceConfig({ surface: "tab" }), "tab");
-    assert.equal(parseSurfaceConfig({ surface: "down" }), "down");
-    assert.equal(parseSurfaceConfig({ surface: "right" }), "right");
-    assert.equal(parseSurfaceConfig({ surface: "pane" }), "right");
-    assert.equal(parseSurfaceConfig({ surface: "junk" }), "right");
-    assert.equal(parseSurfaceConfig({}), "right");
+    assert.equal(parseSurfaceConfig({ surface: "down" }), "pane");
+    assert.equal(parseSurfaceConfig({ surface: "right" }), "pane");
+    assert.equal(parseSurfaceConfig({ surface: "pane" }), "pane");
+    assert.equal(parseSurfaceConfig({ surface: "junk" }), "pane");
+    assert.equal(parseSurfaceConfig({}), "pane");
   });
 
   it("loads the surface placement from a temp config file", () => {
@@ -615,9 +615,23 @@ describe("status.ts", () => {
       assert.equal(loadSurfaceConfig(configPath, examplePath), "tab");
 
       writeFileSync(configPath, JSON.stringify({ surface: "junk" }));
-      assert.equal(loadSurfaceConfig(configPath, examplePath), "right");
+      assert.equal(loadSurfaceConfig(configPath, examplePath), "pane");
 
-      assert.equal(loadSurfaceConfig(join(dir, "missing.json"), examplePath), "right");
+      assert.equal(loadSurfaceConfig(join(dir, "missing.json"), examplePath), "pane");
+    });
+  });
+
+  it("persists the pane placement while keeping other config keys", () => {
+    withTempDir((dir) => {
+      const configPath = join(dir, "config.json");
+      const examplePath = join(dir, "config.json.example");
+      writeFileSync(configPath, JSON.stringify({ status: { enabled: false } }, null, 2) + "\n");
+
+      writeSurfaceConfig("pane", configPath, examplePath);
+
+      const saved = JSON.parse(readFileSync(configPath, "utf8"));
+      assert.deepEqual(saved, { status: { enabled: false }, surface: "pane" });
+      assert.equal(loadSurfaceConfig(configPath, examplePath), "pane");
     });
   });
 
@@ -641,10 +655,10 @@ describe("status.ts", () => {
       const examplePath = join(dir, "config.json.example");
       writeFileSync(examplePath, JSON.stringify({ status: { enabled: true } }, null, 2) + "\n");
 
-      writeSurfaceConfig("down", configPath, examplePath);
+      writeSurfaceConfig("pane", configPath, examplePath);
 
       const saved = JSON.parse(readFileSync(configPath, "utf8"));
-      assert.deepEqual(saved, { status: { enabled: true }, surface: "down" });
+      assert.deepEqual(saved, { status: { enabled: true }, surface: "pane" });
     });
   });
 
@@ -659,7 +673,7 @@ describe("status.ts", () => {
 
       mkdirSync(join(dir, "extensions", "pmux"), { recursive: true });
       writeFileSync(configPath, JSON.stringify({ surface: "down" }));
-      assert.equal(loadSurfaceConfig(configPath, examplePath, legacyPath), "down");
+      assert.equal(loadSurfaceConfig(configPath, examplePath, legacyPath), "pane");
     });
   });
 
@@ -676,13 +690,14 @@ describe("status.ts", () => {
         );
         assert.equal(loadSurfaceConfig(), "tab");
 
-        // The new directory wins when both exist.
+        // The new directory wins when both exist. A legacy `down` value
+        // resolves to `pane`.
         mkdirSync(join(dir, "extensions", "pmux"), { recursive: true });
         writeFileSync(
           join(dir, "extensions", "pmux", "config.json"),
           JSON.stringify({ surface: "down" }),
         );
-        assert.equal(loadSurfaceConfig(), "down");
+        assert.equal(loadSurfaceConfig(), "pane");
       } finally {
         restoreEnvVar("PI_CODING_AGENT_DIR", previous);
       }
@@ -1195,11 +1210,11 @@ describe("surface placement resolution", () => {
     try {
       subagentsModule.setSurfaceDefault("tab");
       assert.equal(subagentsModule.resolveSurfacePlacement(undefined), "tab");
-      assert.equal(subagentsModule.resolveSurfacePlacement("down"), "down");
-      assert.equal(subagentsModule.resolveSurfacePlacement("pane"), "right");
+      assert.equal(subagentsModule.resolveSurfacePlacement("down"), "pane");
+      assert.equal(subagentsModule.resolveSurfacePlacement("pane"), "pane");
 
-      subagentsModule.setSurfaceDefault("down");
-      assert.equal(subagentsModule.resolveSurfacePlacement("junk"), "down");
+      subagentsModule.setSurfaceDefault("pane");
+      assert.equal(subagentsModule.resolveSurfacePlacement("junk"), "pane");
       assert.equal(subagentsModule.resolveSurfacePlacement("tab"), "tab");
     } finally {
       subagentsModule.setSurfaceDefault(saved);

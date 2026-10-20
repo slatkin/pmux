@@ -106,12 +106,52 @@ export function paneExists(surface: string): boolean {
   }
 }
 
+/** One row of the placement listing: a window pane with its shape and parent. */
+interface PaneRow {
+  id: string;
+  width: number;
+  height: number;
+  /** The `@pmux_parent` value; empty when the option is unset. */
+  parent: string;
+}
+
+/**
+ * Parse the placement listing. A line may carry 3 fields (`@pmux_parent`
+ * unset prints as an empty field) or 4; malformed rows are skipped.
+ */
+function parsePaneRows(out: string): PaneRow[] {
+  const rows: PaneRow[] = [];
+  for (const line of out.split("\n")) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 3 || !fields[0].startsWith("%")) continue;
+    const width = Number(fields[1]);
+    const height = Number(fields[2]);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) continue;
+    rows.push({ id: fields[0], width, height, parent: fields[3] ?? "" });
+  }
+  return rows;
+}
+
+/** The numeric part of a tmux pane id (`%10` -> 10); `-1` when malformed. */
+function paneIdNumber(id: string): number {
+  const n = Number(id.slice(1));
+  return Number.isFinite(n) ? n : -1;
+}
+
+/** Side by side when the target is at least twice as wide as it is tall. */
+function axisDirection(row: PaneRow): SplitDirection {
+  return row.width >= 2 * row.height ? "right" : "down";
+}
+
 /**
  * Create a new pane for a subagent and return its id.
  *
- * `right` and `down` split the caller's pane without taking focus (`-d`), so
- * the new pane joins the caller's own window. `tab` opens a new window in the
- * caller's session and restores focus to the caller's window afterwards.
+ * `pane` splits a target pane in the caller's own window without taking
+ * focus (`-d`). The target is the newest living pane this caller created in
+ * that window (tracked with the `@pmux_parent` pane option), or the caller's
+ * own pane when there is none; the axis comes from the target's shape. `tab`
+ * opens a new window in the caller's session and restores focus to the
+ * caller's window afterwards.
  */
 export function createSurface(
   name: string,
@@ -133,16 +173,51 @@ export function createSurface(
       // Focus restore is best effort; the new window exists either way.
     }
   } else {
+    let target = caller;
+    let direction: SplitDirection = "right";
+    try {
+      const rows = parsePaneRows(
+        tmux([
+          "list-panes",
+          "-t",
+          caller,
+          "-F",
+          "#{pane_id} #{pane_width} #{pane_height} #{@pmux_parent}",
+        ]),
+      );
+      // A candidate is a living pane this caller created in this window; the
+      // caller's own row carries its own parent (or none) and never matches.
+      const candidates = rows.filter((row) => row.parent === caller && row.id !== caller);
+      const newest = candidates.reduce<PaneRow | undefined>(
+        (best, row) =>
+          best === undefined || paneIdNumber(row.id) > paneIdNumber(best.id) ? row : best,
+        undefined,
+      );
+      const shapeRow = newest ?? rows.find((row) => row.id === caller);
+      if (shapeRow) {
+        if (newest) target = newest.id;
+        direction = axisDirection(shapeRow);
+      }
+    } catch {
+      // The listing failed: fall back to splitting the caller side by side
+      // rather than failing the spawn.
+    }
     surface = tmux([
       "split-window",
       "-d",
-      splitFlag(placement === "down" ? "down" : "right"),
+      splitFlag(direction),
       "-t",
-      caller,
+      target,
       "-P",
       "-F",
       "#{pane_id}",
     ]).trim();
+    try {
+      tmux(["set-option", "-p", "-t", surface, "@pmux_parent", caller]);
+    } catch {
+      // The parentage marker is best effort; the pane still works without it,
+      // it just cannot become a later spawn's target.
+    }
   }
 
   if (!surface.startsWith("%")) {
