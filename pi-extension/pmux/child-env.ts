@@ -12,6 +12,9 @@ export interface ChildEnv {
   activityFile?: string;
   surface?: string;
   parentRosterFile?: string;
+  /** Set only for a skill-launched child: its parent is an external
+   * orchestrator, so `pmux_message` must refuse `parent`. */
+  externalParent?: boolean;
   autoExit: boolean;
   denyTools: string[];
 }
@@ -28,6 +31,7 @@ export function encodeChildEnv(env: ChildEnv): Record<string, string> {
   if (env.parentRosterFile !== undefined) {
     out.PI_PMUX_PARENT_ROSTER = env.parentRosterFile;
   }
+  if (env.externalParent) out.PI_PMUX_EXTERNAL_PARENT = "1";
   if (env.autoExit) out.PI_PMUX_AUTO_EXIT = "1";
   if (env.denyTools.length > 0) out.PI_DENY_TOOLS = env.denyTools.join(",");
   return out;
@@ -56,6 +60,7 @@ export function decodeChildEnv(env: NodeJS.ProcessEnv): ChildEnv {
     activityFile: value("PI_PMUX_ACTIVITY_FILE"),
     surface: value("PI_PMUX_SURFACE"),
     parentRosterFile: value("PI_PMUX_PARENT_ROSTER"),
+    externalParent: env.PI_PMUX_EXTERNAL_PARENT === "1",
     autoExit: env.PI_PMUX_AUTO_EXIT === "1",
     denyTools: parseToolList(env.PI_DENY_TOOLS),
   };

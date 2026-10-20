@@ -268,6 +268,7 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
     sessionFile,
     id,
     activityFile: join(scratch, `${base}.activity.json`),
+    externalParent: true,
     autoExit: definition.autoExit === true,
     denyTools: [...resolveDenyTools(definition)],
   });

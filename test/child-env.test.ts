@@ -23,6 +23,7 @@ test("round-trips a full ChildEnv", () => {
     activityFile: "/tmp/a.json",
     surface: "surface-1",
     parentRosterFile: "/tmp/r.json",
+    externalParent: false,
     autoExit: true,
     denyTools: ["pmux_spawn", "claude"],
   };
