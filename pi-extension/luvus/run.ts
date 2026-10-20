@@ -7,12 +7,13 @@
  * child's exit code, so the CLI can exit with it.
  */
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildPaneTitle, type LaunchSpec } from "./launch.ts";
 import { agentSend, closeSurface } from "./tmux.ts";
 import { readExitSidecar } from "./exit-sidecar.ts";
+import { readChildStatus, writeChildStatus } from "./status-file.ts";
 
 /**
  * pi wipes a title emitted before it finishes booting (it enters the
@@ -152,6 +153,16 @@ export async function runSpec(
 
   const code = reportExit(outcome, spec.command, writeErr);
   write(`__SUBAGENT_DONE_${code}__\n`);
+
+  // A child that died left `working` or `idle` on disk and no sidecar: mark it
+  // blocked with the exit code so a status wait ends. A clean completion or a
+  // ping (a sidecar, or a terminal status the child wrote itself) is left as is.
+  if (spec.sessionFile && !existsSync(`${spec.sessionFile}.exit`)) {
+    const status = readChildStatus(spec.sessionFile);
+    if (status?.status !== "done" && status?.status !== "blocked") {
+      writeChildStatus(spec.sessionFile, "blocked", `child exited with code ${code}`);
+    }
+  }
 
   // A child that exits without `luvus agent send` leaves the parent asleep
   // forever; wake it with the exit state so it can read the session.

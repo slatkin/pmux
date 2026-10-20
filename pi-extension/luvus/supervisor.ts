@@ -26,6 +26,7 @@ import {
   sendEscape,
 } from "./tmux.ts";
 import type { PollResult } from "./exit-sidecar.ts";
+import { removeChildStatus } from "./status-file.ts";
 import type { SurfacePlacement } from "./placement.ts";
 import {
   buildSubagentToolAllowlist,
@@ -1540,6 +1541,9 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
   ): RunningSubagent {
     const { spec, running } = backend.buildLaunch(request);
     writeLaunchSpec(request.run.launchScriptFile, spec);
+    // A resume reuses the session file, so a stale status from an earlier run
+    // must not survive into this one.
+    if (request.run.sessionFile) removeChildStatus(request.run.sessionFile);
     deps.luvus.runInPane(request.run.surface, paneLine);
 
     runningSubagents.set(running.id, running);

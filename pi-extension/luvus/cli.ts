@@ -39,6 +39,7 @@ import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
+import { removeChildStatus } from "./status-file.ts";
 import { slugifyName } from "./slug.ts";
 import { encodeChildEnv, resolveDenyTools } from "./child-env.ts";
 
@@ -277,6 +278,10 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
   };
   writeLaunchSpec(specPath, spec);
 
+  // A resume reuses the session file, so a stale status from an earlier run
+  // must not survive into this one.
+  removeChildStatus(sessionFile);
+
   const pane = createSurface(name, placement, callerPaneId(env));
   runInPane(pane, paneLine);
 
@@ -309,6 +314,10 @@ function resumeCommand(values: CliValues, deps: CliDeps, placement: SurfacePlace
     );
   }
   const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);
+
+  // The launch spec carries the session file; a stale status from the earlier
+  // run must not survive into this one.
+  removeChildStatus(spec.sessionFile);
 
   const pane = createSurface(values.name ?? spec.name, placement, callerPaneId(env));
   runInPane(pane, paneLine);

@@ -36,6 +36,7 @@ import {
   type HandoffLogRow,
 } from "./context-alert.ts";
 import { loadStatusConfig } from "./status.ts";
+import { writeChildStatus } from "./status-file.ts";
 
 export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
   return agentStarted;
@@ -319,6 +320,11 @@ export default function (pi: ExtensionAPI) {
   let userTookOver = false;
   let agentStarted = false;
 
+  /** Best-effort status write; a failed write never blocks a turn or shutdown. */
+  function writeStatus(status: "working" | "idle" | "done" | "blocked", message?: string): void {
+    if (childEnv.sessionFile) writeChildStatus(childEnv.sessionFile, status, message);
+  }
+
   // Show widget + status bar on session start
   pi.on("session_start", (_event, ctx) => {
     recorder.sessionStart();
@@ -370,6 +376,7 @@ export default function (pi: ExtensionAPI) {
     const errorInfo = findLatestAssistantError(messages);
     const sessionFile = childEnv.sessionFile;
     if (errorInfo && sessionFile) {
+      writeStatus("blocked", errorInfo.errorMessage);
       try {
         writeFileSync(
           `${sessionFile}.exit`,
@@ -400,6 +407,7 @@ export default function (pi: ExtensionAPI) {
     if (autoExit && !userTookOver && shouldAutoExitOnAgentEnd(messages)) {
       recorder.agentEndDone();
       if (sessionFile) {
+        writeStatus("done");
         try {
           writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
         } catch {
@@ -421,10 +429,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("turn_start", (event) => {
+    writeStatus("working");
     recorder.turnStart((event as any).turnIndex);
   });
 
   pi.on("turn_end", (event, ctx) => {
+    writeStatus("idle");
     recorder.turnEnd((event as any).turnIndex);
     checkContextAlert(event, ctx);
   });
@@ -501,6 +511,7 @@ export default function (pi: ExtensionAPI) {
         name: childEnv.name ?? "subagent",
         message: params.message,
       };
+      writeStatus("blocked", params.message);
       writeFileSync(`${sessionFile}.exit`, JSON.stringify(exitData));
 
       ctx.shutdown();
@@ -547,6 +558,7 @@ export default function (pi: ExtensionAPI) {
       clearNudgeTimer();
       // The orchestrator learns that the task is not complete from the sidecar.
       if (sessionFile) {
+        writeStatus("done");
         writeFileSync(
           `${sessionFile}.exit`,
           JSON.stringify(
