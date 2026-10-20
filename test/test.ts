@@ -2733,6 +2733,35 @@ describe("subagent messaging", () => {
     assert.doesNotMatch(result.error, /parent/);
   });
 
+  it("offers no parent in the empty-target hint for a child with an external parent", () => {
+    const result = testApi().resolveMessageTarget({
+      hasParent: true,
+      externalParent: true,
+      ownChildren: [{ id: "d4", name: "Scout", surface: "27" }],
+      parentRoster: {
+        parentPane: "%21",
+        parentName: "parent",
+        children: [{ id: "b2", name: "Worker", pane: "25", cli: "pi" }],
+      },
+      selfId: "z9",
+      to: "",
+    });
+    assert.match(result.error, /Provide a target: a child or a sibling/);
+    assert.match(result.error, /Reachable: Scout, Worker/);
+    assert.doesNotMatch(result.error, /parent/);
+  });
+
+  it("keeps parent in the empty-target hint for a child with a pi parent", () => {
+    const result = testApi().resolveMessageTarget({
+      hasParent: true,
+      ownChildren: [],
+      parentRoster: null,
+      selfId: "z9",
+      to: "",
+    });
+    assert.match(result.error, /Provide a target: `parent`, a child, or a sibling/);
+  });
+
   it("appends nothing to the message file from a child with an external parent", () => {
     const appended: Array<{ file: string; payload: any }> = [];
     const prompted: string[] = [];

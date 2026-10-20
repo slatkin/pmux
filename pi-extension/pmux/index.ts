@@ -239,8 +239,12 @@ export function resolveMessageTarget(params: {
   const reachable = () => reachableTargetNames({ ...params, ownChildren }).join(", ") || "(none)";
 
   if (!to) {
+    // A sender that cannot reach `parent` (no parent, or an external one)
+    // must not be told to use it; derive the hint from reachability.
+    const withParent = params.hasParent && !params.externalParent;
+    const options = withParent ? "`parent`, a child, or a sibling" : "a child or a sibling";
     return {
-      error: `Provide a target: \`parent\`, a child, or a sibling. Reachable: ${reachable()}.`,
+      error: `Provide a target: ${options}. Reachable: ${reachable()}.`,
     };
   }
   if (to === "parent") {
