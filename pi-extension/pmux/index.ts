@@ -204,12 +204,13 @@ export interface MessageTarget {
 /** Names the sender can reach right now, for the "no such target" error. */
 function reachableTargetNames(params: {
   hasParent: boolean;
+  externalParent?: boolean;
   ownChildren: Array<Pick<RunningSubagent, "name">>;
   parentRoster: SubagentRoster | null;
   selfId: string;
 }): string[] {
   const names: string[] = [];
-  if (params.hasParent) names.push("parent");
+  if (params.hasParent && !params.externalParent) names.push("parent");
   for (const child of params.ownChildren) names.push(child.name);
   for (const sibling of params.parentRoster?.children ?? []) {
     if (sibling.id !== params.selfId) names.push(sibling.name);
@@ -224,6 +225,8 @@ function reachableTargetNames(params: {
  */
 export function resolveMessageTarget(params: {
   hasParent: boolean;
+  /** True when the sender's parent is an external orchestrator: no `parent` target. */
+  externalParent?: boolean;
   ownChildren: Iterable<Pick<RunningSubagent, "id" | "name" | "surface">>;
   parentRoster: SubagentRoster | null;
   selfId: string;
@@ -241,6 +244,14 @@ export function resolveMessageTarget(params: {
     };
   }
   if (to === "parent") {
+    if (params.externalParent) {
+      return {
+        error:
+          "Your parent is an external orchestrator; it does not read subagent messages. " +
+          "Your report is your last assistant message, which the orchestrator reads from the session file. " +
+          "To ask a question, use `caller_ping`.",
+      };
+    }
     if (!params.hasParent) return { error: "This agent has no parent." };
     return { target: { relation: "parent", name: "parent" } };
   }
@@ -325,6 +336,7 @@ export function sendSubagentMessage(
   input: { to: string; message: string },
   context: {
     hasParent: boolean;
+    externalParent?: boolean;
     ownChildren: Iterable<Pick<RunningSubagent, "id" | "name" | "surface">>;
     parentRoster: SubagentRoster | null;
     selfId: string;
@@ -342,6 +354,7 @@ export function sendSubagentMessage(
 
   const resolved = resolveMessageTarget({
     hasParent: context.hasParent,
+    externalParent: context.externalParent,
     ownChildren: context.ownChildren,
     parentRoster: context.parentRoster,
     selfId: context.selfId,
@@ -658,7 +671,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "pmux_message",
       label: "Message Subagent",
       description:
-        "Send a short message to `parent`, one of your running children, or a running sibling. Your session continues. A reply, if any, arrives later as a separate message. caller_ping and pmux_done END your session; this tool does not.",
+        "Send a short message to `parent`, one of your running children, or a running sibling. Your session continues. `parent` is reachable only when a pi parent exists. A reply, if any, arrives later as a separate message. caller_ping and pmux_done END your session; this tool does not.",
       promptSnippet: "Message `parent`, a child, or a sibling without ending your session.",
       parameters: SubagentMessageParams,
 
@@ -675,6 +688,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           { to: params.to, message: params.message },
           {
             hasParent: !!sessionFile,
+            externalParent: childEnv.externalParent === true,
             ownChildren: currentSupervisor().running(),
             parentRoster: readParentRoster(childEnv.parentRosterFile),
             selfId: childEnv.id ?? "",
