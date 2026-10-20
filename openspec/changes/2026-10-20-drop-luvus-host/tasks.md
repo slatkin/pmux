@@ -46,4 +46,4 @@
 
 - [x] 6.1 Delete `test/luvus-status.test.ts` and `test/uhp-events.test.ts`. Remove the `__setLuvusExecForTests__` stubs and the Luvus host cases from the other tests; the tmux stubs (`__setTmuxExecForTests__`) cover the surface. Keep `test/host-env.ts` clearing the old variables.
 - [x] 6.2 Add focused tests for the status file (the writes and the latch), the removal at start, the crash write, and `wait` (success, timeout, usage error). Do not add one test per scenario.
-- [ ] 6.3 Run the full suite, the type check, the lint and the format check.
+- [x] 6.3 Run the full suite, the type check, the lint and the format check.
