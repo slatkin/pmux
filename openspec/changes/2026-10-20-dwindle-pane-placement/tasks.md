@@ -20,11 +20,11 @@
 
 - [x] 4.1 In `pi-extension/pmux/cli.ts`, change the usage lines to `[--surface pane|tab]` and the invalid-value error to `(expected pane or tab)`. Verify with `pnpm run typecheck`.
 - [x] 4.2 Update `test/cli.test.ts`: the sandbox config and the "defaults --surface to the config.json value" test use the new values, `--surface down` is accepted and splits by the rule, the invalid-value test expects the message to name `pane` and `tab`, and a new test runs `start` twice from the same caller pane and checks that the second split targets the first child's pane. Verify with `node --test test/cli.test.ts`.
-- [ ] 4.3 Update `skills/pmux/SKILL.md`: the `--surface` text for `start` and `resume` describes `pane` (the default, automatic dwindle placement) and `tab`. Check by hand that no `right` or `down` choice is left in the file (`grep -n "right\|down" skills/pmux/SKILL.md`).
+- [x] 4.3 Update `skills/pmux/SKILL.md`: the `--surface` text for `start` and `resume` describes `pane` (the default, automatic dwindle placement) and `tab`. Check by hand that no `right` or `down` choice is left in the file (`grep -n "right\|down" skills/pmux/SKILL.md`).
 
 ## 5. Docs and integration
 
-- [ ] 5.1 Update `README.md`: the placement mention becomes automatic dwindle placement in the caller's window, or a tab. Check by hand that the text matches the specs.
+- [x] 5.1 Update `README.md`: the placement mention becomes automatic dwindle placement in the caller's window, or a tab. Check by hand that the text matches the specs.
 - [ ] 5.2 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`, in that order. All four must pass (`no-explicit-any` warnings are expected).
 - [ ] 5.3 Run `openspec validate 2026-10-20-dwindle-pane-placement --strict` and verify that it passes.
 
