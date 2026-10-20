@@ -6,13 +6,13 @@
 
 ## 1. Remove the Luvus host (D1, D8)
 
-- [ ] 1.1 Delete `pi-extension/luvus/luvus.ts`. Point `status.ts` at `placement.ts` for `DEFAULT_SURFACE_PLACEMENT`, `parseSurfacePlacement` and `SurfacePlacement`. Add `tmuxSetupHint` to `tmux.ts`.
-- [ ] 1.2 Delete `pi-extension/luvus/luvus-status.ts` and the reporter calls in `index.ts` and `luvus-done.ts`. Task 2.1 replaces them.
-- [ ] 1.3 Delete `pi-extension/luvus/uhp-events.ts`, the `events` dependency in `index.ts` and `supervisor.ts`, the event watch at `supervisor.ts` (`releaseEventWatch`) and the event stream shutdown. Polling stays.
-- [ ] 1.4 Delete `pi-extension/luvus/backend.ts`. Point `cli.ts`, `run.ts`, `turn-notify.ts`, `supervisor.ts` and `index.ts` at `tmux.ts`, `placement.ts`, `exit-sidecar.ts` and `surface-types.ts`. Use `isTmuxAvailable` and `tmuxSetupHint`. Delete `activeHost`, `Host` and the `target` parameters.
-- [ ] 1.5 Drop the Luvus branch from the CLI: `hostOf`, the host argument of `parentFooter`, and the launch path. The footer states that the last assistant message is the report and names the parent and its `%` pane id.
-- [ ] 1.6 Remove `listLuvusSessionsAsync`, `matchLuvusSession`, the cached lookup and the `luvusSession` field from the handoff log in `luvus-done.ts` and `context-alert.ts`.
-- [ ] 1.7 Change the interrupt error text to `via tmux`.
+- [x] 1.1 Delete `pi-extension/luvus/luvus.ts`. Point `status.ts` at `placement.ts` for `DEFAULT_SURFACE_PLACEMENT`, `parseSurfacePlacement` and `SurfacePlacement`. Add `tmuxSetupHint` to `tmux.ts`.
+- [x] 1.2 Delete `pi-extension/luvus/luvus-status.ts` and the reporter calls in `index.ts` and `luvus-done.ts`. Task 2.1 replaces them.
+- [x] 1.3 Delete `pi-extension/luvus/uhp-events.ts`, the `events` dependency in `index.ts` and `supervisor.ts`, the event watch at `supervisor.ts` (`releaseEventWatch`) and the event stream shutdown. Polling stays.
+- [x] 1.4 Delete `pi-extension/luvus/backend.ts`. Point `cli.ts`, `run.ts`, `turn-notify.ts`, `supervisor.ts` and `index.ts` at `tmux.ts`, `placement.ts`, `exit-sidecar.ts` and `surface-types.ts`. Use `isTmuxAvailable` and `tmuxSetupHint`. Delete `activeHost`, `Host` and the `target` parameters.
+- [x] 1.5 Drop the Luvus branch from the CLI: `hostOf`, the host argument of `parentFooter`, and the launch path. The footer states that the last assistant message is the report and names the parent and its `%` pane id.
+- [x] 1.6 Remove `listLuvusSessionsAsync`, `matchLuvusSession`, the cached lookup and the `luvusSession` field from the handoff log in `luvus-done.ts` and `context-alert.ts`.
+- [x] 1.7 Change the interrupt error text to `via tmux`.
 
 ## 2. Status file (D2, D3, D9)
 
@@ -44,6 +44,6 @@
 
 ## 6. Checks
 
-- [ ] 6.1 Delete `test/luvus-status.test.ts` and `test/uhp-events.test.ts`. Remove the `__setLuvusExecForTests__` stubs and the Luvus host cases from the other tests; the tmux stubs (`__setTmuxExecForTests__`) cover the surface. Keep `test/host-env.ts` clearing the old variables.
+- [x] 6.1 Delete `test/luvus-status.test.ts` and `test/uhp-events.test.ts`. Remove the `__setLuvusExecForTests__` stubs and the Luvus host cases from the other tests; the tmux stubs (`__setTmuxExecForTests__`) cover the surface. Keep `test/host-env.ts` clearing the old variables.
 - [ ] 6.2 Add focused tests for the status file (the writes and the latch), the removal at start, the crash write, and `wait` (success, timeout, usage error). Do not add one test per scenario.
 - [ ] 6.3 Run the full suite, the type check, the lint and the format check.
