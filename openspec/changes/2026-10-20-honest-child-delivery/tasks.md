@@ -29,8 +29,8 @@
 
 ## 5. Documentation
 
-- [ ] 5.1 `docs/guide.md` — in the "Messaging other agents" section, state that `parent` is reachable only when a pi parent exists, that a child the skill launcher marked with `PI_PMUX_EXTERNAL_PARENT` gets an error naming the report and `caller_ping`, and that `parent` is not in that child's reachable list; verify with `rg -n "PI_PMUX_EXTERNAL_PARENT" docs/guide.md` matching
-- [ ] 5.2 `skills/pmux/SKILL.md` — no wording change is needed; confirm the existing sentence stays true now that the wrapper contacts nobody and the tool refuses: `rg -n "no channel from the child back to" skills/pmux/SKILL.md` matches (the phrase wraps across two lines in the file, so the pattern must stop before the line break)
+- [x] 5.1 `docs/guide.md` — in the "Messaging other agents" section, state that `parent` is reachable only when a pi parent exists, that a child the skill launcher marked with `PI_PMUX_EXTERNAL_PARENT` gets an error naming the report and `caller_ping`, and that `parent` is not in that child's reachable list; verify with `rg -n "PI_PMUX_EXTERNAL_PARENT" docs/guide.md` matching
+- [x] 5.2 `skills/pmux/SKILL.md` — no wording change is needed; confirm the existing sentence stays true now that the wrapper contacts nobody and the tool refuses: `rg -n "no channel from the child back to" skills/pmux/SKILL.md` matches (the phrase wraps across two lines in the file, so the pattern must stop before the line break)
 
 ## 6. Repository gates
 
