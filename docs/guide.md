@@ -59,7 +59,7 @@ The CLI's `wait` command polls the file (see [External orchestrators (Claude Cod
 
 ## Turn-end notification
 
-When a turn ends in a parent pi pane that does not have focus, the extension pushes one notification through tmux (`tmux display-message`), which shows in the tmux status line, so you do not have to visit every pane to learn that it waits for input. A normal turn sends `pi turn ended: <label>` at level `success`. A turn whose last assistant message failed sends `pi turn failed: <label>` at level `error`. An aborted turn sends nothing. The label is the session name, or the basename of the session cwd when the session has no name.
+When a turn ends in a parent pi pane that does not have focus, the extension pushes one notification through tmux (`tmux display-message`), which shows in the tmux status line, so you do not have to visit every pane to learn that it waits for input. A normal turn sends `pi turn ended: <label>`. A turn whose last assistant message failed sends `pi turn failed: <label>`. An aborted turn sends nothing. tmux shows the text; a notification carries no level. The label is the session name, or the basename of the session cwd when the session has no name.
 
 Subagent children send no notification: their completion already reaches the parent through the exit sidecar and `pmux_done`. Outside tmux the extension makes no notification call. The focus check reads `#{pane_active}` for the pane, and both the check and the push run in the background; a failed or slow tmux call results in no notification and never delays the next turn.
 
@@ -201,8 +201,9 @@ An older install may have left a `config.json` in the legacy `extensions/pi-luvu
   "notify": {
     "enabled": true
   },
-  "module": {
-    "autolink": true
+  "contextAlert": {
+    "enabled": false,
+    "threshold": 200000
   },
   "surface": "right"
 }
@@ -210,7 +211,7 @@ An older install may have left a `config.json` in the legacy `extensions/pi-luvu
 
 Git ignores `config.json`. Local overrides stay uncommitted.
 
-`"module.autolink"` controls the module link on start. It defaults to `true`. Set it to `false` to link the module yourself.
+`"contextAlert.enabled"` turns on the context alert. It defaults to `false`. When it is on, a child whose context usage reaches `"contextAlert.threshold"` gets a steer message that tells it to stop the task, commit the finished work or list the uncommitted changes, and end the session with `pmux_done` and a handoff. The threshold is a positive integer token count, or a percentage of the context window written as a string such as `"80%"`. It defaults to `200000` tokens.
 
 `"notify.enabled"` controls the turn-end notification (see [Turn-end notification](#turn-end-notification)). It defaults to `true`. Set it to `false` if you do not need a status-line notification when an unfocused pane ends a turn.
 
