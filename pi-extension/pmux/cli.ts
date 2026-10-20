@@ -39,7 +39,13 @@ import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
-import { removeChildStatus, statusFilePath, type ChildStatusRecord } from "./status-file.ts";
+import {
+  CHILD_STATUSES,
+  parseChildStatus,
+  rawChildStatusName,
+  removeChildStatus,
+  statusFilePath,
+} from "./status-file.ts";
 import { slugifyName } from "./slug.ts";
 import { encodeChildEnv, resolveDenyTools } from "./child-env.ts";
 
@@ -51,9 +57,6 @@ const CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
 
 /** Close-on-done grace used when `--close-grace-ms` is omitted. */
 const DEFAULT_CLOSE_GRACE_MS = 5000;
-
-/** Status names `wait` accepts; `--status` is a comma-separated list of these. */
-const WAIT_STATUSES = ["working", "idle", "done", "blocked"] as const;
 
 /** Defaults for `wait`. */
 const DEFAULT_WAIT_STATUS = "done,blocked";
@@ -421,8 +424,8 @@ function lastMessageCommand(values: CliValues, deps: CliDeps): number {
 function waitStatuses(value: string | undefined): string[] {
   const list = (value ?? DEFAULT_WAIT_STATUS).split(",");
   for (const name of list) {
-    if (!(WAIT_STATUSES as readonly string[]).includes(name)) {
-      throw new Error(`unknown --status name: ${name} (expected ${WAIT_STATUSES.join(", ")})`);
+    if (!(CHILD_STATUSES as readonly string[]).includes(name)) {
+      throw new Error(`unknown --status name: ${name} (expected ${CHILD_STATUSES.join(", ")})`);
     }
   }
   return list;
@@ -436,36 +439,6 @@ function waitTimeoutSeconds(value: string | undefined): number {
     throw new Error(`--timeout must be a positive number of seconds: ${value}`);
   }
   return seconds;
-}
-
-/** The status name inside one raw status-file line, for the timeout message. */
-function rawStatusName(raw: string): string {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    const status = (parsed as { status?: unknown }).status;
-    return typeof status === "string" ? status : "unknown";
-  } catch {
-    return "unknown";
-  }
-}
-
-/** Parse one raw status-file line, or null when it holds no known status. */
-function parseStatusLine(raw: string): ChildStatusRecord | null {
-  try {
-    const data: unknown = JSON.parse(raw);
-    if (
-      data === null ||
-      typeof data !== "object" ||
-      !(WAIT_STATUSES as readonly string[]).includes(
-        (data as { status?: unknown }).status as string,
-      )
-    ) {
-      return null;
-    }
-    return data as ChildStatusRecord;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -496,7 +469,7 @@ async function waitCommand(values: CliValues, deps: CliDeps): Promise<number> {
         // Parse the buffer that was read, not a second read of the file: the
         // child can flip the status between two reads, and the printed line
         // must be the one that matched.
-        const record = parseStatusLine(last);
+        const record = parseChildStatus(last);
         if (record && wanted.has(record.status)) {
           write(`${last}\n`);
           return 0;
@@ -511,7 +484,7 @@ async function waitCommand(values: CliValues, deps: CliDeps): Promise<number> {
     writeErr(
       last === null
         ? `timeout after ${timeoutSeconds}s: no status was seen\n`
-        : `timeout after ${timeoutSeconds}s: last status was ${rawStatusName(last)}\n`,
+        : `timeout after ${timeoutSeconds}s: last status was ${rawChildStatusName(last)}\n`,
     );
     return 2;
   } catch (error) {

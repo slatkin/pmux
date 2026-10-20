@@ -37,6 +37,7 @@ import {
 import { runSpec } from "../pi-extension/pmux/run.ts";
 import { main } from "../pi-extension/pmux/cli.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
+import { useTmuxPaneFake } from "./tmux-fakes.ts";
 import { main as shimMain } from "../skills/pmux/launch.ts";
 
 function withTempDir(run: (dir: string) => void): void {
@@ -523,7 +524,7 @@ const REPO_ROOT = resolve(TEST_DIR, "..");
 const CLI = join(REPO_ROOT, "pi-extension", "pmux", "cli.ts");
 
 let workdir = "";
-const paneCalls: string[] = [];
+let paneCalls: string[] = [];
 let defaultConfigPath = "";
 
 before(() => {
@@ -532,17 +533,9 @@ before(() => {
   // never see the machine's real one.
   defaultConfigPath = join(workdir, "config.json");
   writeFileSync(defaultConfigPath, JSON.stringify({ status: { enabled: true }, surface: "right" }));
-  // In-process tmux seam: logs each argv and answers the split with a new
-  // pane id. `display-message` answers the session and window lookups the
-  // tab placement needs; everything else returns empty output.
-  __setTmuxExecForTests__((args) => {
-    paneCalls.push(args.join(" "));
-    if (args[0] === "split-window" || args[0] === "new-window") return "%24";
-    if (args[0] === "list-panes") return "%88 orch\n";
-    if (args[0] === "display-message" && args.includes("#{session_id}")) return "$7";
-    if (args[0] === "display-message" && args.includes("#{window_id}")) return "@4";
-    return "";
-  });
+  // In-process tmux seam: the shared fake logs each argv and answers the
+  // split with a new pane id.
+  paneCalls = useTmuxPaneFake().lines;
 });
 
 after(() => {

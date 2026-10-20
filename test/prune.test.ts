@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { main } from "../pi-extension/pmux/cli.ts";
 import { isSentinelFile, pruneScratch, pruneSentinels } from "../pi-extension/pmux/prune.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
+import { useTmuxPaneFake } from "./tmux-fakes.ts";
 
 const DAY_MS = 86_400_000;
 let workdir = "";
@@ -138,10 +139,7 @@ describe("cli.ts prune", () => {
   });
 
   it("start removes old scratch files in the same directory", async () => {
-    __setTmuxExecForTests__((args) => {
-      if (args[0] === "split-window") return "%24";
-      return "";
-    });
+    useTmuxPaneFake();
     const dir = mkdtempSync(join(workdir, "autoprune-"));
     const cwd = mkdtempSync(join(dir, "cwd-"));
     mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });

@@ -13,8 +13,9 @@ import {
 import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
 import { runSpec } from "../pi-extension/pmux/run.ts";
 import { main } from "../pi-extension/pmux/cli.ts";
-import { readLaunchSpec, LAUNCH_SPEC_VERSION } from "../pi-extension/pmux/launch.ts";
+import { writeLaunchSpec, LAUNCH_SPEC_VERSION } from "../pi-extension/pmux/launch.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
+import { useTmuxPaneFake } from "./tmux-fakes.ts";
 import {
   createSupervisor,
   type SupervisorContext,
@@ -335,114 +336,66 @@ async function withTempDirAsync(run: (dir: string) => Promise<void>): Promise<vo
 // ── Removal at start ──
 
 describe("cli resume removes a stale status", () => {
-  const paneCalls: string[] = [];
-  let workdir = "";
-  let configPath = "";
-
   before(() => {
-    workdir = mkdtempSync(join(tmpdir(), "pmux-status-cli-"));
-    configPath = join(workdir, "config.json");
-    writeFileSync(configPath, JSON.stringify({ surface: "right" }));
-    __setTmuxExecForTests__((args) => {
-      paneCalls.push(args.join(" "));
-      if (args[0] === "split-window" || args[0] === "new-window") return "%24";
-      if (args[0] === "list-panes") return "%88 orch\n";
-      if (args[0] === "display-message" && args.includes("#{session_id}")) return "$7";
-      if (args[0] === "display-message" && args.includes("#{window_id}")) return "@4";
-      return "";
-    });
+    useTmuxPaneFake();
   });
 
   after(() => {
     __setTmuxExecForTests__(null);
-    rmSync(workdir, { recursive: true, force: true });
   });
 
   function tmuxEnv(): NodeJS.ProcessEnv {
     return { PATH: process.env.PATH, TMUX: "/tmp/tmux-0/default", TMUX_PANE: "%21" };
   }
 
-  async function runCli(argv: string[]): Promise<{ code: number; stdout: string }> {
-    const stdout: string[] = [];
-    const code = await main(argv, {
-      env: tmuxEnv(),
-      stdout: (text) => stdout.push(text),
-      stderr: () => {},
-      sleep: async () => {},
-      configPath,
-    });
-    return { code, stdout: stdout.join("") };
-  }
-
   it("removes the status file of the earlier run before the child starts", async () => {
-    const dir = mkdtempSync(join(workdir, "resume-"));
-    const cwd = mkdtempSync(join(dir, "cwd-"));
-    mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
-    writeFileSync(
-      join(cwd, ".pi", "agents", "worker.md"),
-      "---\nmodel: test-model\nthinking: low\n---\n\nWorker body.\n",
-    );
-    const brief = join(dir, "brief.md");
-    writeFileSync(brief, "# Task\n\nDo the thing.\n");
-    const scratch = join(dir, "scratch");
+    await withTempDirAsync(async (dir) => {
+      // The launch spec is written directly: the removal lives in `resume`,
+      // so minting it through a full first launch adds nothing to the check.
+      const scratch = join(dir, "scratch");
+      const sessionFile = join(scratch, "scout-1.jsonl");
+      const launchPath = join(scratch, "scout-1.json");
+      writeLaunchSpec(launchPath, {
+        version: LAUNCH_SPEC_VERSION,
+        name: "scout-1",
+        env: {},
+        command: "pi",
+        args: [],
+        sessionFile,
+        parent: "orch",
+      });
+      const followup = join(dir, "followup.md");
+      writeFileSync(followup, "Continue.\n");
 
-    const started = await runCli([
-      "start",
-      "--name",
-      "scout-1",
-      "--role",
-      "worker",
-      "--cwd",
-      cwd,
-      "--brief",
-      brief,
-      "--parent",
-      "orch",
-      "--scratch",
-      scratch,
-    ]);
-    assert.equal(started.code, 0);
-    const { session, launch } = JSON.parse(started.stdout) as {
-      pane: string;
-      session: string;
-      launch: string;
-    };
-    assert.equal(readLaunchSpec(launch).sessionFile, session);
-
-    // An earlier run's status must not survive into the resumed run.
-    writeChildStatus(session, "done");
-    const followup = join(dir, "followup.md");
-    writeFileSync(followup, "Continue.\n");
-    const resumed = await runCli([
-      "resume",
-      "--launch",
-      launch,
-      "--prompt",
-      followup,
-      "--name",
-      "fix-7",
-    ]);
-    assert.equal(resumed.code, 0);
-    assert.equal(existsSync(statusFilePath(session)), false);
+      // An earlier run's status must not survive into the resumed run.
+      writeChildStatus(sessionFile, "done");
+      const code = await main(
+        ["resume", "--launch", launchPath, "--prompt", followup, "--surface", "right"],
+        {
+          env: tmuxEnv(),
+          stdout: () => {},
+          stderr: () => {},
+          sleep: async () => {},
+        },
+      );
+      assert.equal(code, 0);
+      assert.equal(existsSync(statusFilePath(sessionFile)), false);
+    });
   });
 });
 
 interface SupervisorHarness {
   supervisor: ReturnType<typeof createSupervisor>;
-  runs: Array<{ surface: string; line: string }>;
 }
 
-function makeSupervisorHarness(_env: SupervisorTestEnv): SupervisorHarness {
-  const runs: Array<{ surface: string; line: string }> = [];
+function makeSupervisorHarness(): SupervisorHarness {
   let nextPane = 24;
   const supervisor = createSupervisor({
     send: () => {},
     ui: () => null,
     pmux: {
       createSurface: () => String(nextPane++),
-      runInPane: (_surface, line) => {
-        runs.push({ surface: _surface, line });
-      },
+      runInPane: () => {},
       closeSurface: () => {},
       sendEscape: () => {},
       readScreen: () => "",
@@ -456,7 +409,7 @@ function makeSupervisorHarness(_env: SupervisorTestEnv): SupervisorHarness {
       contextAlert: { enabled: false, threshold: { kind: "tokens", value: 200000 } },
     },
   });
-  return { supervisor, runs };
+  return { supervisor };
 }
 
 interface SupervisorTestEnv {
@@ -468,14 +421,15 @@ interface SupervisorTestEnv {
 function createSupervisorEnv(): SupervisorTestEnv {
   const dir = mkdtempSync(join(tmpdir(), "pmux-status-sup-"));
   const saved = new Map(
-    ["PI_CODING_AGENT_DIR", "PI_PMUX_SHELL_READY_DELAY_MS", "PI_PMUX_NAME", "LUVUS_PANE_ID"].map(
+    ["PI_CODING_AGENT_DIR", "PI_PMUX_SHELL_READY_DELAY_MS", "PI_PMUX_NAME", "TMUX_PANE"].map(
       (key) => [key, process.env[key]],
     ),
   );
   process.env.PI_CODING_AGENT_DIR = join(dir, "agent");
   process.env.PI_PMUX_SHELL_READY_DELAY_MS = "0";
   process.env.PI_PMUX_NAME = "parent";
-  process.env.LUVUS_PANE_ID = "21";
+  // The roster's parentPane reads the caller's own pane id.
+  process.env.TMUX_PANE = "%21";
   return {
     dir,
     ctx: {
@@ -499,13 +453,18 @@ function createSupervisorEnv(): SupervisorTestEnv {
 describe("supervisor resume removes a stale status", () => {
   it("removes the status file of the earlier run before the child starts", async () => {
     const env = createSupervisorEnv();
-    const harness = makeSupervisorHarness(env);
+    const harness = makeSupervisorHarness();
     try {
-      const running = await harness.supervisor.spawn({ name: "Scout", task: "survey" }, env.ctx);
-      const sessionFile = running.sessionFile;
-
+      // No launch record: the resume falls back to a plain pi run, which is
+      // enough to reach the real removal path in startRun.
+      const sessionFile = join(env.dir, "earlier-run.jsonl");
+      writeFileSync(sessionFile, "");
       writeChildStatus(sessionFile, "done");
-      await harness.supervisor.resume({ sessionPath: sessionFile, message: "Continue" }, env.ctx);
+      const result = await harness.supervisor.resume(
+        { sessionPath: sessionFile, message: "Continue" },
+        env.ctx,
+      );
+      assert.match(JSON.stringify(result), /resumed/i);
       assert.equal(existsSync(statusFilePath(sessionFile)), false);
     } finally {
       harness.supervisor.shutdown();

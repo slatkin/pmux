@@ -15,6 +15,9 @@ import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 
 export type ChildStatus = "working" | "idle" | "done" | "blocked";
 
+/** The status names a child may write; the single source of the vocabulary. */
+export const CHILD_STATUSES: readonly ChildStatus[] = ["working", "idle", "done", "blocked"];
+
 export interface ChildStatusRecord {
   status: ChildStatus;
   /** ISO time of the write. */
@@ -61,20 +64,44 @@ export function writeChildStatus(
 }
 
 /**
+ * Parse one raw status-file buffer. Returns the parsed record, or null when
+ * it is not a JSON object with a known status.
+ */
+export function parseChildStatus(raw: string): ChildStatusRecord | null {
+  try {
+    const data: unknown = JSON.parse(raw);
+    if (
+      data === null ||
+      typeof data !== "object" ||
+      !(CHILD_STATUSES as readonly string[]).includes(
+        (data as { status?: unknown }).status as string,
+      )
+    ) {
+      return null;
+    }
+    return data as ChildStatusRecord;
+  } catch {
+    return null;
+  }
+}
+
+/** The status name inside one raw status-file buffer, for timeout messages. */
+export function rawChildStatusName(raw: string): string {
+  try {
+    const status = (JSON.parse(raw) as { status?: unknown }).status;
+    return typeof status === "string" ? status : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
  * Read the status file. Returns the parsed record, or null when the file is
  * missing or is not a JSON object with a known status.
  */
 export function readChildStatus(sessionFile: string): ChildStatusRecord | null {
   try {
-    const data = JSON.parse(readFileSync(statusFilePath(sessionFile), "utf8"));
-    if (
-      data === null ||
-      typeof data !== "object" ||
-      !["working", "idle", "done", "blocked"].includes(data.status)
-    ) {
-      return null;
-    }
-    return data as ChildStatusRecord;
+    return parseChildStatus(readFileSync(statusFilePath(sessionFile), "utf8"));
   } catch {
     return null;
   }
