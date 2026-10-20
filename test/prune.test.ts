@@ -17,9 +17,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { main } from "../pi-extension/luvus/cli.ts";
-import { isSentinelFile, pruneScratch, pruneSentinels } from "../pi-extension/luvus/prune.ts";
-import { __setLuvusExecForTests__ } from "../pi-extension/luvus/luvus.ts";
+import { main } from "../pi-extension/pmux/cli.ts";
+import { isSentinelFile, pruneScratch, pruneSentinels } from "../pi-extension/pmux/prune.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
+import { useTmuxPaneFake } from "./tmux-fakes.ts";
 
 const DAY_MS = 86_400_000;
 let workdir = "";
@@ -29,7 +30,7 @@ before(() => {
 });
 
 after(() => {
-  __setLuvusExecForTests__(null);
+  __setTmuxExecForTests__(null);
   rmSync(workdir, { recursive: true, force: true });
 });
 
@@ -97,7 +98,7 @@ describe("cli.ts prune", () => {
     const sentinels = mkdtempSync(join(workdir, "cli-sent-"));
     const stdout: string[] = [];
     const code = await main(["prune", "--scratch", scratch, "--max-age-days", "7"], {
-      env: { PATH: process.env.PATH, PI_LUVUS_SENTINEL_DIR: sentinels },
+      env: { PATH: process.env.PATH, PI_PMUX_SENTINEL_DIR: sentinels },
       stdout: (text) => stdout.push(text),
       stderr: () => {},
       sleep: async () => {},
@@ -112,7 +113,7 @@ describe("cli.ts prune", () => {
     const sentinels = mkdtempSync(join(workdir, "cli-miss-sent-"));
     const stdout: string[] = [];
     const code = await main(["prune", "--scratch", join(workdir, "no-such-dir")], {
-      env: { PATH: process.env.PATH, PI_LUVUS_SENTINEL_DIR: sentinels },
+      env: { PATH: process.env.PATH, PI_PMUX_SENTINEL_DIR: sentinels },
       stdout: (text) => stdout.push(text),
       stderr: () => {},
       sleep: async () => {},
@@ -126,7 +127,7 @@ describe("cli.ts prune", () => {
     let message = "";
     try {
       await main(["prune", "--max-age-days", "-1"], {
-        env: { PATH: process.env.PATH, PI_LUVUS_SENTINEL_DIR: sentinels },
+        env: { PATH: process.env.PATH, PI_PMUX_SENTINEL_DIR: sentinels },
         stdout: () => {},
         stderr: () => {},
         sleep: async () => {},
@@ -138,15 +139,7 @@ describe("cli.ts prune", () => {
   });
 
   it("start removes old scratch files in the same directory", async () => {
-    __setLuvusExecForTests__((args) => {
-      if (args[0] === "pane" && args[1] === "split") {
-        return JSON.stringify({
-          id: "1",
-          result: { pane: "24", revision: 1, type: "pane", tab: "1", workspace: "2" },
-        });
-      }
-      return JSON.stringify({ id: "1", result: { revision: 1, type: "ok" } });
-    });
+    useTmuxPaneFake();
     const dir = mkdtempSync(join(workdir, "autoprune-"));
     const cwd = mkdtempSync(join(dir, "cwd-"));
     mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
@@ -181,9 +174,8 @@ describe("cli.ts prune", () => {
       {
         env: {
           PATH: process.env.PATH,
-          LUVUS_ENV: "1",
-          LUVUS_BIN_PATH: "in-process",
-          LUVUS_PANE_ID: "21",
+          TMUX: "/tmp/tmux-0/default",
+          TMUX_PANE: "%21",
         },
         stdout: (text) => stdout.push(text),
         stderr: () => {},

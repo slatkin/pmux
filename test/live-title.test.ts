@@ -15,7 +15,7 @@ import {
   firstUserPromptText,
   __resetLiveTitleForTests__,
   type SessionEntryLike,
-} from "../pi-extension/luvus/live-title.ts";
+} from "../pi-extension/pmux/live-title.ts";
 
 interface MockCtx {
   titles: string[];
@@ -121,15 +121,15 @@ describe("live title controller", () => {
     assert.deepEqual(titles, ["π - Fix the login redirect - app"]);
   });
 
-  it("skips a subagent child (PI_LUVUS_SESSION set)", () => {
+  it("skips a subagent child (PI_PMUX_SESSION set)", () => {
     const { titles, ctx } = makeCtx();
-    createLiveTitleController({ PI_LUVUS_SESSION: "/tmp/s.jsonl" }).setFromPrompt(ctx, "Fix it");
+    createLiveTitleController({ PI_PMUX_SESSION: "/tmp/s.jsonl" }).setFromPrompt(ctx, "Fix it");
     assert.deepEqual(titles, []);
   });
 
-  it("sets the title when only PI_LUVUS_NAME is set", () => {
+  it("sets the title when only PI_PMUX_NAME is set", () => {
     const { titles, ctx } = makeCtx();
-    createLiveTitleController({ PI_LUVUS_NAME: "scout" }).setFromPrompt(ctx, "Fix it");
+    createLiveTitleController({ PI_PMUX_NAME: "scout" }).setFromPrompt(ctx, "Fix it");
     assert.deepEqual(titles, ["π - Fix it - app"]);
   });
 
@@ -186,7 +186,7 @@ describe("live title controller", () => {
     createLiveTitleController({}).register(target.pi as never);
     target.fire("before_agent_start", ctx, {
       messageType: "custom",
-      message: { customType: "luvus_result", content: "done", display: true },
+      message: { customType: "pmux_result", content: "done", display: true },
     });
     assert.deepEqual(titles, []);
   });

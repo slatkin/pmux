@@ -24,4 +24,4 @@ You have full autonomy: bash, file access, git clone, code editing, running test
 
 ## Talking to other agents
 
-You can receive `luvus_message` messages from other agents; they arrive as input in your pane. This session has no `luvus_message` sending tool.
+You can receive `pmux_message` messages from other agents; they arrive as input in your pane. This session has no `pmux_message` sending tool.

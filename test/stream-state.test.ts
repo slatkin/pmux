@@ -10,8 +10,8 @@ import {
   defaultSocketDir,
   type StreamHub,
   type StreamName,
-} from "../pi-extension/luvus/stream-state.ts";
-import { registerStreamEventHandlers } from "../pi-extension/luvus/index.ts";
+} from "../pi-extension/pmux/stream-state.ts";
+import { registerStreamEventHandlers } from "../pi-extension/pmux/index.ts";
 
 function lineReader(socket: Socket) {
   let buffer = "";
@@ -196,8 +196,8 @@ describe("StreamHub socket", () => {
   });
 
   test("uses XDG_RUNTIME_DIR and falls back to the temp directory", () => {
-    assert.equal(defaultSocketDir({ XDG_RUNTIME_DIR: "/run/user/1" }), "/run/user/1/pi-luvus");
-    assert.equal(defaultSocketDir({}), join(tmpdir(), "pi-luvus"));
+    assert.equal(defaultSocketDir({ XDG_RUNTIME_DIR: "/run/user/1" }), "/run/user/1/pmux");
+    assert.equal(defaultSocketDir({}), join(tmpdir(), "pmux"));
   });
 });
 

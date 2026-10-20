@@ -10,13 +10,11 @@ import {
   appendHandoffLog,
   handoffLogPath,
   handoffNudgeText,
-  matchLuvusSession,
   parseContextAlertConfig,
   shouldAlert,
   DEFAULT_CONTEXT_ALERT_THRESHOLD_TOKENS,
-} from "../pi-extension/luvus/context-alert.ts";
-import { listLuvusSessionsAsync, __setLuvusExecForTests__ } from "../pi-extension/luvus/luvus.ts";
-import { loadStatusConfig, parseStatusConfig } from "../pi-extension/luvus/status.ts";
+} from "../pi-extension/pmux/context-alert.ts";
+import { loadStatusConfig, parseStatusConfig } from "../pi-extension/pmux/status.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -130,104 +128,28 @@ describe("context-alert trigger", () => {
     assert.equal(shouldAlert(usage(500_000, null), percent), false);
   });
 
-  it("the alert text holds the token count, the threshold, and luvus_done with handoff", () => {
+  it("the alert text holds the token count, the threshold, and pmux_done with handoff", () => {
     const text = alertText(201_000, { kind: "tokens", value: 200_000 });
     assert.match(text, /201000/);
     assert.match(text, /200000/);
-    assert.match(text, /luvus_done/);
+    assert.match(text, /pmux_done/);
     assert.match(text, /handoff/);
 
     const percentText = alertText(160_000, { kind: "percent", value: 80 });
     assert.match(percentText, /160000/);
     assert.match(percentText, /80%/);
-    assert.match(percentText, /luvus_done/);
+    assert.match(percentText, /pmux_done/);
   });
 
   it("the handoff nudge names handoff and does not say already delivered", () => {
     const text = handoffNudgeText();
-    assert.match(text, /luvus_done/);
+    assert.match(text, /pmux_done/);
     assert.match(text, /handoff/);
     assert.doesNotMatch(text, /already delivered/);
   });
 });
 
 describe("context-alert handoff log", () => {
-  it("listLuvusSessionsAsync returns the parsed sessions object through the exec seam", async () => {
-    const calls: string[][] = [];
-    __setLuvusExecForTests__((args) => {
-      calls.push(args);
-      return JSON.stringify({
-        result: { sessions: [{ name: "mbv", socket_path: "/tmp/mbv.sock" }] },
-      });
-    });
-    try {
-      assert.deepEqual(await listLuvusSessionsAsync(), {
-        sessions: [{ name: "mbv", socket_path: "/tmp/mbv.sock" }],
-      });
-      assert.deepEqual(calls, [["session", "list", "--json"]]);
-    } finally {
-      __setLuvusExecForTests__(null);
-    }
-  });
-
-  it("listLuvusSessionsAsync returns null on a failed call or outside Luvus", async () => {
-    // A Luvus error envelope, and a thrown call, both resolve to null.
-    __setLuvusExecForTests__(() => JSON.stringify({ error: { message: "no such session" } }));
-    try {
-      assert.equal(await listLuvusSessionsAsync(), null);
-    } finally {
-      __setLuvusExecForTests__(null);
-    }
-    __setLuvusExecForTests__(() => {
-      throw new Error("boom");
-    });
-    try {
-      assert.equal(await listLuvusSessionsAsync(), null);
-    } finally {
-      __setLuvusExecForTests__(null);
-    }
-
-    // With no seam and no LUVUS_BIN_PATH the real path fails cleanly too.
-    const saved = process.env.LUVUS_BIN_PATH;
-    delete process.env.LUVUS_BIN_PATH;
-    try {
-      assert.equal(await listLuvusSessionsAsync(), null);
-    } finally {
-      if (saved === undefined) delete process.env.LUVUS_BIN_PATH;
-      else process.env.LUVUS_BIN_PATH = saved;
-    }
-  });
-
-  it("matchLuvusSession returns the name whose socket_path matches", () => {
-    const list = {
-      sessions: [
-        { name: "other", socket_path: "/a.sock" },
-        { name: "mbv", socket_path: "/b.sock" },
-      ],
-    };
-    assert.equal(matchLuvusSession(list, "/b.sock"), "mbv");
-  });
-
-  it("no match and no list both fall back to the socket path", () => {
-    const cases: unknown[] = [
-      { sessions: [{ name: "x", socket_path: "/a.sock" }] },
-      { sessions: [] },
-      {},
-      null,
-      undefined,
-      "junk",
-    ];
-    for (const list of cases) {
-      assert.equal(matchLuvusSession(list, "/b.sock"), "/b.sock", `list ${JSON.stringify(list)}`);
-    }
-  });
-
-  it("no socket path gives null, even with a matching entry", () => {
-    const list = { sessions: [{ name: "mbv", socket_path: "/b.sock" }] };
-    assert.equal(matchLuvusSession(list, undefined), null);
-    assert.equal(matchLuvusSession(list, ""), null);
-  });
-
   it("appendHandoffLog appends one JSON line per row", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-handoff-log-"));
     const path = join(dir, "handoffs.jsonl");
@@ -235,7 +157,6 @@ describe("context-alert handoff log", () => {
       const row = {
         at: "2026-10-16T10:00:00.000Z",
         event: "alert" as const,
-        luvusSession: "mbv",
         child: "worker",
         session: "/tmp/s.jsonl",
         tokens: 201000,
@@ -252,7 +173,6 @@ describe("context-alert handoff log", () => {
       assert.deepEqual(JSON.parse(lines[1]), {
         at: "2026-10-16T10:00:00.000Z",
         event: "handoff",
-        luvusSession: "mbv",
         child: "worker",
         session: "/tmp/s.jsonl",
         tokens: null,
@@ -266,7 +186,6 @@ describe("context-alert handoff log", () => {
     const row = {
       at: "2026-10-16T10:00:00.000Z",
       event: "alert" as const,
-      luvusSession: null,
       child: "worker",
       session: "",
       tokens: null,
@@ -283,7 +202,7 @@ describe("context-alert handoff log", () => {
     const saved = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = dir;
     try {
-      assert.equal(handoffLogPath(), join(dir, "extensions", "pi-luvus", "handoffs.jsonl"));
+      assert.equal(handoffLogPath(), join(dir, "extensions", "pmux", "handoffs.jsonl"));
     } finally {
       if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = saved;
@@ -292,7 +211,7 @@ describe("context-alert handoff log", () => {
   });
 });
 
-describe("context-alert in the child (luvus-done)", () => {
+describe("context-alert in the child (pmux-done)", () => {
   let freshImports = 0;
 
   interface ChildHarness {
@@ -301,7 +220,7 @@ describe("context-alert in the child (luvus-done)", () => {
     sentMessages: Array<{ message: string; opts?: any }>;
     sessionFile: string;
     configPath: string;
-    /** The freshly imported luvus-done module instance (for its test exports). */
+    /** The freshly imported pmux-done module instance (for its test exports). */
     mod: any;
     restore: () => void;
   }
@@ -322,9 +241,9 @@ describe("context-alert in the child (luvus-done)", () => {
     const fullEnv = {
       ...env,
       PI_CODING_AGENT_DIR: dir,
-      PI_LUVUS_SESSION: options.sessionFile === false ? env.PI_LUVUS_SESSION : sessionFile,
+      PI_PMUX_SESSION: options.sessionFile === false ? env.PI_PMUX_SESSION : sessionFile,
     };
-    const configPath = join(dir, "extensions", "pi-luvus", "config.json");
+    const configPath = join(dir, "extensions", "pmux", "config.json");
     mkdirSync(join(configPath, ".."), { recursive: true });
     writeFileSync(configPath, configJson);
 
@@ -357,7 +276,7 @@ describe("context-alert in the child (luvus-done)", () => {
     let mod: any;
     try {
       mod = await import(
-        `${pathToFileURL(join(REPO_ROOT, "pi-extension", "luvus", "luvus-done.ts")).href}?ctxalert=${++freshImports}`
+        `${pathToFileURL(join(REPO_ROOT, "pi-extension", "pmux", "pmux-done.ts")).href}?ctxalert=${++freshImports}`
       );
       (mod.default as (pi: unknown) => void)(mockPi);
     } catch (error) {
@@ -407,7 +326,7 @@ describe("context-alert in the child (luvus-done)", () => {
 
   it("steers once over the threshold and not again on later turns", async () => {
     const { handlers, sentMessages, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
     );
     try {
@@ -423,7 +342,7 @@ describe("context-alert in the child (luvus-done)", () => {
       assert.equal(sentMessages.length, 1);
       assert.deepEqual(sentMessages[0].opts, { deliverAs: "steer" });
       assert.match(sentMessages[0].message, /\b100\b/);
-      assert.match(sentMessages[0].message, /luvus_done/);
+      assert.match(sentMessages[0].message, /pmux_done/);
       assert.match(sentMessages[0].message, /handoff/);
 
       // A later turn above the threshold: no second alert.
@@ -436,7 +355,7 @@ describe("context-alert in the child (luvus-done)", () => {
 
   it("unknown usage does nothing and a later turn can still fire", async () => {
     const { handlers, sentMessages, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
     );
     try {
@@ -468,7 +387,7 @@ describe("context-alert in the child (luvus-done)", () => {
         config: JSON.stringify({ contextAlert: { enabled: false, threshold: 100 } }),
       },
       {
-        name: "no PI_LUVUS_SESSION",
+        name: "no PI_PMUX_SESSION",
         withSession: false,
         config: JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
       },
@@ -488,7 +407,7 @@ describe("context-alert in the child (luvus-done)", () => {
 
     for (const testCase of cases) {
       const { handlers, sentMessages, restore } = await loadChildExtension(
-        { PI_LUVUS_NUDGE_DISABLE: "1", PI_LUVUS_SESSION: testCase.withSession ? "set" : undefined },
+        { PI_PMUX_NUDGE_DISABLE: "1", PI_PMUX_SESSION: testCase.withSession ? "set" : undefined },
         testCase.config,
         { sessionFile: testCase.withSession },
       );
@@ -503,14 +422,14 @@ describe("context-alert in the child (luvus-done)", () => {
     }
   });
 
-  it("an invalid config still registers luvus_done and leaves the alert off", async () => {
+  it("an invalid config still registers pmux_done and leaves the alert off", async () => {
     const { handlers, tools, sentMessages, configPath, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({ contextAlert: { enabled: true, threshold: "abc%" } }),
     );
     try {
-      const doneTool = tools.find((tool) => tool.name === "luvus_done");
-      assert.ok(doneTool, "expected luvus_done to be registered despite the bad config");
+      const doneTool = tools.find((tool) => tool.name === "pmux_done");
+      assert.ok(doneTool, "expected pmux_done to be registered despite the bad config");
 
       // The bad block turned the alert off instead of stopping the load (D2).
       fire(handlers, "session_start", undefined, { ui: { setWidget() {} } });
@@ -519,7 +438,7 @@ describe("context-alert in the child (luvus-done)", () => {
       assert.equal(sentMessages.length, 0);
 
       const { loadContextAlertConfig } = await import(
-        `${pathToFileURL(join(REPO_ROOT, "pi-extension", "luvus", "luvus-done.ts")).href}?ctxalert-loader`
+        `${pathToFileURL(join(REPO_ROOT, "pi-extension", "pmux", "pmux-done.ts")).href}?ctxalert-loader`
       );
       assert.deepEqual(loadContextAlertConfig(configPath), {
         enabled: false,
@@ -533,8 +452,8 @@ describe("context-alert in the child (luvus-done)", () => {
   it("an auto-exit child after the alert writes no sidecar and gets the handoff nudge", async () => {
     const { handlers, sentMessages, sessionFile, restore } = await loadChildExtension(
       {
-        PI_LUVUS_AUTO_EXIT: "1",
-        PI_LUVUS_NUDGE_DELAY_MS: "1000",
+        PI_PMUX_AUTO_EXIT: "1",
+        PI_PMUX_NUDGE_DELAY_MS: "1000",
       },
       JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
     );
@@ -559,7 +478,7 @@ describe("context-alert in the child (luvus-done)", () => {
       assert.equal(shutdownCalled, false);
       assert.equal(existsSync(`${sessionFile}.exit`), false);
 
-      // The completion nudge asks for luvus_done + handoff, not the generic text.
+      // The completion nudge asks for pmux_done + handoff, not the generic text.
       mock.timers.tick(1000);
       assert.equal(sentMessages.length, 2);
       assert.equal(sentMessages[1].message, handoffNudgeText());
@@ -571,13 +490,13 @@ describe("context-alert in the child (luvus-done)", () => {
     }
   });
 
-  /** Run the registered `luvus_done` tool with a fake ctx, capturing shutdown. */
+  /** Run the registered `pmux_done` tool with a fake ctx, capturing shutdown. */
   async function callDone(
     tools: Array<any>,
     params: unknown,
   ): Promise<{ result: any; shutdown: boolean }> {
-    const doneTool = tools.find((tool) => tool.name === "luvus_done");
-    assert.ok(doneTool, "expected luvus_done to be registered");
+    const doneTool = tools.find((tool) => tool.name === "pmux_done");
+    assert.ok(doneTool, "expected pmux_done to be registered");
     let shutdown = false;
     const result = await doneTool.execute("tool-id", params, undefined, undefined, {
       shutdown: () => {
@@ -587,9 +506,9 @@ describe("context-alert in the child (luvus-done)", () => {
     return { result, shutdown };
   }
 
-  it("luvus_done with handoff text writes the handoff sidecar and shuts down", async () => {
+  it("pmux_done with handoff text writes the handoff sidecar and shuts down", async () => {
     const { tools, sessionFile, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({}),
     );
     try {
@@ -604,9 +523,9 @@ describe("context-alert in the child (luvus-done)", () => {
     }
   });
 
-  it("luvus_done without handoff keeps the done sidecar", async () => {
+  it("pmux_done without handoff keeps the done sidecar", async () => {
     const { tools, sessionFile, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({}),
     );
     try {
@@ -618,9 +537,9 @@ describe("context-alert in the child (luvus-done)", () => {
     }
   });
 
-  it("luvus_done with a whitespace-only handoff throws with no state change", async () => {
+  it("pmux_done with a whitespace-only handoff throws with no state change", async () => {
     const { tools, sessionFile, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({}),
     );
     try {
@@ -632,27 +551,14 @@ describe("context-alert in the child (luvus-done)", () => {
     }
   });
 
-  it("an alert followed by a handoff writes two log rows with the same session", async () => {
+  it("an alert followed by a handoff writes two log rows", async () => {
     const { handlers, tools, sentMessages, sessionFile, mod, restore } = await loadChildExtension(
       {
-        PI_LUVUS_NUDGE_DISABLE: "1",
-        PI_LUVUS_NAME: "LogChild",
-        LUVUS_BIN_PATH: "in-process",
-        LUVUS_SOCKET_PATH: "/tmp/mbv.sock",
+        PI_PMUX_NUDGE_DISABLE: "1",
+        PI_PMUX_NAME: "LogChild",
       },
       JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
     );
-    __setLuvusExecForTests__((args) => {
-      assert.deepEqual(args, ["session", "list", "--json"]);
-      return JSON.stringify({
-        result: {
-          sessions: [
-            { name: "other", socket_path: "/tmp/other.sock" },
-            { name: "mbv", socket_path: "/tmp/mbv.sock" },
-          ],
-        },
-      });
-    });
     try {
       fire(handlers, "session_start", undefined, { ui: { setWidget() {} } });
       fire(handlers, "agent_start");
@@ -662,8 +568,8 @@ describe("context-alert in the child (luvus-done)", () => {
       assert.equal(sentMessages.length, 1);
 
       // The handoff exit starts its own row, also without waiting.
-      const doneTool = tools.find((tool) => tool.name === "luvus_done");
-      assert.ok(doneTool, "expected luvus_done to be registered");
+      const doneTool = tools.find((tool) => tool.name === "pmux_done");
+      assert.ok(doneTool, "expected pmux_done to be registered");
       let shutdown = false;
       await doneTool.execute(
         "tool-id",
@@ -699,11 +605,10 @@ describe("context-alert in the child (luvus-done)", () => {
       assert.equal(handoffRow.tokens, 700);
       assert.equal(handoffRow.threshold, undefined);
 
-      // Both rows resolved the same server session from the socket path.
-      assert.equal(alertRow.luvusSession, "mbv");
-      assert.equal(handoffRow.luvusSession, "mbv");
+      // The rows carry no server-session field any more.
+      assert.equal("luvusSession" in alertRow, false);
+      assert.equal("luvusSession" in handoffRow, false);
     } finally {
-      __setLuvusExecForTests__(null);
       restore();
     }
   });

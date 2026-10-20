@@ -11,9 +11,9 @@ schema: spec-driven
 context: |
   This package serves two orchestrators: a pi parent that uses
   the extension's tools, and an external orchestrator (e.g.
-  Claude Code) that runs pi children in Luvus panes through the
-  packaged pi-luvus skill. Changes to luvus-done.ts, the
-  PI_LUVUS_* env vars, or the .exit sidecar format must keep
+  Claude Code) that runs pi children in tmux panes through the
+  packaged pmux skill. Changes to pmux-done.ts, the
+  PI_PMUX_* env vars, or the .exit sidecar format must keep
   external-orchestration passing.
 
 # Per-artifact rules (optional)

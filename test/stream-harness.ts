@@ -2,15 +2,15 @@
  * Shared harness for the `/stream` command and projection-wiring suites.
  *
  * Both suites need the same setup: register the extension against the mock pi
- * API, point XDG_RUNTIME_DIR at a temp directory, stub the Luvus CLI, and
+ * API, point XDG_RUNTIME_DIR at a temp directory, stub the tmux backend, and
  * reset the extension's stream state between tests. Keeping it here means a
  * change to the stub protocol or env setup is made once.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as subagentsModule from "../pi-extension/luvus/index.ts";
-import { __setLuvusExecForTests__ } from "../pi-extension/luvus/luvus.ts";
+import * as subagentsModule from "../pi-extension/pmux/index.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 import { createEnvGuard, createMockApi, type Handler, type Notification } from "./stream-fakes.ts";
 
 export interface StreamCommand {
@@ -33,8 +33,7 @@ export interface StreamHarness {
   /** The registered `/stream` command, available after `start`. */
   readonly command: StreamCommand | undefined;
   /** The pane id the next stubbed split returns; resets to 101. */
-  newPaneId: number;
-  /** The last handler registered for an event, after `start`. */
+  newPaneId: number; /** The last handler registered for an event, after `start`. */
   handler(name: string): Handler | undefined;
   setEnv(name: string, value: string | undefined): void;
   run(args: string): Promise<void>;
@@ -94,7 +93,7 @@ export function createStreamHarness(options: StreamHarnessOptions = {}): StreamH
       (subagentsModule as any).default(api);
       command = commands.find((entry) => entry.name === "stream");
       handlers = registered;
-      runtimeDir = mkdtempSync(join(tmpdir(), "pi-luvus-stream-test-"));
+      runtimeDir = mkdtempSync(join(tmpdir(), "pmux-stream-test-"));
       setEnv("XDG_RUNTIME_DIR", runtimeDir);
     },
     async reset() {
@@ -102,19 +101,18 @@ export function createStreamHarness(options: StreamHarnessOptions = {}): StreamH
       notifications.length = 0;
       calls.length = 0;
       nextPaneId = 101;
-      __setLuvusExecForTests__((args) => {
+      __setTmuxExecForTests__((args) => {
         calls.push([...args]);
-        if (args[0] === "pane" && args[1] === "split") {
-          return JSON.stringify({ result: { pane: String(nextPaneId++) } });
+        if (args[0] === "split-window") {
+          return `%${nextPaneId++}`;
         }
-        return JSON.stringify({ result: {} });
+        return "";
       });
-      setEnv("LUVUS_ENV", "1");
-      setEnv("LUVUS_BIN_PATH", "/usr/bin/luvus");
-      setEnv("LUVUS_PANE_ID", "7");
+      setEnv("TMUX", "/tmp/tmux-0/default");
+      setEnv("TMUX_PANE", "%7");
     },
     stop() {
-      __setLuvusExecForTests__(null);
+      __setTmuxExecForTests__(null);
       env.restore();
       if (runtimeDir) rmSync(runtimeDir, { recursive: true, force: true });
     },

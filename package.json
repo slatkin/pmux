@@ -1,7 +1,7 @@
 {
   "name": "pmux",
   "version": "0.1.0",
-  "description": "pi integration for Luvus and tmux: subagents in panes, live agent status, turn-end notifications",
+  "description": "pi integration for tmux: subagents in panes, live agent status, turn-end notifications",
   "keywords": [
     "pi-package"
   ],
@@ -18,7 +18,7 @@
   "author": "slatkin",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/slatkin/pi-luvus.git"
+    "url": "git+https://github.com/slatkin/pmux.git"
   },
   "type": "module",
   "engines": {
@@ -39,7 +39,7 @@
   },
   "pi": {
     "extensions": [
-      "./pi-extension/luvus/index.ts"
+      "./pi-extension/pmux/index.ts"
     ]
   },
   "devDependencies": {

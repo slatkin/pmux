@@ -5,7 +5,7 @@ import {
   StreamFilterView,
   StreamProjection,
   findChatContainer,
-} from "../pi-extension/luvus/stream-projection.ts";
+} from "../pi-extension/pmux/stream-projection.ts";
 import {
   AssistantMessageComponent,
   Spacer,

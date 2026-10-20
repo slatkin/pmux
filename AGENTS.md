@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-pmux is a pi extension. pi is the coding agent from `@earendil-works/pi-coding-agent`. The extension runs subagents in terminal panes. Each subagent is a pi child process in its own pane. Two hosts provide the panes: Luvus and tmux.
+pmux is a pi extension. pi is the coding agent from `@earendil-works/pi-coding-agent`. The extension runs subagents in terminal panes. Each subagent is a pi child process in its own pane. tmux provides the panes.
 
 There is no build step. pi and Node load the `.ts` files directly. The Node floor is 22.18, which first strips types by default. CI runs Node 22.
 
@@ -27,31 +27,28 @@ The pre-commit hook (`.githooks/pre-commit`) runs format:check, lint, typecheck 
 
 ### Two ways to launch a child
 
-Both paths end in the same pane command: `node pi-extension/luvus/cli.ts run <spec>`.
+Both paths end in the same pane command: `node pi-extension/pmux/cli.ts run <spec>`.
 
-- **pi parent.** The `luvus_spawn`, `luvus_resume`, `luvus_message`, `luvus_interrupt` and `luvus_list` tools in `index.ts` call `supervisor.ts`. The supervisor resolves the role, writes a launch spec, creates and names the pane, runs the pane command, and polls for exit. It also owns the status widget, the idle watchdog and message delivery.
-- **External orchestrator (Claude Code).** `skills/pi-luvus/launch.ts` finds the package and passes its argv to `cli.ts start` or `cli.ts resume`. The CLI does the same steps: role resolution, parent footer, pane split, launch spec.
+- **pi parent.** The `pmux_spawn`, `pmux_resume`, `pmux_message`, `pmux_interrupt` and `pmux_list` tools in `index.ts` call `supervisor.ts`. The supervisor resolves the role, writes a launch spec, creates and names the pane, runs the pane command, and polls for exit. It also owns the status widget, the idle watchdog and message delivery.
+- **External orchestrator (Claude Code).** `skills/pmux/launch.ts` finds the package and passes its argv to `cli.ts start` or `cli.ts resume`. The CLI does the same steps: role resolution, parent footer, pane split, launch spec.
 
 The pane runs `cli.ts run`. It starts the child from the spec with no shell, reports the exit code, and, for skill launches only, closes the pane after a `done` or `handoff` sidecar.
 
-### Host dispatch
+### tmux backend
 
-- `backend.ts` is the only module the rest of the extension calls for pane work. It picks Luvus when `LUVUS_ENV`, `LUVUS_BIN_PATH` and `LUVUS_PANE_ID` are all set. It picks tmux when `TMUX` and `TMUX_PANE` are set. With neither, it falls back to Luvus, so the refusal message does not change.
-- `luvus.ts` and `tmux.ts` implement the same surface API. `placement.ts`, `exit-sidecar.ts` and `surface-types.ts` hold the parts that both hosts share.
-- Code with an injected environment (`cli.ts`) passes the host explicitly. Its `hostOf` applies the same Luvus check.
-- Every split anchors on the caller's own pane: `LUVUS_PANE_ID` or `TMUX_PANE`. Never use a "current" pane. tmux resolves an untargeted command against the server's most recently used window, so another client can move the split.
+- `tmux.ts` is the only pane backend. It requires `TMUX` and `TMUX_PANE`; without them the tools refuse with a message that names tmux. `placement.ts`, `exit-sidecar.ts`, `status-file.ts` and `surface-types.ts` hold the host-independent parts.
+- Every split anchors on the caller's own pane: `TMUX_PANE`. Never use a "current" pane. tmux resolves an untargeted command against the server's most recently used window, so another client can move the split.
 - A pane starts empty, and the launch command goes in afterwards. The pane therefore outlives the child, so the parent can read it and close it.
 
 ### Completion and env contracts
 
-- A child writes `<session file>.exit` when it finishes: `done`, `ping`, `handoff` or `error`. The parent polls that file on both hosts. The terminal sentinel is only a fallback. Decoding lives in `exit-sidecar.ts`.
-- The parent writes the child's env with `encodeChildEnv` (`child-env.ts`), and the child reads it with `decodeChildEnv`. The keys are `PI_LUVUS_*` and `PI_DENY_TOOLS`.
-- The child loads `luvus-done.ts` (`pi -e`). That file provides `luvus_done`, `caller_ping`, the completion nudge, auto-exit and the sidecar writes. The role's `tools` list does not remove the control tools, and `luvus_done` is never denied.
+- A child writes `<session file>.exit` when it finishes: `done`, `ping`, `handoff` or `error`. The parent polls that file. The terminal sentinel is only a fallback. Decoding lives in `exit-sidecar.ts`.
+- The parent writes the child's env with `encodeChildEnv` (`child-env.ts`), and the child reads it with `decodeChildEnv`. The keys are `PI_PMUX_*` and `PI_DENY_TOOLS`.
+- The child loads `pmux-done.ts` (`pi -e`). That file provides `pmux_done`, `caller_ping`, the completion nudge, auto-exit and the sidecar writes. The role's `tools` list does not remove the control tools, and `pmux_done` is never denied.
 
-### Status and events by host
+### Status
 
-- Luvus: live status is published as leases through `luvus-status.ts`. The UHP event stream (`uhp-events.ts`) is Luvus-only.
-- tmux: there are no leases and no event stream. The supervisor polls the sidecar and the pane.
+- A child writes its live status to `<session file>.status` (`status-file.ts`): one JSON object with `status` (`working`, `idle`, `done`, `blocked`), `at` and an optional `message`. The supervisor polls the sidecar and the pane; the skill's `launch.ts wait` command polls the status file.
 
 ### Reload safety
 
@@ -67,25 +64,21 @@ The pane runs `cli.ts run`. It starts the child from the spec with no shell, rep
 
 ### Files with extra constraints
 
-- `skills/pi-luvus/launch.ts`: `npx skills add` copies this file. It must stay self-contained, using Node built-ins only. The skill directory holds no shell scripts.
-- `pi-extension/luvus/plugin/hooks/on-stop.js`: runs under the orchestrator's `node`, whose floor is Node 18. Keep it free of TypeScript syntax.
-- `luvus-done.ts`, the `PI_LUVUS_*` variables and the `.exit` format: a change here must keep the `external-orchestration` spec passing.
+- `skills/pmux/launch.ts`: `npx skills add` copies this file. It must stay self-contained, using Node built-ins only. The skill directory holds no shell scripts.
+- `pi-extension/pmux/plugin/hooks/on-stop.js`: runs under the orchestrator's `node`, whose floor is Node 18. Keep it free of TypeScript syntax.
+- `pmux-done.ts`, the `PI_PMUX_*` variables and the `.exit` format: a change here must keep the `external-orchestration` spec passing.
 
-## Naming: keep the old names
+## Repository path
 
-The package and repo are `pmux`. Other names are the external contract, so keep them: `pi-extension/luvus/`, the `luvus_*` tool names, the `PI_LUVUS_*` variables and `skills/pi-luvus/`. A rename is a separate, explicit change.
-
-## Luvus is third-party
-
-Luvus changes between releases. No file in this repo is an authority for Luvus behavior. That includes `docs/`, `openspec/` and the skill text. Do not write Luvus behavior into comments, docs or specs. Describe only what this code does. To check a Luvus flag, run `luvus help <topic>` on the installed binary, and do not rely on any other source.
+The GitHub repository is `slatkin/pmux`. The install commands and the launcher's git-install lookup use that path; the launcher finds the package where pi's git install of this repository lands.
 
 ## Tests
 
 - Use `node:test` with `node:assert/strict`. Name files `test/<thing>.test.ts`. `test/test.ts` is one large suite.
-- The `test/*.ts` glob also matches helpers: `host-env.ts`, `stream-fakes.ts` and `stream-harness.ts`. They hold no tests.
-- Import `./host-env.ts` first in any test that reaches a backend. It removes `LUVUS_*`, `PI_LUVUS_*`, `TMUX` and `TMUX_PANE` from the process env. Without it, a run inside a pane drives the real host.
-- Fake the host with the test seams: `__setLuvusExecForTests__` in `luvus.ts` and `__setTmuxExecForTests__` in `tmux.ts`. Reset them to `null` afterwards.
-- Tests never need a live Luvus or tmux server, and never open many panes. The user runs the live checks, so do not ask for live timings or pane counts in a plan.
+- The `test/*.ts` glob also matches helpers: `host-env.ts`, `stream-fakes.ts`, `stream-harness.ts` and `temp-dir.ts`. They hold no tests.
+- Import `./host-env.ts` first in any test that reaches a backend. It removes `LUVUS_*`, `PI_LUVUS_*`, `PI_PMUX_*`, `TMUX` and `TMUX_PANE` from the process env. Without it, a run inside a pane drives the real host.
+- Fake the host with the test seam: `__setTmuxExecForTests__` in `tmux.ts`. Reset it to `null` afterwards.
+- Tests never need a live tmux server, and never open many panes. The user runs the live checks, so do not ask for live timings or pane counts in a plan.
 
 ## OpenSpec
 

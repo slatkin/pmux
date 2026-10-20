@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { capSummary, getReportFile, REPORT_CAP_CHARS } from "../pi-extension/luvus/report-cap.ts";
+import { capSummary, getReportFile, REPORT_CAP_CHARS } from "../pi-extension/pmux/report-cap.ts";
 
 const session = () => join(mkdtempSync(join(tmpdir(), "report-cap-")), "s.jsonl");
 

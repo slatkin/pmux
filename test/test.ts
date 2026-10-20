@@ -1,4 +1,4 @@
-import { describe, it, before, after, mock, beforeEach } from "node:test";
+import { describe, it, before, after, mock } from "node:test";
 import assert from "node:assert/strict";
 
 // The whole suite drives the Luvus backend through its own seam and sets the
@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 // the suite inside a pi sub-agent pane) would turn any un-stubbed Luvus call
 // into a real pane mutation — including `pane close $LUVUS_PANE_ID`, which
 // kills the very session running the suite. The same goes for the tmux host
-// keys and for PI_LUVUS_*: a suite run inside a sub-agent pane inherits its
-// identity (PI_LUVUS_SESSION, PI_LUVUS_AUTO_EXIT, …), which flips the
+// keys and for PI_PMUX_*: a suite run inside a sub-agent pane inherits its
+// identity (PI_PMUX_SESSION, PI_PMUX_AUTO_EXIT, …), which flips the
 // nudge/auto-exit paths under test and can write a `.exit` sidecar for the
 // real session. `host-env.ts` clears all of them for this process.
 import "./host-env.ts";
@@ -25,35 +25,23 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import * as subagentsModule from "../pi-extension/luvus/index.ts";
+import { tempDirHelpers } from "./temp-dir.ts";
+import * as subagentsModule from "../pi-extension/pmux/index.ts";
 
 import {
   getNewEntries,
   findLastAssistantMessage,
   seedSubagentSessionFile,
-} from "../pi-extension/luvus/session.ts";
+} from "../pi-extension/pmux/session.ts";
 
-import {
-  pollForExit,
-  sentinelLooksLive,
-  closeSurface,
-  createSurface,
-  isMuxAvailable,
-  readScreen,
-  sendEscape,
-  agentPrompt,
-  readExitSidecar,
-  runInPane,
-  __pollForExitTest__,
-  __setLuvusExecForTests__,
-} from "../pi-extension/luvus/luvus.ts";
-import { __setUhpSpawnForTests__ } from "../pi-extension/luvus/uhp-events.ts";
-import { readLaunchSpec } from "../pi-extension/luvus/launch.ts";
+import { interpretExitSidecar } from "../pi-extension/pmux/exit-sidecar.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
+import { readLaunchSpec } from "../pi-extension/pmux/launch.ts";
 import {
   LAUNCH_RECORD_VERSION,
   getLaunchRecordFile,
   writeLaunchRecord,
-} from "../pi-extension/luvus/launch-record.ts";
+} from "../pi-extension/pmux/launch-record.ts";
 import {
   advanceStatusState,
   buildActivityLabel,
@@ -72,27 +60,25 @@ import {
   getDefaultConfigPath,
   loadSurfaceConfig,
   writeSurfaceConfig,
-} from "../pi-extension/luvus/status.ts";
+} from "../pi-extension/pmux/status.ts";
 import {
   createSubagentActivityRecorder,
   getSubagentActivityFile,
   readSubagentActivityFile,
-} from "../pi-extension/luvus/activity.ts";
+} from "../pi-extension/pmux/activity.ts";
 import {
   shouldMarkUserTookOver,
   shouldAutoExitOnAgentEnd,
   shouldScheduleAgentEndNudge,
   findLatestAssistantError,
-} from "../pi-extension/luvus/luvus-done.ts";
+} from "../pi-extension/pmux/pmux-done.ts";
 import {
   DEFAULT_SUBAGENT_TOOLS,
   agentDefinitionPaths,
   getBundledAgentsDir,
   parseAgentDefinition,
-} from "../pi-extension/luvus/agent-defs.ts";
-import { __resetRegistrationForTests__ } from "../pi-extension/luvus/luvus-status.ts";
-import subagentDoneExtension from "../pi-extension/luvus/luvus-done.ts";
-
+} from "../pi-extension/pmux/agent-defs.ts";
+import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
 // --- Fixture ---
 // Captured live via `$LUVUS_BIN_PATH pane split $LUVUS_PANE_ID --no-focus` on 2026-09-28
 // (design.md Decision 3): the new pane id is `result.pane`.
@@ -120,15 +106,9 @@ function createSessionFile(dir: string, entries: object[]): string {
   return file;
 }
 
-async function withTempDir(run: (dir: string) => void | Promise<void>) {
-  const dir = createTestDir();
-  try {
-    await run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
+// The temp-directory helper is shared with the other test files. The body may
+// be synchronous, so the asynchronous variant is the one that fits.
+const { withTempDirAsync: withTempDir } = tempDirHelpers("subagents-test-");
 function createMockExtensionApi() {
   const registeredTools: Array<any> = [];
   const registeredCommands: Array<any> = [];
@@ -670,22 +650,48 @@ describe("status.ts", () => {
 
   it("prefers the extensions-dir config, falling back to the legacy package-root config", () => {
     withTempDir((dir) => {
-      const configPath = join(dir, "extensions", "pi-luvus", "config.json");
+      const configPath = join(dir, "extensions", "pmux", "config.json");
       const legacyPath = join(dir, "config.json");
       const examplePath = join(dir, "config.json.example");
       writeFileSync(legacyPath, JSON.stringify({ surface: "tab" }));
 
       assert.equal(loadSurfaceConfig(configPath, examplePath, legacyPath), "tab");
 
-      mkdirSync(join(dir, "extensions", "pi-luvus"), { recursive: true });
+      mkdirSync(join(dir, "extensions", "pmux"), { recursive: true });
       writeFileSync(configPath, JSON.stringify({ surface: "down" }));
       assert.equal(loadSurfaceConfig(configPath, examplePath, legacyPath), "down");
     });
   });
 
+  it("falls back to the pre-rename extensions dir config when the pmux config is absent", () => {
+    withTempDir((dir) => {
+      const previous = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = dir;
+      try {
+        // A config in the old extensions dir is read when the new one is absent.
+        mkdirSync(join(dir, "extensions", "pi-luvus"), { recursive: true });
+        writeFileSync(
+          join(dir, "extensions", "pi-luvus", "config.json"),
+          JSON.stringify({ surface: "tab" }),
+        );
+        assert.equal(loadSurfaceConfig(), "tab");
+
+        // The new directory wins when both exist.
+        mkdirSync(join(dir, "extensions", "pmux"), { recursive: true });
+        writeFileSync(
+          join(dir, "extensions", "pmux", "config.json"),
+          JSON.stringify({ surface: "down" }),
+        );
+        assert.equal(loadSurfaceConfig(), "down");
+      } finally {
+        restoreEnvVar("PI_CODING_AGENT_DIR", previous);
+      }
+    });
+  });
+
   it("migrates the legacy config to the new location when persisting the surface", () => {
     withTempDir((dir) => {
-      const configPath = join(dir, "extensions", "pi-luvus", "config.json");
+      const configPath = join(dir, "extensions", "pmux", "config.json");
       const legacyPath = join(dir, "config.json");
       const examplePath = join(dir, "config.json.example");
       writeFileSync(legacyPath, JSON.stringify({ status: { enabled: false } }, null, 2) + "\n");
@@ -702,7 +708,7 @@ describe("status.ts", () => {
       const previous = process.env.PI_CODING_AGENT_DIR;
       process.env.PI_CODING_AGENT_DIR = dir;
       try {
-        assert.equal(getDefaultConfigPath(), join(dir, "extensions", "pi-luvus", "config.json"));
+        assert.equal(getDefaultConfigPath(), join(dir, "extensions", "pmux", "config.json"));
       } finally {
         restoreEnvVar("PI_CODING_AGENT_DIR", previous);
       }
@@ -1179,10 +1185,10 @@ describe("status.ts", () => {
 });
 
 describe("surface placement resolution", () => {
-  it("modeHint names luvus_done for auto-exit agents too", () => {
-    assert.match(subagentsModule.resolveModeHint(true), /Call luvus_done when finished/);
-    assert.match(subagentsModule.resolveModeHint(false), /call the luvus_done tool/);
-    assert.match(subagentsModule.resolveModeHint(undefined), /call the luvus_done tool/);
+  it("modeHint names pmux_done for auto-exit agents too", () => {
+    assert.match(subagentsModule.resolveModeHint(true), /Call pmux_done when finished/);
+    assert.match(subagentsModule.resolveModeHint(false), /call the pmux_done tool/);
+    assert.match(subagentsModule.resolveModeHint(undefined), /call the pmux_done tool/);
   });
   it("prefers the tool param over the configured default and ignores invalid values", () => {
     const saved = subagentsModule.getSurfaceDefault();
@@ -1405,12 +1411,12 @@ describe("subagent discovery", () => {
   it("buildSubagentToolAllowlist preserves requested tools and adds child control tools", () => {
     assert.equal(
       testApi.buildSubagentToolAllowlist("read,bash,web_search"),
-      "read,bash,web_search,caller_ping,luvus_done,luvus_message",
+      "read,bash,web_search,caller_ping,pmux_done,pmux_message",
     );
   });
 
   it("buildSubagentToolAllowlist falls back to the default tools for a role without tools", () => {
-    const expected = "read,bash,edit,write,grep,find,ls,caller_ping,luvus_done,luvus_message";
+    const expected = "read,bash,edit,write,grep,find,ls,caller_ping,pmux_done,pmux_message";
     assert.equal(DEFAULT_SUBAGENT_TOOLS, "read,bash,edit,write,grep,find,ls");
 
     // The pi parent calls this same builder with the loaded role's `tools` value.
@@ -1558,8 +1564,8 @@ describe("subagent discovery", () => {
       const { api, registeredTools } = createMockExtensionApi();
       (subagentsModule as any).default(api);
 
-      const tool = registeredTools.find((tool) => tool.name === "luvus_list");
-      assert.ok(tool, "expected luvus_list to be registered");
+      const tool = registeredTools.find((tool) => tool.name === "pmux_list");
+      assert.ok(tool, "expected pmux_list to be registered");
 
       const result = await tool.execute();
       const agents = result.details?.agents ?? [];
@@ -1586,8 +1592,8 @@ describe("subagent discovery", () => {
       const { api, registeredTools } = createMockExtensionApi();
       (subagentsModule as any).default(api);
 
-      const tool = registeredTools.find((tool) => tool.name === "luvus_list");
-      assert.ok(tool, "expected luvus_list to be registered");
+      const tool = registeredTools.find((tool) => tool.name === "pmux_list");
+      assert.ok(tool, "expected pmux_list to be registered");
 
       const result = await tool.execute();
       const agents = result.details?.agents ?? [];
@@ -1633,8 +1639,8 @@ describe("subagent discovery", () => {
       const { api, registeredTools } = createMockExtensionApi();
       (subagentsModule as any).default(api);
 
-      const tool = registeredTools.find((tool) => tool.name === "luvus_list");
-      assert.ok(tool, "expected luvus_list to be registered");
+      const tool = registeredTools.find((tool) => tool.name === "pmux_list");
+      assert.ok(tool, "expected pmux_list to be registered");
 
       const result = await tool.execute();
       const agents = result.details?.agents ?? [];
@@ -1653,7 +1659,7 @@ describe("subagent discovery", () => {
     });
   });
 });
-describe("luvus-done.ts", () => {
+describe("pmux-done.ts", () => {
   describe("shouldMarkUserTookOver", () => {
     it("ignores the initial injected task before the first agent run", () => {
       assert.equal(shouldMarkUserTookOver(false), false);
@@ -1726,7 +1732,7 @@ describe("luvus-done.ts", () => {
   });
 });
 
-describe("luvus-done nudge", () => {
+describe("pmux-done nudge", () => {
   /** Load the child extension with a mock pi API under the given env. */
   function loadChildExtension(env: Record<string, string | undefined>) {
     const saved = new Map(Object.keys(env).map((k) => [k, process.env[k]]));
@@ -1795,8 +1801,8 @@ describe("luvus-done nudge", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const { handlers, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        PI_LUVUS_NUDGE_DISABLE: "1",
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DISABLE: "1",
       });
       try {
         fire(handlers, "agent_start");
@@ -1820,9 +1826,9 @@ describe("luvus-done nudge", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const { handlers, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        PI_LUVUS_AUTO_EXIT: "1",
-        PI_LUVUS_NUDGE_DISABLE: "1",
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_AUTO_EXIT: "1",
+        PI_PMUX_NUDGE_DISABLE: "1",
       });
       try {
         fire(handlers, "agent_start");
@@ -1846,9 +1852,9 @@ describe("luvus-done nudge", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const { handlers, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        PI_LUVUS_AUTO_EXIT: "1",
-        PI_LUVUS_NUDGE_DISABLE: "1",
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_AUTO_EXIT: "1",
+        PI_PMUX_NUDGE_DISABLE: "1",
       });
       try {
         fire(handlers, "agent_start");
@@ -1872,9 +1878,9 @@ describe("luvus-done nudge", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const { handlers, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        PI_LUVUS_AUTO_EXIT: "1",
-        PI_LUVUS_NUDGE_DISABLE: "1",
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_AUTO_EXIT: "1",
+        PI_PMUX_NUDGE_DISABLE: "1",
       });
       try {
         fire(handlers, "agent_start");
@@ -1898,7 +1904,7 @@ describe("luvus-done nudge", () => {
   it("agent_end on an error stop still writes the error sidecar and shuts down", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
-      const { handlers, restoreEnv } = loadChildExtension({ PI_LUVUS_SESSION: sessionFile });
+      const { handlers, restoreEnv } = loadChildExtension({ PI_PMUX_SESSION: sessionFile });
       try {
         fire(handlers, "agent_start");
         let shutdownCalled = false;
@@ -1923,16 +1929,16 @@ describe("luvus-done nudge", () => {
     });
   });
 
-  it("calls luvus_done before agent_end: sidecar written and no nudge fires", async () => {
+  it("calls pmux_done before agent_end: sidecar written and no nudge fires", async () => {
     await withTempDir(async (dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const { handlers, tools, sentMessages, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        PI_LUVUS_NUDGE_DELAY_MS: "1000",
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DELAY_MS: "1000",
       });
       try {
-        const doneTool = tools.find((t) => t.name === "luvus_done");
-        assert.ok(doneTool, "expected luvus_done to be registered");
+        const doneTool = tools.find((t) => t.name === "pmux_done");
+        assert.ok(doneTool, "expected pmux_done to be registered");
         await doneTool.execute("t1", {}, undefined, undefined, { shutdown() {} });
         assert.equal(existsSync(`${sessionFile}.exit`), true);
 
@@ -1958,7 +1964,7 @@ describe("luvus-done nudge", () => {
       mock.timers.enable({ apis: ["setTimeout"] });
       try {
         const { handlers, sentMessages, restoreEnv } = loadChildExtension({
-          PI_LUVUS_NUDGE_DELAY_MS: "1000",
+          PI_PMUX_NUDGE_DELAY_MS: "1000",
         });
         try {
           fire(handlers, "agent_start");
@@ -1974,7 +1980,7 @@ describe("luvus-done nudge", () => {
           assert.equal(sentMessages.length, 0);
           mock.timers.tick(1);
           assert.equal(sentMessages.length, 1);
-          assert.match(sentMessages[0].message, /luvus_done/);
+          assert.match(sentMessages[0].message, /pmux_done/);
           assert.deepEqual(sentMessages[0].opts, { deliverAs: "followUp" });
         } finally {
           restoreEnv();
@@ -1988,7 +1994,7 @@ describe("luvus-done nudge", () => {
   it("pending nudge is cancelled by user input and by a new agent cycle", async () => {
     await withTempDir(async (_dir) => {
       const { handlers, sentMessages, restoreEnv } = loadChildExtension({
-        PI_LUVUS_NUDGE_DELAY_MS: "1000",
+        PI_PMUX_NUDGE_DELAY_MS: "1000",
       });
       try {
         fire(handlers, "agent_start");
@@ -2020,7 +2026,7 @@ describe("luvus-done nudge", () => {
   it("input that arrives mid-run does not silence the nudge", async () => {
     await withTempDir(async (_dir) => {
       const { handlers, sentMessages, restoreEnv } = loadChildExtension({
-        PI_LUVUS_NUDGE_DELAY_MS: "1000",
+        PI_PMUX_NUDGE_DELAY_MS: "1000",
       });
       try {
         fire(handlers, "agent_start");
@@ -2038,216 +2044,9 @@ describe("luvus-done nudge", () => {
       }
     });
   });
-
-  /**
-   * In-process Luvus fake: logs each invocation together with whether the
-   * `.exit` sidecar existed at that moment, so a test can prove the terminal
-   * status report ran before the sidecar write.
-   */
-  function installFakeLuvus(dir: string, sidecarFile: string): { bin: string; log: string } {
-    const log = join(dir, "luvus-stub.log");
-    __setLuvusExecForTests__((args) => {
-      const sidecar = existsSync(sidecarFile) ? "sidecar=yes" : "sidecar=no";
-      appendFileSync(log, `${sidecar} ${args.join(" ")}\n`);
-      return '{"id":"1","result":{"revision":1,"type":"ok"}}';
-    });
-    return { bin: "in-process", log };
-  }
-
-  it("reports done to Luvus before writing the done sidecar", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      const { bin, log } = installFakeLuvus(dir, `${sessionFile}.exit`);
-      const { tools, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: bin,
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        const doneTool = tools.find((t) => t.name === "luvus_done");
-        assert.ok(doneTool, "expected luvus_done to be registered");
-        await doneTool.execute("t1", {}, undefined, undefined, { shutdown() {} });
-
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
-        const lines = readFileSync(log, "utf8").trim().split("\n");
-        assert.equal(lines.length, 1);
-        assert.match(lines[0], /^sidecar=no /);
-        assert.match(lines[0], /--status done /);
-        assert.doesNotMatch(lines[0], /--message/);
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
-
-  it("reports blocked with the ping question before writing the ping sidecar", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      const { bin, log } = installFakeLuvus(dir, `${sessionFile}.exit`);
-      const { tools, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        PI_LUVUS_NAME: "PingChild",
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: bin,
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        const pingTool = tools.find((t) => t.name === "caller_ping");
-        assert.ok(pingTool, "expected caller_ping to be registered");
-        await pingTool.execute("t1", { message: "which target?" }, undefined, undefined, {
-          shutdown() {},
-        });
-
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
-          type: "ping",
-          name: "PingChild",
-          message: "which target?",
-        });
-        const line = readFileSync(log, "utf8").trim();
-        assert.match(line, /^sidecar=no /);
-        assert.match(line, /--status blocked /);
-        assert.match(line, /--message which target\?/);
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
-
-  it("reports done before the auto-exit sidecar", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      const { bin, log } = installFakeLuvus(dir, `${sessionFile}.exit`);
-      const { handlers, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        PI_LUVUS_AUTO_EXIT: "1",
-        PI_LUVUS_NUDGE_DISABLE: "1",
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: bin,
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        fire(handlers, "agent_start");
-        fire(
-          handlers,
-          "agent_end",
-          { messages: [{ role: "assistant", stopReason: "stop" }] },
-          { shutdown() {} },
-        );
-
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
-        const lines = readFileSync(log, "utf8").trim().split("\n");
-        assert.match(lines.at(-1)!, /^sidecar=no /);
-        assert.match(lines.at(-1)!, /--status done /);
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
-
-  it("reports blocked with the error text before the error sidecar", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      const { bin, log } = installFakeLuvus(dir, `${sessionFile}.exit`);
-      const { handlers, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: bin,
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        fire(handlers, "agent_start");
-        fire(
-          handlers,
-          "agent_end",
-          {
-            messages: [{ role: "assistant", stopReason: "error", errorMessage: "529 overloaded" }],
-          },
-          { shutdown() {} },
-        );
-
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
-          type: "error",
-          errorMessage: "529 overloaded",
-          stopReason: "error",
-        });
-        const lines = readFileSync(log, "utf8").trim().split("\n");
-        assert.match(lines.at(-1)!, /^sidecar=no /);
-        assert.match(lines.at(-1)!, /--status blocked /);
-        assert.match(lines.at(-1)!, /--message 529 overloaded/);
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
-
-  it("writes the sidecar and shuts down when the status report fails", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      __setLuvusExecForTests__(() => {
-        throw new Error("stub Luvus failed");
-      });
-      const { tools, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: "in-process",
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        const doneTool = tools.find((t) => t.name === "luvus_done");
-        assert.ok(doneTool, "expected luvus_done to be registered");
-        let shutdownCalled = false;
-        await doneTool.execute("t1", {}, undefined, undefined, {
-          shutdown: () => (shutdownCalled = true),
-        });
-
-        assert.equal(shutdownCalled, true);
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
-
-  it("does not report a terminal status outside Luvus", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      const { bin, log } = installFakeLuvus(dir, `${sessionFile}.exit`);
-      const { tools, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        LUVUS_ENV: undefined,
-        LUVUS_BIN_PATH: bin,
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        const doneTool = tools.find((t) => t.name === "luvus_done");
-        assert.ok(doneTool, "expected luvus_done to be registered");
-        await doneTool.execute("t1", {}, undefined, undefined, { shutdown() {} });
-
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
-        assert.equal(existsSync(log), false);
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
 });
 
-describe("luvus.ts interpretExitSidecar", () => {
-  const { interpretExitSidecar } = __pollForExitTest__;
-
+describe("interpretExitSidecar", () => {
   it("decodes ping payloads", () => {
     assert.deepEqual(interpretExitSidecar({ type: "ping", name: "Worker", message: "need help" }), {
       reason: "ping",
@@ -2311,12 +2110,12 @@ describe("luvus.ts interpretExitSidecar", () => {
     assert.deepEqual(interpretExitSidecar(null), { reason: "done", exitCode: 0 });
   });
 });
-describe("luvus-surface command", () => {
+describe("pmux-surface command", () => {
   function loadCommand() {
     const { api, registeredCommands } = createMockExtensionApi();
     (subagentsModule as any).default(api);
-    const command = registeredCommands.find((c: any) => c.name === "luvus-surface");
-    assert.ok(command, "expected /luvus-surface to be registered");
+    const command = registeredCommands.find((c: any) => c.name === "pmux-surface");
+    assert.ok(command, "expected /pmux-surface to be registered");
     const notifications: Array<{ message: string; level: string }> = [];
     const ctx = {
       ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
@@ -2370,11 +2169,11 @@ describe("luvus-surface command", () => {
 });
 
 describe("tool registration", () => {
-  it("registers the optional surface parameter on luvus_spawn and luvus_resume", () => {
+  it("registers the optional surface parameter on pmux_spawn and pmux_resume", () => {
     const { api, registeredTools } = createMockExtensionApi();
     (subagentsModule as any).default(api);
 
-    for (const toolName of ["luvus_spawn", "luvus_resume"]) {
+    for (const toolName of ["pmux_spawn", "pmux_resume"]) {
       const tool = registeredTools.find((t: any) => t.name === toolName);
       assert.ok(tool, `expected ${toolName} to be registered`);
       assert.ok(tool.parameters.properties.surface, `${toolName} should accept surface`);
@@ -2387,17 +2186,17 @@ describe("tool registration", () => {
     const testApi = (subagentsModule as any).__test__;
     const denied = testApi.resolveDenyTools({ spawning: false });
 
-    assert.equal(denied.has("luvus_spawn"), true);
-    assert.equal(denied.has("luvus_interrupt"), true);
-    assert.equal(denied.has("luvus_resume"), true);
+    assert.equal(denied.has("pmux_spawn"), true);
+    assert.equal(denied.has("pmux_interrupt"), true);
+    assert.equal(denied.has("pmux_resume"), true);
   });
 
   it("renders partial subagent tool-call args without throwing", () => {
     const { api, registeredTools } = createMockExtensionApi();
     (subagentsModule as any).default(api);
 
-    const subagentTool = registeredTools.find((tool) => tool.name === "luvus_spawn");
-    assert.ok(subagentTool, "expected luvus_spawn tool to be registered");
+    const subagentTool = registeredTools.find((tool) => tool.name === "pmux_spawn");
+    assert.ok(subagentTool, "expected pmux_spawn tool to be registered");
 
     const theme = {
       fg(_color: string, text: string) {
@@ -2413,12 +2212,12 @@ describe("tool registration", () => {
     assert.match(output, /\(unnamed\)/);
   });
 
-  it("registers luvus_resume with the record-based resume parameters", () => {
+  it("registers pmux_resume with the record-based resume parameters", () => {
     const { api, registeredTools } = createMockExtensionApi();
     (subagentsModule as any).default(api);
 
-    const resumeTool = registeredTools.find((tool) => tool.name === "luvus_resume");
-    assert.ok(resumeTool, "expected luvus_resume tool to be registered");
+    const resumeTool = registeredTools.find((tool) => tool.name === "pmux_resume");
+    assert.ok(resumeTool, "expected pmux_resume tool to be registered");
 
     assert.deepEqual(Object.keys(resumeTool.parameters.properties).sort(), [
       "autoExit",
@@ -2432,17 +2231,17 @@ describe("tool registration", () => {
     assert.match(autoExitSchema.description, /Set false for an interactive session/);
   });
 
-  it("registers luvus_spawn without a resumeSessionId parameter", () => {
+  it("registers pmux_spawn without a resumeSessionId parameter", () => {
     const { api, registeredTools } = createMockExtensionApi();
     (subagentsModule as any).default(api);
 
-    const spawnTool = registeredTools.find((tool) => tool.name === "luvus_spawn");
-    assert.ok(spawnTool, "expected luvus_spawn tool to be registered");
+    const spawnTool = registeredTools.find((tool) => tool.name === "pmux_spawn");
+    assert.ok(spawnTool, "expected pmux_spawn tool to be registered");
     assert.equal("resumeSessionId" in spawnTool.parameters.properties, false);
   });
 });
 
-describe("luvus_resume tool", () => {
+describe("pmux_resume tool", () => {
   it("resumes a Claude Code child from its record when the session file is missing", async () => {
     await withTempDir(async (dir) => {
       const sessionPath = join(dir, "claude-child.jsonl");
@@ -2459,49 +2258,33 @@ describe("luvus_resume tool", () => {
       });
 
       const runs: string[] = [];
-      __setLuvusExecForTests__((args) => {
-        if (args[0] === "pane" && args[1] === "run") {
-          runs.push(String(args[3]));
-          return '{"id":"1","result":{"revision":1,"type":"ok"}}';
+      __setTmuxExecForTests__((args) => {
+        if (args[0] === "send-keys" && args[3] === "-l") {
+          runs.push(String(args[4]));
+          return "";
         }
-        if (args[0] === "pane" && args[1] === "read") {
-          return JSON.stringify({ id: "1", result: { revision: 1, text: "", type: "pane_read" } });
+        if (args[0] === "capture-pane") {
+          return "";
         }
-        return '{"id":"1","result":{"pane":"24","revision":1,"tab":"1","type":"pane","workspace":"2"}}';
-      });
-      // No real UHP child: a silent stream, and an empty agent snapshot.
-      __setUhpSpawnForTests__((args) => {
-        if (args[0] === "agent") {
-          return {
-            stdout: (async function* () {
-              yield Buffer.from(`${JSON.stringify({ result: { agents: [] } })}\n`);
-            })(),
-            kill() {},
-          };
-        }
-        return { stdout: (async function* () {})(), kill() {} };
+        return "%24";
       });
 
       const saved = new Map(
-        [
-          "LUVUS_ENV",
-          "LUVUS_BIN_PATH",
-          "LUVUS_PANE_ID",
-          "PI_LUVUS_NAME",
-          "PI_LUVUS_SHELL_READY_DELAY_MS",
-        ].map((key) => [key, process.env[key]]),
+        ["TMUX", "TMUX_PANE", "PI_PMUX_NAME", "PI_PMUX_SHELL_READY_DELAY_MS"].map((key) => [
+          key,
+          process.env[key],
+        ]),
       );
-      process.env.LUVUS_ENV = "1";
-      process.env.LUVUS_BIN_PATH = "in-process";
-      process.env.LUVUS_PANE_ID = "21";
-      process.env.PI_LUVUS_NAME = "parent";
-      process.env.PI_LUVUS_SHELL_READY_DELAY_MS = "0";
+      process.env.TMUX = "/tmp/tmux-0/default";
+      process.env.TMUX_PANE = "%21";
+      process.env.PI_PMUX_NAME = "parent";
+      process.env.PI_PMUX_SHELL_READY_DELAY_MS = "0";
 
       try {
         const { api, registeredTools } = createMockExtensionApi();
         (subagentsModule as any).default(api);
-        const resumeTool = registeredTools.find((tool) => tool.name === "luvus_resume");
-        assert.ok(resumeTool, "expected luvus_resume to be registered");
+        const resumeTool = registeredTools.find((tool) => tool.name === "pmux_resume");
+        assert.ok(resumeTool, "expected pmux_resume to be registered");
 
         const result = await resumeTool.execute(
           "t1",
@@ -2531,8 +2314,7 @@ describe("luvus_resume tool", () => {
         assert.deepEqual(spec.args.slice(-3), ["--resume", "session-abc", "Continue the work"]);
       } finally {
         subagentsModule.__test__.getCurrentSupervisor().shutdown();
-        __setLuvusExecForTests__(null);
-        __setUhpSpawnForTests__(null);
+        __setTmuxExecForTests__(null);
         for (const [key, value] of saved) {
           restoreEnvVar(key, value);
         }
@@ -2613,7 +2395,7 @@ describe("subagent activity snapshots", () => {
 
   it("rejects malformed activity fields used by classification and rendering", () => {
     withTempDir((dir) => {
-      mkdirSync(join(dir, "luvus-activity"), { recursive: true });
+      mkdirSync(join(dir, "pmux-activity"), { recursive: true });
       const cases = [
         { activeSince: "bad" },
         { waitingSince: "bad" },
@@ -2714,13 +2496,13 @@ describe("subagent activity snapshots", () => {
 });
 
 describe("subagent interruption", () => {
-  it("registers luvus_interrupt in the main session extension", () => {
+  it("registers pmux_interrupt in the main session extension", () => {
     const { api, registeredTools } = createMockExtensionApi();
 
     (subagentsModule as any).default(api);
 
     assert.equal(
-      registeredTools.some((tool) => tool.name === "luvus_interrupt"),
+      registeredTools.some((tool) => tool.name === "pmux_interrupt"),
       true,
     );
   });
@@ -2739,7 +2521,7 @@ describe("subagent interruption", () => {
 
     assert.match(presentation, /failed \(exit code 130\)/);
     assert.doesNotMatch(presentation, /interrupted/);
-    assert.match(presentation, /Resume: luvus_resume/);
+    assert.match(presentation, /Resume: pmux_resume/);
   });
 
   it("renders a clear provider/agent error when errorMessage is set", () => {
@@ -2763,8 +2545,8 @@ describe("subagent interruption", () => {
     assert.match(presentation, /Sub-agent "Worker" failed/);
     assert.match(presentation, /provider\/agent error — auto-retry exhausted/);
     assert.match(presentation, /Error: Anthropic 529 Overloaded after 3 retries/);
-    assert.match(presentation, /luvus_resume/);
-    assert.match(presentation, /Resume: luvus_resume/);
+    assert.match(presentation, /pmux_resume/);
+    assert.match(presentation, /Resume: pmux_resume/);
     assert.doesNotMatch(presentation, /ignored when errorMessage is present/);
   });
 });
@@ -2787,17 +2569,17 @@ describe("subagent messaging", () => {
     };
   }
 
-  it("registers luvus_message in the main session extension", () => {
+  it("registers pmux_message in the main session extension", () => {
     const { api, registeredTools } = createMockExtensionApi();
     (subagentsModule as any).default(api);
     assert.equal(
-      registeredTools.some((tool) => tool.name === "luvus_message"),
+      registeredTools.some((tool) => tool.name === "pmux_message"),
       true,
     );
   });
 
-  it("includes PI_LUVUS_PARENT_ROSTER in the spawn env builder", () => {
-    const rosterFile = "/s/artifacts/parent/luvus-roster.json";
+  it("includes PI_PMUX_PARENT_ROSTER in the spawn env builder", () => {
+    const rosterFile = "/s/artifacts/parent/pmux-roster.json";
     const spawn = testApi().buildSpawnEnvParts({
       name: "Worker",
       subagentSessionFile: "/s/worker.jsonl",
@@ -2807,8 +2589,8 @@ describe("subagent messaging", () => {
       denySet: new Set(),
       parentRosterFile: rosterFile,
     });
-    assert.equal(spawn.PI_LUVUS_PARENT_ROSTER, rosterFile);
-    assert.equal(spawn.PI_LUVUS_SURFACE, "24");
+    assert.equal(spawn.PI_PMUX_PARENT_ROSTER, rosterFile);
+    assert.equal(spawn.PI_PMUX_SURFACE, "24");
   });
 
   it("resolves parent, children and siblings and excludes self", () => {
@@ -2817,7 +2599,7 @@ describe("subagent messaging", () => {
       hasParent: true,
       ownChildren: [{ id: "d4", name: "Scout", surface: "27" }],
       parentRoster: {
-        parentPane: "21",
+        parentPane: "%21",
         parentName: "parent",
         children: [
           { id: "b2", name: "Reviewer", pane: "25", cli: "pi" },
@@ -2847,7 +2629,7 @@ describe("subagent messaging", () => {
       hasParent: true,
       ownChildren: [{ id: "d4", name: "Scout", surface: "27" }],
       parentRoster: {
-        parentPane: "21",
+        parentPane: "%21",
         parentName: "parent",
         children: [{ id: "b2", name: "Worker", pane: "25", cli: "pi" }],
       },
@@ -2994,11 +2776,11 @@ describe("subagent messaging", () => {
     assert.deepEqual(prompted, ["25\u0000[subagent message from parent]\nAPI is in src/api"]);
   });
 
-  it("registers luvus_message with a validated schema", () => {
+  it("registers pmux_message with a validated schema", () => {
     const { api, registeredTools } = createMockExtensionApi();
     (subagentsModule as any).default(api);
-    const tool = registeredTools.find((t) => t.name === "luvus_message");
-    assert.ok(tool, "expected luvus_message to be registered");
+    const tool = registeredTools.find((t) => t.name === "pmux_message");
+    assert.ok(tool, "expected pmux_message to be registered");
     assert.equal(tool.parameters.properties.to.type, "string");
     assert.equal(tool.parameters.properties.message.type, "string");
   });
@@ -3058,11 +2840,11 @@ describe("subagent messaging", () => {
       messagingHint: hint,
       inheritsConversationContext: false,
     });
-    assert.match(prompt, /You can message `parent`, `Worker` with luvus_message/);
+    assert.match(prompt, /You can message `parent`, `Worker` with pmux_message/);
   });
 });
 
-describe("luvus_result renderer", () => {
+describe("pmux_result renderer", () => {
   function createTheme() {
     return {
       fg(_color: string, text: string) {
@@ -3077,20 +2859,20 @@ describe("luvus_result renderer", () => {
     };
   }
 
-  it("shows the luvus_resume session line in the expanded result", () => {
+  it("shows the pmux_resume session line in the expanded result", () => {
     const { api, registeredMessageRenderers } = createMockExtensionApi();
     (subagentsModule as any).default(api);
 
-    const rendererEntry = registeredMessageRenderers.find((entry) => entry.name === "luvus_result");
-    assert.ok(rendererEntry, "expected luvus_result renderer to be registered");
+    const rendererEntry = registeredMessageRenderers.find((entry) => entry.name === "pmux_result");
+    assert.ok(rendererEntry, "expected pmux_result renderer to be registered");
 
     const sessionFile = "/tmp/child.jsonl";
     const rendered = rendererEntry.renderer(
       {
-        customType: "luvus_result",
+        customType: "pmux_result",
         content:
           `Sub-agent "Worker" completed (0m 5s).\n\nAll checks pass.\n\n` +
-          `Session: ${sessionFile}\nResume: luvus_resume ${sessionFile}`,
+          `Session: ${sessionFile}\nResume: pmux_resume ${sessionFile}`,
         details: {
           name: "Worker",
           task: "run the checks",
@@ -3105,7 +2887,7 @@ describe("luvus_result renderer", () => {
     );
     const output = rendered.render(120).join("\n");
 
-    assert.match(output, /Resume: {2}luvus_resume \/tmp\/child\.jsonl/);
+    assert.match(output, /Resume: {2}pmux_resume \/tmp\/child\.jsonl/);
     assert.doesNotMatch(output, /pi --session/);
   });
 });
@@ -3129,8 +2911,8 @@ describe("subagent status renderer", () => {
     const { api, registeredMessageRenderers } = createMockExtensionApi();
     (subagentsModule as any).default(api);
 
-    const rendererEntry = registeredMessageRenderers.find((entry) => entry.name === "luvus_status");
-    assert.ok(rendererEntry, "expected luvus_status renderer to be registered");
+    const rendererEntry = registeredMessageRenderers.find((entry) => entry.name === "pmux_status");
+    assert.ok(rendererEntry, "expected pmux_status renderer to be registered");
 
     const visibleLines = [
       "Worker running 5m, active (bash 2m).",
@@ -3140,7 +2922,7 @@ describe("subagent status renderer", () => {
     ];
     const rendered = rendererEntry.renderer(
       {
-        customType: "luvus_status",
+        customType: "pmux_status",
         content: "Subagent status:\n• Worker running 5m, active (bash 2m).",
         details: {
           lines: visibleLines,
@@ -3163,12 +2945,12 @@ describe("subagent status renderer", () => {
     const { api, registeredMessageRenderers } = createMockExtensionApi();
     (subagentsModule as any).default(api);
 
-    const rendererEntry = registeredMessageRenderers.find((entry) => entry.name === "luvus_status");
-    assert.ok(rendererEntry, "expected luvus_status renderer to be registered");
+    const rendererEntry = registeredMessageRenderers.find((entry) => entry.name === "pmux_status");
+    assert.ok(rendererEntry, "expected pmux_status renderer to be registered");
 
     const rendered = rendererEntry.renderer(
       {
-        customType: "luvus_status",
+        customType: "pmux_status",
         content: "Subagent status:\n• Worker running 5m, active (bash 2m).",
         details: { lines: ["Worker running 5m, active (bash 2m)."], overflow: 0 },
       },
@@ -3193,28 +2975,28 @@ describe("subagent startup delay", () => {
     assert.ok(testApi, "expected subagents test helpers to be exported");
     assert.equal(typeof testApi.getShellReadyDelayMs, "function");
 
-    const original = process.env.PI_LUVUS_SHELL_READY_DELAY_MS;
-    delete process.env.PI_LUVUS_SHELL_READY_DELAY_MS;
+    const original = process.env.PI_PMUX_SHELL_READY_DELAY_MS;
+    delete process.env.PI_PMUX_SHELL_READY_DELAY_MS;
     try {
       assert.equal(testApi.getShellReadyDelayMs(), 500);
     } finally {
-      if (original == null) delete process.env.PI_LUVUS_SHELL_READY_DELAY_MS;
-      else process.env.PI_LUVUS_SHELL_READY_DELAY_MS = original;
+      if (original == null) delete process.env.PI_PMUX_SHELL_READY_DELAY_MS;
+      else process.env.PI_PMUX_SHELL_READY_DELAY_MS = original;
     }
   });
 
-  it("uses PI_LUVUS_SHELL_READY_DELAY_MS when it is set", () => {
+  it("uses PI_PMUX_SHELL_READY_DELAY_MS when it is set", () => {
     const testApi = (subagentsModule as any).__test__;
     assert.ok(testApi, "expected subagents test helpers to be exported");
     assert.equal(typeof testApi.getShellReadyDelayMs, "function");
 
-    const original = process.env.PI_LUVUS_SHELL_READY_DELAY_MS;
-    process.env.PI_LUVUS_SHELL_READY_DELAY_MS = "2500";
+    const original = process.env.PI_PMUX_SHELL_READY_DELAY_MS;
+    process.env.PI_PMUX_SHELL_READY_DELAY_MS = "2500";
     try {
       assert.equal(testApi.getShellReadyDelayMs(), 2500);
     } finally {
-      if (original == null) delete process.env.PI_LUVUS_SHELL_READY_DELAY_MS;
-      else process.env.PI_LUVUS_SHELL_READY_DELAY_MS = original;
+      if (original == null) delete process.env.PI_PMUX_SHELL_READY_DELAY_MS;
+      else process.env.PI_PMUX_SHELL_READY_DELAY_MS = original;
     }
   });
 });
@@ -3311,621 +3093,7 @@ describe("subagents widget rendering", () => {
   });
 });
 
-describe("luvus.ts", () => {
-  it("still exports the pane helpers the extension uses", () => {
-    assert.equal(typeof runInPane, "function");
-    assert.equal(typeof readExitSidecar, "function");
-  });
-});
-
-describe("luvus backend", () => {
-  // In-process Luvus seam: echoes the same canned JSON envelopes per command
-  // as the old CLI stub, driven by $LUVUS_STUB_MODE, and logs each invocation
-  // to $LUVUS_STUB_LOG so tests can assert the exact argv.
-  function installLuvusStub(): void {
-    __setLuvusExecForTests__((args) => {
-      const log = process.env.LUVUS_STUB_LOG;
-      if (log) appendFileSync(log, args.join(" ") + "\n");
-      const mode = process.env.LUVUS_STUB_MODE;
-      if (mode === "error") return '{"error":{"code":"boom","message":"stub exploded"}}';
-      if (mode === "no-pane") return '{"id":"1","result":{"revision":1,"type":"pane"}}';
-      if (mode === "not-ready") {
-        return '{"error":{"code":"agent_not_ready","message":"agent_not_ready: target is showing a blocked prompt"}}';
-      }
-      switch (`${args[0]} ${args[1]}`) {
-        case "pane split":
-          return '{"id":"1","result":{"pane":"24","revision":329037,"tab":"1","type":"pane","workspace":"2"}}';
-        case "pane read": {
-          // LUVUS_STUB_SCREEN lets a test put a specific text on the pane.
-          const screen = process.env.LUVUS_STUB_SCREEN ?? "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8";
-          return JSON.stringify({
-            id: "1",
-            result: { revision: 1, text: screen, type: "pane_read" },
-          });
-        }
-        case "agent prompt":
-          return '{"id":"1","result":{"pane":"24","submitted":true,"evidence":"queued","status":"idle","type":"agent_prompt"}}';
-        case "agent list": {
-          const agents = process.env.LUVUS_STUB_AGENTS
-            ? JSON.parse(process.env.LUVUS_STUB_AGENTS)
-            : mode === "no-caller"
-              ? [{ pane: "99", tab: "2", type: "agent" }]
-              : [{ pane: "21", tab: "1", focused: true, type: "agent" }];
-          return JSON.stringify({ id: "1", result: { agents, type: "agent_list" } });
-        }
-        case "pane move":
-          return mode === "move-error"
-            ? '{"error":{"code":"boom","message":"stub move exploded"}}'
-            : '{"id":"1","result":{"pane":"24","revision":2,"tab":"3","type":"pane_move","workspace":"1"}}';
-        case "tab focus":
-          return mode === "focus-error"
-            ? '{"error":{"code":"boom","message":"stub focus exploded"}}'
-            : '{"id":"1","result":{"revision":3,"type":"ok"}}';
-        case "pane close":
-          return mode === "close-error"
-            ? '{"error":{"code":"pane_not_found","message":"pane not found: already closed"}}'
-            : '{"id":"1","result":{"revision":1,"type":"ok"}}';
-        default:
-          return '{"id":"1","result":{"revision":1,"type":"ok"}}';
-      }
-    });
-  }
-
-  /**
-   * Set env vars for the duration of fn, restoring afterwards. Undefined
-   * deletes the variable — tests must pass all three LUVUS_* keys explicitly
-   * because the runner itself may run inside Luvus with them ambient.
-   */
-  function withLuvusEnv(env: Record<string, string | undefined>, fn: () => unknown): unknown {
-    const saved = new Map(Object.keys(env).map((k) => [k, process.env[k]]));
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    try {
-      return fn();
-    } finally {
-      for (const [key, value] of saved) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
-  }
-
-  const allLuvusKeys = (over: Record<string, string | undefined>) => ({
-    LUVUS_ENV: undefined,
-    LUVUS_BIN_PATH: undefined,
-    LUVUS_PANE_ID: undefined,
-    ...over,
-  });
-
-  let stubDir: string;
-  let stubPath: string;
-
-  /** A UHP child whose stdout ends only when killed (a healthy, silent stream). */
-  function silentUhpChild(): { stdout: AsyncIterable<Buffer>; kill(): void } {
-    let wake: (() => void) | null = null;
-    let closed = false;
-    const stdout: AsyncIterable<Buffer> = {
-      [Symbol.asyncIterator]() {
-        return {
-          async next(): Promise<IteratorResult<Buffer>> {
-            while (!closed) {
-              await new Promise<void>((resolve) => {
-                wake = resolve;
-              });
-            }
-            return { value: undefined, done: true };
-          },
-        };
-      },
-    };
-    return {
-      stdout,
-      kill() {
-        closed = true;
-        const w = wake;
-        wake = null;
-        w?.();
-      },
-    };
-  }
-
-  before(() => {
-    stubDir = mkdtempSync(join(tmpdir(), "luvus-stub-"));
-    stubPath = "in-process";
-    installLuvusStub();
-    // The module-level UHP event stream is faked in tests: no child process
-    // spawns, and `agent list` answers an empty snapshot and exits.
-    __setUhpSpawnForTests__((args) => {
-      if (args[0] === "agent") {
-        return {
-          stdout: (async function* () {
-            yield Buffer.from(`${JSON.stringify({ result: { agents: [] } })}\n`);
-          })(),
-          kill() {},
-        };
-      }
-      return silentUhpChild();
-    });
-  });
-
-  after(() => {
-    __setLuvusExecForTests__(null);
-    __setUhpSpawnForTests__(null);
-    rmSync(stubDir, { recursive: true, force: true });
-  });
-
-  it("is available only when all three LUVUS_* env vars are set", () => {
-    assert.equal(
-      withLuvusEnv(
-        allLuvusKeys({ LUVUS_ENV: "1", LUVUS_BIN_PATH: stubPath, LUVUS_PANE_ID: "21" }),
-        isMuxAvailable,
-      ),
-      true,
-    );
-    assert.equal(
-      withLuvusEnv(allLuvusKeys({ LUVUS_BIN_PATH: stubPath, LUVUS_PANE_ID: "21" }), isMuxAvailable),
-      false,
-    );
-    assert.equal(
-      withLuvusEnv(allLuvusKeys({ LUVUS_ENV: "1", LUVUS_BIN_PATH: stubPath }), isMuxAvailable),
-      false,
-    );
-    assert.equal(
-      withLuvusEnv(allLuvusKeys({ LUVUS_ENV: "1", LUVUS_PANE_ID: "21" }), isMuxAvailable),
-      false,
-    );
-    assert.equal(withLuvusEnv(allLuvusKeys({}), isMuxAvailable), false);
-  });
-
-  it("createSurface splits the caller pane unfocused and reads the pane id from the 1.1 fixture", () => {
-    const log = join(stubDir, "calls.log");
-    const surface = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => createSurface("Scout"),
-    );
-    assert.equal(surface, "24");
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), [
-      "pane split 21 --right --no-focus",
-      "pane name scout --pane 24",
-    ]);
-  });
-
-  it("createSurface slugifies free-text names into valid Luvus pane names", () => {
-    const log = join(stubDir, "calls-slug.log");
-    withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => createSurface("Review: API diff!"),
-    );
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.equal(calls[1], "pane name review-api-diff --pane 24");
-  });
-
-  it("createSurface throws with the raw JSON when the split result has no pane id", () => {
-    assert.throws(
-      () =>
-        withLuvusEnv(
-          allLuvusKeys({
-            LUVUS_ENV: "1",
-            LUVUS_BIN_PATH: stubPath,
-            LUVUS_PANE_ID: "21",
-            LUVUS_STUB_MODE: "no-pane",
-          }),
-          () => createSurface("Scout"),
-        ),
-      /no pane id/,
-    );
-  });
-
-  it("createSurface tab placement looks up the caller tab, moves the pane, and restores focus", () => {
-    const log = join(stubDir, "calls-tab.log");
-    const surface = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => createSurface("Scout", "tab"),
-    );
-    assert.equal(surface, "24");
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), [
-      "agent list",
-      "pane split 21 --right --no-focus",
-      "pane name scout --pane 24",
-      "pane move 24 --new-tab",
-      "tab focus 1",
-    ]);
-  });
-
-  it("createSurface tab placement keeps pane placement when the caller tab is unknown", () => {
-    const log = join(stubDir, "calls-nocaller.log");
-    const surface = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-        LUVUS_STUB_MODE: "no-caller",
-      }),
-      () => createSurface("Scout", "tab"),
-    );
-    assert.equal(surface, "24");
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.ok(calls.includes("agent list"));
-    assert.ok(!calls.some((call) => call.startsWith("pane move")));
-    assert.ok(!calls.some((call) => call.startsWith("tab focus")));
-  });
-
-  it("createSurface tab placement keeps the pane when the move fails and skips focus restore", () => {
-    const log = join(stubDir, "calls-moveerr.log");
-    const surface = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-        LUVUS_STUB_MODE: "move-error",
-      }),
-      () => createSurface("Scout", "tab"),
-    );
-    assert.equal(surface, "24");
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.ok(calls.includes("pane move 24 --new-tab"));
-    assert.ok(!calls.some((call) => call.startsWith("tab focus")));
-  });
-
-  it("createSurface tab placement still succeeds when focus restore fails", () => {
-    const log = join(stubDir, "calls-focuserr.log");
-    const surface = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-        LUVUS_STUB_MODE: "focus-error",
-      }),
-      () => createSurface("Scout", "tab"),
-    );
-    assert.equal(surface, "24");
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.ok(calls.includes("pane move 24 --new-tab"));
-    assert.ok(calls.includes("tab focus 1"));
-  });
-
-  it("createSurface right placement never calls agent list", () => {
-    const log = join(stubDir, "calls-plainpane.log");
-    withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => createSurface("Scout", "right"),
-    );
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.deepEqual(calls, ["pane split 21 --right --no-focus", "pane name scout --pane 24"]);
-  });
-
-  it("createSurface down placement stacks the pane below the caller", () => {
-    const log = join(stubDir, "calls-down.log");
-    withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => createSurface("Scout", "down"),
-    );
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.deepEqual(calls, ["pane split 21 --down --no-focus", "pane name scout --pane 24"]);
-  });
-
-  it("surfaces the Luvus .error message as an Error", () => {
-    assert.throws(
-      () =>
-        withLuvusEnv(
-          allLuvusKeys({
-            LUVUS_ENV: "1",
-            LUVUS_BIN_PATH: stubPath,
-            LUVUS_PANE_ID: "21",
-            LUVUS_STUB_MODE: "error",
-          }),
-          () => closeSurface("24"),
-        ),
-      /stub exploded/,
-    );
-  });
-
-  it("readScreen tails the screen to n lines", () => {
-    const screen = withLuvusEnv(
-      allLuvusKeys({ LUVUS_ENV: "1", LUVUS_BIN_PATH: stubPath, LUVUS_PANE_ID: "21" }),
-      () => readScreen("24", 3),
-    );
-    assert.equal(screen, "l6\nl7\nl8");
-  });
-
-  it("sendEscape sends the escape key through agent keys", () => {
-    const log = join(stubDir, "calls-esc.log");
-    withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => sendEscape("24"),
-    );
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["agent keys 24 esc"]);
-  });
-
-  it("runInPane sends one command line to the pane", () => {
-    const log = join(stubDir, "calls-run.log");
-    withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => runInPane("24", 'node "/ext/cli.ts" "run" "/spec.json"'),
-    );
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), [
-      'pane run 24 node "/ext/cli.ts" "run" "/spec.json"',
-    ]);
-  });
-
-  it("readExitSidecar returns the payload, or null for a missing or malformed sidecar", async () => {
-    await withTempDir(async (dir) => {
-      const sessionFile = join(dir, "child.jsonl");
-      assert.equal(readExitSidecar(sessionFile), null);
-      writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
-      assert.deepEqual(readExitSidecar(sessionFile), { type: "done" });
-      writeFileSync(`${sessionFile}.exit`, "{ nope");
-      assert.equal(readExitSidecar(sessionFile), null);
-    });
-  });
-
-  it("agentPrompt sends `agent prompt` without --wait and unwraps the queued answer", () => {
-    const log = join(stubDir, "calls-prompt.log");
-    const result = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => agentPrompt("24", "hello"),
-    ) as { submitted?: boolean; evidence?: string; pane?: string };
-    assert.equal(result.submitted, true);
-    assert.equal(result.evidence, "queued");
-    assert.equal(result.pane, "24");
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.deepEqual(calls, ["agent prompt 24 hello"]);
-    assert.equal(calls.join("\n").includes("--wait"), false);
-  });
-
-  it("agentPrompt surfaces agent_not_ready without retrying", () => {
-    const log = join(stubDir, "calls-prompt-notready.log");
-    assert.throws(
-      () =>
-        withLuvusEnv(
-          allLuvusKeys({
-            LUVUS_ENV: "1",
-            LUVUS_BIN_PATH: stubPath,
-            LUVUS_PANE_ID: "21",
-            LUVUS_STUB_MODE: "not-ready",
-            LUVUS_STUB_LOG: log,
-          }),
-          () => agentPrompt("24", "hi"),
-        ),
-      /agent_not_ready/,
-    );
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["agent prompt 24 hi"]);
-  });
-
-  // Adopts the close-error stub mode: `pane close` fails as if the user
-  // closed the pane by hand. Unlike withLuvusEnv above, this helper holds
-  // the env across awaits so watchSubagent still sees the stub after its
-  // first tick.
-  async function withLuvusEnvAsync(
-    env: Record<string, string | undefined>,
-    fn: () => Promise<any>,
-  ): Promise<any> {
-    const saved = new Map(Object.keys(env).map((k) => [k, process.env[k]]));
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    try {
-      return await fn();
-    } finally {
-      for (const [key, value] of saved) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
-  }
-
-  describe("pollForExit screen handling", () => {
-    /** Run pollForExit until it ends or the deadline aborts it; report the
-     * last argv logged and whether a result was produced. */
-    async function pollUntil(
-      env: Record<string, string | undefined>,
-      options: Partial<Parameters<typeof pollForExit>[2]> & {
-        deadlineMs: number;
-        interval?: number;
-      },
-    ): Promise<{
-      result: Awaited<ReturnType<typeof pollForExit>> | null;
-      aborted: boolean;
-      calls: string[];
-    }> {
-      const log = join(stubDir, `calls-${Math.random().toString(16).slice(2)}.log`);
-      return withLuvusEnvAsync(allLuvusKeys({ ...env, LUVUS_STUB_LOG: log }), async () => {
-        // Self-contained seam: don't depend on the enclosing describe's before hook.
-        installLuvusStub();
-        const controller = new AbortController();
-        const deadline = setTimeout(() => controller.abort(), options.deadlineMs);
-        let result: Awaited<ReturnType<typeof pollForExit>> | null = null;
-        let aborted = false;
-        try {
-          result = await pollForExit("24", controller.signal, {
-            interval: options.interval ?? 10,
-            ...options,
-          });
-        } catch (error) {
-          if (!/Aborted/.test(String(error)))
-            console.error("POLLFOREXIT-RAW-ERROR", JSON.stringify(String(error?.stack ?? error)));
-          aborted = /Aborted/.test(String(error));
-        } finally {
-          clearTimeout(deadline);
-          installLuvusStub();
-        }
-        const calls = existsSync(log)
-          ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
-          : [];
-        return { result, aborted, calls };
-      });
-    }
-
-    it("accepts a matched screen sentinel when no live agent hosts the pane", async () => {
-      const outcome = await pollUntil(
-        {
-          LUVUS_ENV: "1",
-          LUVUS_BIN_PATH: stubPath,
-          LUVUS_PANE_ID: "21",
-          LUVUS_STUB_SCREEN: "done __SUBAGENT_DONE_3__",
-          // No entry for pane 24 at all.
-          LUVUS_STUB_AGENTS: "[]",
-        },
-        { deadlineMs: 1000 },
-      );
-      assert.equal(outcome.aborted, false);
-      assert.deepEqual(outcome.result, { reason: "sentinel", exitCode: 3 });
-      assert.ok(outcome.calls.includes("pane read 24"));
-      assert.ok(outcome.calls.includes("agent list"));
-    });
-
-    it("accepts a screen sentinel when the pane only holds a terminal done lease", async () => {
-      const outcome = await pollUntil(
-        {
-          LUVUS_ENV: "1",
-          LUVUS_BIN_PATH: stubPath,
-          LUVUS_PANE_ID: "21",
-          LUVUS_STUB_SCREEN: "__SUBAGENT_DONE_0__\n",
-          LUVUS_STUB_AGENTS: '[{"pane":"24","status":"done","authority":"integration_report"}]',
-        },
-        { deadlineMs: 1000 },
-      );
-      assert.deepEqual(outcome.result, { reason: "sentinel", exitCode: 0 });
-    });
-
-    for (const [label, agents] of [
-      [
-        "a working process-tree agent",
-        '[{"pane":"24","status":"working","authority":"process_tree"}]',
-      ],
-      ["an idle process-tree agent", '[{"pane":"24","status":"idle","authority":"process_tree"}]'],
-      [
-        "an agent with a non-terminal lease",
-        '[{"pane":"24","status":"working","authority":"integration_report"}]',
-      ],
-    ] as Array<[string, string]>) {
-      it(`keeps polling when the sentinel text sits under ${label}`, async () => {
-        const outcome = await pollUntil(
-          {
-            LUVUS_ENV: "1",
-            LUVUS_BIN_PATH: stubPath,
-            LUVUS_PANE_ID: "21",
-            LUVUS_STUB_SCREEN: "done __SUBAGENT_DONE_3__",
-            LUVUS_STUB_AGENTS: agents,
-          },
-          { deadlineMs: 160, interval: 30 },
-        );
-        assert.equal(outcome.result, null);
-        assert.equal(outcome.aborted, true);
-        // Every tick re-scanned and re-confirmed instead of claiming completion.
-        assert.ok(outcome.calls.filter((call) => call === "pane read 24").length >= 2);
-        assert.ok(outcome.calls.filter((call) => call === "agent list").length >= 2);
-      });
-    }
-
-    it("skips the whole screen scan while maySkipScreenScan returns true", async () => {
-      const outcome = await pollUntil(
-        {
-          LUVUS_ENV: "1",
-          LUVUS_BIN_PATH: stubPath,
-          LUVUS_PANE_ID: "21",
-          LUVUS_STUB_SCREEN: "__SUBAGENT_DONE_0__\n",
-        },
-        { deadlineMs: 120, interval: 30, maySkipScreenScan: () => true },
-      );
-      assert.equal(outcome.result, null);
-      assert.equal(outcome.aborted, true);
-      assert.deepEqual(outcome.calls, []);
-    });
-
-    it("sentinelLooksLive classifies agent-list rows without touching the CLI", () => {
-      assert.equal(
-        sentinelLooksLive(
-          { agents: [{ pane: "24", status: "working", authority: "process_tree" }] },
-          "24",
-        ),
-        true,
-      );
-      assert.equal(
-        sentinelLooksLive(
-          { agents: [{ pane: "24", status: "idle", authority: "process_tree" }] },
-          "24",
-        ),
-        true,
-      );
-      assert.equal(
-        sentinelLooksLive(
-          { agents: [{ pane: "24", status: "done", authority: "integration_report" }] },
-          "24",
-        ),
-        false,
-      );
-      assert.equal(sentinelLooksLive({ agents: [{ pane: "24", status: "blocked" }] }, "24"), false);
-      assert.equal(sentinelLooksLive({ agents: [{ pane: "99", status: "done" }] }, "24"), false);
-      assert.equal(sentinelLooksLive({ agents: [] }, "24"), false);
-      assert.equal(sentinelLooksLive(null, "24"), false);
-    });
-  });
-});
-
 describe("subagent child status ownership", () => {
-  beforeEach(() => {
-    // The status reporter's registration guard is module-level; reset it so
-    // each test below registers through a fresh runtime.
-    __resetRegistrationForTests__();
-  });
-
-  /** Record every Luvus CLI call the extension makes through the test seam. */
-  function recordLuvusCalls(): string[][] {
-    const calls: string[][] = [];
-    __setLuvusExecForTests__((args) => {
-      calls.push(args);
-      return "{}";
-    });
-    return calls;
-  }
-
   function makeRecordingPi() {
     const handlers = new Map<string, Array<(data?: unknown, ctx?: unknown) => void>>();
     const registeredTools: Array<any> = [];
@@ -3967,98 +3135,34 @@ describe("subagent child status ownership", () => {
     },
   };
 
-  /** Set the Luvus env plus an optional child marker; returns a restore function. */
-  function withStatusEnv(childSession: string | null): () => void {
-    const keys = ["LUVUS_ENV", "LUVUS_BIN_PATH", "LUVUS_PANE_ID", "PI_LUVUS_SESSION"];
-    const saved = new Map(keys.map((k) => [k, process.env[k]]));
-    process.env.LUVUS_ENV = "1";
-    process.env.LUVUS_BIN_PATH = "/bin/luvus";
-    process.env.LUVUS_PANE_ID = "7";
-    if (childSession === null) delete process.env.PI_LUVUS_SESSION;
-    else process.env.PI_LUVUS_SESSION = childSession;
-    return () => {
-      for (const [k, v] of saved) restoreEnvVar(k, v);
-      __setLuvusExecForTests__(null);
-    };
-  }
-
-  /** Status lease calls only: agent report / agent release. */
-  function statusCalls(calls: string[][]): string[][] {
-    return calls.filter((a) => a[0] === "agent" && (a[1] === "report" || a[1] === "release"));
-  }
-
-  it("isSubagentChild detects a child by PI_LUVUS_SESSION", () => {
+  it("isSubagentChild detects a child by PI_PMUX_SESSION", () => {
     assert.equal(
-      subagentsModule.isSubagentChild({ PI_LUVUS_SESSION: "/tmp/s.jsonl" } as NodeJS.ProcessEnv),
+      subagentsModule.isSubagentChild({ PI_PMUX_SESSION: "/tmp/s.jsonl" } as NodeJS.ProcessEnv),
       true,
     );
     assert.equal(subagentsModule.isSubagentChild({} as NodeJS.ProcessEnv), false);
   });
 
-  it("skips the status reporter in a subagent child", async () => {
-    const restore = withStatusEnv("/tmp/sub-session.jsonl");
-    try {
-      const calls = recordLuvusCalls();
-      const target = makeRecordingPi();
-      subagentsModule.default(target.pi);
-      target.fire("session_start", undefined, CTX);
-      await new Promise((resolve) => setImmediate(resolve));
-      // An aborted turn keeps the turn notifier silent; only the status
-      // reporter could react to agent_end here.
-      target.fire("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, CTX);
-      await new Promise((resolve) => setImmediate(resolve));
-      target.fire("session_shutdown", undefined, CTX);
-      assert.deepEqual(statusCalls(calls), []);
-    } finally {
-      restore();
-    }
-  });
-
-  it("registers the status reporter in a plain pane", async () => {
-    const restore = withStatusEnv(null);
-    try {
-      const calls = recordLuvusCalls();
-      const target = makeRecordingPi();
-      subagentsModule.default(target.pi);
-      target.fire("session_start", undefined, CTX);
-      await new Promise((resolve) => setImmediate(resolve));
-      target.fire("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, CTX);
-      await new Promise((resolve) => setImmediate(resolve));
-      target.fire("session_shutdown", undefined, CTX);
-      const seen = statusCalls(calls);
-      assert.equal(
-        seen.filter((a) => a[1] === "report" && a[a.indexOf("--status") + 1] === "idle").length >=
-          1,
-        true,
-      );
-      assert.equal(seen.filter((a) => a[1] === "release").length, 1);
-    } finally {
-      restore();
-    }
-  });
-
   it("spawns through the current supervisor after a session restart", async () => {
     await withTempDir(async (dir) => {
       const calls: string[][] = [];
-      __setLuvusExecForTests__((args) => {
+      __setTmuxExecForTests__((args) => {
         calls.push(args);
-        if (args[0] === "pane" && args[1] === "split") {
-          return '{"id":"1","result":{"pane":"24","revision":1,"type":"pane","tab":"1","workspace":"2"}}';
+        if (args[0] === "split-window") {
+          return "%24";
         }
-        return '{"id":"1","result":{"revision":1,"type":"ok"}}';
+        return "";
       });
       const saved: Array<[string, string | undefined]> = [
         ["PI_CODING_AGENT_DIR", process.env.PI_CODING_AGENT_DIR],
-        ["PI_LUVUS_SHELL_READY_DELAY_MS", process.env.PI_LUVUS_SHELL_READY_DELAY_MS],
-        ["LUVUS_ENV", process.env.LUVUS_ENV],
-        ["LUVUS_BIN_PATH", process.env.LUVUS_BIN_PATH],
-        ["LUVUS_PANE_ID", process.env.LUVUS_PANE_ID],
+        ["PI_PMUX_SHELL_READY_DELAY_MS", process.env.PI_PMUX_SHELL_READY_DELAY_MS],
+        ["TMUX", process.env.TMUX],
+        ["TMUX_PANE", process.env.TMUX_PANE],
       ];
       process.env.PI_CODING_AGENT_DIR = join(dir, "agent");
-      process.env.PI_LUVUS_SHELL_READY_DELAY_MS = "0";
-      process.env.LUVUS_ENV = "1";
-      process.env.LUVUS_BIN_PATH = "in-process";
-      process.env.LUVUS_PANE_ID = "21";
+      process.env.PI_PMUX_SHELL_READY_DELAY_MS = "0";
+      process.env.TMUX = "/tmp/tmux-0/default";
+      process.env.TMUX_PANE = "%21";
       const testApi = (subagentsModule as any).__test__;
       const target = makeRecordingPi();
       try {
@@ -4068,8 +3172,8 @@ describe("subagent child status ownership", () => {
         // ...and the next session installs its replacement.
         target.fire("session_start", undefined, CTX);
 
-        const spawnTool = target.registeredTools.find((tool: any) => tool.name === "luvus_spawn");
-        assert.ok(spawnTool, "expected luvus_spawn tool to be registered");
+        const spawnTool = target.registeredTools.find((tool: any) => tool.name === "pmux_spawn");
+        assert.ok(spawnTool, "expected pmux_spawn tool to be registered");
 
         const ctx = {
           cwd: dir,
@@ -4109,7 +3213,7 @@ describe("subagent child status ownership", () => {
         assert.equal(
           target.sentMessages.some(
             (sent: any) =>
-              sent.message?.customType === "luvus_result" &&
+              sent.message?.customType === "pmux_result" &&
               /Subagent cancelled\./.test(sent.message?.content ?? ""),
           ),
           false,
@@ -4118,7 +3222,7 @@ describe("subagent child status ownership", () => {
         // Stop the replacement supervisor's intervals, watcher and stream.
         target.fire("session_shutdown", undefined, CTX);
         for (const [name, value] of saved) restoreEnvVar(name, value);
-        __setLuvusExecForTests__(null);
+        __setTmuxExecForTests__(null);
       }
     });
   });

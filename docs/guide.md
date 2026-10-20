@@ -1,90 +1,75 @@
-# pi-luvus guide
+# pmux guide
 
-This guide holds the full reference for pi-luvus. For an overview and install steps, read the [README](../README.md).
+This guide holds the full reference for pmux. For an overview and install steps, read the [README](../README.md).
 
 ## Environment
 
-Luvus is required. Run pi inside a Luvus pane. Outside Luvus the extension spawns nothing. It checks `LUVUS_ENV`, `LUVUS_BIN_PATH`, and `LUVUS_PANE_ID`. Luvus sets these variables for every managed pane.
+tmux is required. Run pi inside a tmux pane. Outside tmux the extension spawns nothing. It checks `TMUX` and `TMUX_PANE`, which tmux sets for every pane, and returns an error that names tmux when either is missing. The `LUVUS_*` variables have no effect.
 
-If shell startup is slow and the prompt drops subagent commands, set `PI_LUVUS_SHELL_READY_DELAY_MS` to a higher value (default `500`):
+If shell startup is slow and the prompt drops subagent commands, set `PI_PMUX_SHELL_READY_DELAY_MS` to a higher value (default `500`):
 
 ```bash
-export PI_LUVUS_SHELL_READY_DELAY_MS=2500
+export PI_PMUX_SHELL_READY_DELAY_MS=2500
 ```
 
-Child panes open without stealing keyboard focus (`pane split --no-focus`). Launch commands target child panes by explicit ID. Focus and command delivery stay independent. The `interactive` option controls parent notifications. It does not control terminal focus.
+Child panes open without stealing keyboard focus: a `right` or `down` child splits the caller's pane with tmux's detached split, and a `tab` child opens a new window in the caller's session and then restores focus to the caller's window. Launch commands target child panes by explicit pane id. Focus and command delivery stay independent. The `interactive` option controls parent notifications. It does not control terminal focus.
 
 ## Pane titles
 
-Each child pane carries an OSC 2 title of `<name> — <task>`. `<task>` is the first non-empty line of the task, truncated to 48 characters. With no task text, the title shows only the name. The Luvus AGENTS sidebar shows this live title on the second line of the row. Parallel child panes stay easy to tell apart. The title is additive: `luvus pane name` still sets the pane alias, and `=name` references keep working.
+Each child pane is named at creation with `tmux select-pane -T <name>`, and the run wrapper writes an OSC 2 title of `<name> — <task>` shortly after the child boots. `<task>` is the first non-empty line of the task, truncated to 48 characters. With no task text, the title shows only the name. tmux shows the pane title on the pane border when `pane-border-status` is on. Parallel child panes stay easy to tell apart.
 
 An unnamed pi pane that is not a subagent also gets a title from its first prompt. The extension sets the OSC title to `π - <prompt> - <cwd basename>`. `<prompt>` is the first non-empty line of the first user prompt, cut to 48 characters. Before the first prompt, pi's own title stays. The extension sets the title again on reload.
 
 A pi session with a name keeps pi's own title `π - <name> - <cwd>`. The extension does not set a title for it. A subagent pane keeps `<name> — <task>`.
 
-`luvus agent list` shows the row title as `agent_session_title`.
+`tmux list-panes -a -F '#{pane_id} #{pane_title}'` prints the pane ids and titles. The extension itself resolves a pane name to its id with that listing.
 
 ---
 
 ## Resume pi sessions
 
-Luvus binds the id of every pi session to its pane (see [Live pi status in Luvus](#live-pi-status-in-luvus)). When the pane closes, the session file stays on disk, and the session becomes a resumable session.
+The session file is the identity of a child. The pane is disposable; the session file stays on disk after the pane closes, and every follow-up runs from it.
 
-List the resumable sessions:
+A child that `pmux_spawn` started carries a launch record beside its session file, `<session>.launch.json`, which holds the role configuration resolved at spawn time. Continue the child with `pmux_resume` and the session file (see [Resuming a subagent](#resuming-a-subagent)). The resume restores the role configuration from the record and starts the child in a new tmux pane.
 
-```bash
-luvus agent sessions
-```
-
-The command reads the session files live and prints JSON. Each entry in `result.sessions[]` holds `agent` (`pi` for a pi session), `cwd`, and `session_id`.
-
-Reopen a session in a new pane:
-
-```bash
-luvus agent resume <session id>
-```
-
-The command prints only `{"type":"ok"}`. It does not print the new pane id. Find the new pane with:
-
-```bash
-luvus pane list --all-tabs
-```
-
-To find the pane that holds a session, run `luvus agent get <pane>` and read its `session` field.
-
-A session reopened this way starts without the role configuration of a `luvus_spawn` child. To resume a child and keep its role, use `luvus_resume` with the child session file (see [Resuming a subagent](#resuming-a-subagent)).
-
-The AGENTS history row shows only the project folder.
+A session with no launch record, for example one that the `pmux` skill launched, also resumes through `pmux_resume`, as a plain pi session named `Resume`; its tool result says that the role configuration was not restored. When the session file is missing, the tool returns an error and starts no pane.
 
 ---
 
-## Live pi status in Luvus
+## Live child status
 
-The extension reports the live state of every pi pane to Luvus, including panes that never spawn a subagent. Without it, Luvus shows each pi pane as `idle`, even during a turn. The report is a Luvus integration lease. A lease is a temporary status claim.
+A child that runs this extension as a subagent publishes its live state as a status file next to its session file: `<session file>.status`. A pi pane that is not a subagent child writes no status file.
 
-The extension reports `working` while a turn runs and `idle` while the session waits for input. A `working` report carries the name of the running tool as its message. Read the message with `luvus agent explain <pane>` as `authority.message`; `luvus agent list` has no message field. While the `bash` tool runs, for example, the status is `working` with message `bash`. When the tool ends and the turn continues, the status is `working` with no message.
+The file holds one JSON object with `status`, `at` (the ISO time of the write) and an optional `message`. The status is one of four values:
 
-The lease has a 300-second TTL. The extension renews the lease at half the TTL, also while pi is idle, so an idle pane keeps its status. Renewal stops after a terminal `done` or `blocked` report, or on shutdown. On shutdown with no terminal status, the extension releases the lease.
+- `working` — a turn is running
+- `idle` — the child finished a turn and waits for input
+- `done` — the child ended through `pmux_done` (with or without a handoff) or through auto-exit
+- `blocked` — the child asked for help with `caller_ping` (`message` holds the question), or its turn ended on a provider error (`message` holds the error text)
 
-`working` and `idle` reports, and renewals, run in the background. They do not block the pi event loop, and a failed or slow report does not delay a turn. A later transition reports again. Terminal reports (`done`, `blocked`) and the release stay synchronous. A subagent publishes a terminal report at its exit, and that report must land before the sidecar write and the shutdown.
+Each write replaces the whole file, so a reader never sees a partial object. A `done` or `blocked` write comes before the `.exit` sidecar write. A terminal write latches for the rest of the child process: later writes are skipped, and shutdown does not remove the file. A failed write never delays a turn, the sidecar write or shutdown.
 
-The extension also binds the pi session id to the pane at session start.
+A new run starts with no status. `pmux_spawn`, `pmux_resume`, and the skill's `start` and `resume` remove `<session file>.status` before the child starts, so the status of an earlier run is never read as the status of the new run.
+
+A child that exits without completing is marked `blocked`. When the run wrapper sees the child exit, and the session has neither an `.exit` sidecar nor a terminal status, the wrapper writes `blocked` with a message that gives the exit code. A clean completion or a ping is left as it is.
+
+The CLI's `wait` command polls the file (see [External orchestrators (Claude Code)](#external-orchestrators-claude-code)). The widget's own labels (see [In-progress status updates](#in-progress-status-updates)) are a different, coarser view; only these four statuses appear in the status file.
 
 ---
 
 ## Turn-end notification
 
-When a turn ends in a parent pi pane that does not have focus, the extension pushes one Luvus notification, so you do not have to visit every pane to learn that it waits for input. A normal turn sends `pi turn ended: <label>` at level `success`. A turn whose last assistant message failed sends `pi turn failed: <label>` at level `error`. An aborted turn sends nothing. The label is the session name, or the basename of the session cwd when the session has no name.
+When a turn ends in a parent pi pane that does not have focus, the extension pushes one notification through tmux (`tmux display-message`), which shows in the tmux status line, so you do not have to visit every pane to learn that it waits for input. A normal turn sends `pi turn ended: <label>`. A turn whose last assistant message failed sends `pi turn failed: <label>`. An aborted turn sends nothing. tmux shows the text; a notification carries no level. The label is the session name, or the basename of the session cwd when the session has no name.
 
-Subagent children send no notification: their completion already reaches the parent through the status lease and `luvus_done`. Outside Luvus the extension makes no notification call. The focus check and the push run in the background, and a failed or slow Luvus call results in no notification and never delays the next turn.
+Subagent children send no notification: their completion already reaches the parent through the exit sidecar and `pmux_done`. Outside tmux the extension makes no notification call. The focus check reads `#{pane_active}` for the pane, and both the check and the push run in the background; a failed or slow tmux call results in no notification and never delays the next turn.
 
-Set `notify.enabled` to `false` in `config.json` to turn these notifications off (see [Configuration](#configuration)). Do that if Luvus already cues your pi panes for status changes.
+Set `notify.enabled` to `false` in `config.json` to turn these notifications off (see [Configuration](#configuration)).
 
 ---
 
 ## Stream panes
 
-The `/stream` command moves live model output out of the main transcript and into follower panes. It works only when pi runs inside a Luvus pane; without one, the command warns and does nothing.
+The `/stream` command moves live model output out of the main transcript and into follower panes. It works only when pi runs inside a tmux pane; without one, the command warns and does nothing.
 
 The command takes one argument:
 
@@ -107,7 +92,7 @@ While a stream is attached, the transcript omits that stream's content: thinking
 
 ## External orchestrators (Claude Code)
 
-Install the `pi-luvus` skill first (see the [README](../README.md#external-orchestrators-claude-code)).
+Install the `pmux` skill first (see the [README](../README.md#external-orchestrators-claude-code)).
 
 The skill launcher `launch.ts` prepares everything outside the child pane. It finds the child extension, resolves the role, appends the parent-contact footer to the brief, splits and names a new pane, and writes the launch spec. A launch spec is a JSON file that starts one child. Run it with `node`:
 
@@ -125,25 +110,25 @@ The `--surface` flag places the new pane. `right` (default) splits the caller pa
 
 For the report cross-check, run `node <skill-dir>/launch.ts last-message --session <file>`. It prints the last assistant message of the session, or `(no assistant message)`.
 
-Completion signal: a child that finishes, pings, or errors publishes a terminal Luvus status before it exits. It reports through its `pi-luvus-status` lease. A lease is a temporary status claim. It reports `done`, or `blocked` with the ping question or error text as the message. Wait for the status. Do not poll the pane:
+Completion signal: a child that finishes, pings, or errors writes its status to `<session>.status` before it exits — `done`, or `blocked` with the ping question or error text as the message. Wait for the status with the CLI's `wait` command. Do not poll the pane:
 
 ```bash
-luvus wait agent-status <pane> --status done,blocked --timeout <seconds>
+node <skill-dir>/launch.ts wait --session <file> --status done,blocked --timeout <seconds>
 ```
 
-`wait` exits 0 when the status matches, and 2 on timeout or a missing pane. The terminal status survives the pi process for up to 300s (the lease TTL) while the pane stays open. This behavior is verified on luvus 0.14.3. `agent list` still lists the pane with `authority` / `state_source` `integration_report` and status `done` / `blocked`. `agent explain` shows `authority.source "pi-luvus-status"`. `wait --status done,blocked` returns in ~0.1s.
+The command polls the status file at a fixed interval; a missing file counts as no status yet. It exits 0 when the status matches, and prints the matched status line on stdout. It exits 2 when the timeout passes first, printing the last content it saw (or `{"status":null}` when there was none) on stdout and an error that names that status on stderr. It exits 1 on a usage error. `--status` is a comma-separated list of `working`, `idle`, `done` and `blocked`, and defaults to `done,blocked`; `--timeout` defaults to 600 seconds.
 
-The wait is sound only while the pane holds an authoritative integration lease (`authority` / `state_source` `integration_report`). On a pane with no live agent (an expired lease or a plain shell), the Luvus `command_fallback` can read `done` and the wait returns at once. Never treat an immediate return alone as completion. Check `luvus agent list` or `agent explain` for the authority of the pane first. The `.exit` sidecar stays the authoritative lifecycle record. The status is only a wake-up signal.
+Read the `<session>.exit` sidecar after every wait: it says whether the child finished (`done`), handed off (`handoff`), pinged (`ping`) or failed (`error`). The status file is the wake-up signal; the `.exit` sidecar stays the authoritative lifecycle record.
 
-Close-on-done: after pi exits, the run wrapper closes its own pane only when the session `.exit` sidecar holds `{"type":"done"}`. It first waits a grace period of 5000 ms by default. Set it per launch with `start --close-grace-ms <n>`. `0` closes at once. The delay lets a blocked `luvus wait` in the orchestrator observe the terminal lease before the pane goes away. A provider error, a `caller_ping`, or a crash leaves the pane open with the `__SUBAGENT_DONE_<n>__` sentinel visible, so you can inspect the failure. Close those panes yourself when done with them.
+Close-on-done: after pi exits, the run wrapper closes its own pane only when the session `.exit` sidecar holds `done` or `handoff`. It first waits a grace period of 5000 ms by default. Set it per launch with `start --close-grace-ms <n>`. `0` closes at once. The delay lets a blocked `wait` in the orchestrator observe the terminal status before the pane goes away. A provider error, a `caller_ping`, or a crash leaves the pane open with the `__SUBAGENT_DONE_<n>__` sentinel visible, so you can inspect the failure. Close those panes yourself when done with them.
 
 ---
 
 ## Async Subagent Flow
 
 ```
-1. Agent calls luvus_spawn()          → returns immediately ("started")
-2. Sub-agent runs in a Luvus pane  → widget shows live status
+1. Agent calls pmux_spawn()          → returns immediately ("started")
+2. Sub-agent runs in a tmux pane   → widget shows live status
 3. User keeps chatting             → main session fully interactive
 4. Sub-agent finishes              → result steered back as a normal completion/failure
 5. Main agent processes result     → continues with new context
@@ -159,7 +144,7 @@ Subagents run concurrently. Each result arrives independently when its child fin
 ╰─────────────────────────────────────────────────────────╯
 ```
 
-Completion messages render with a colored background and are expandable with `Ctrl+O` to show the full summary and session file path. The message names `luvus_resume` with the session file to continue the child.
+Completion messages render with a colored background and are expandable with `Ctrl+O` to show the full summary and session file path. The message names `pmux_resume` with the session file to continue the child.
 
 ### Decision model
 
@@ -181,7 +166,7 @@ flowchart LR
     E -.-> S
 ```
 
-The sections below hold the details. Child exit rules live under `auto-exit` and the completion nudge. Parent backstop rules live under the idle watchdog. External orchestrator rules live in `skills/pi-luvus/SKILL.md`. The normative spec is `openspec/specs/luvus-completion/spec.md`.
+The sections below hold the details. Child exit rules live under `auto-exit` and the completion nudge. Parent backstop rules live under the idle watchdog. External orchestrator rules live in `skills/pmux/SKILL.md`. The normative spec is `openspec/specs/luvus-completion/spec.md`.
 
 ### In-progress status updates
 
@@ -199,14 +184,14 @@ Interactive subagents stay silent. A long-running user-driven child (for example
 
 #### Configuration
 
-The extension configuration controls the status display. It lives at `~/.pi/agent/extensions/pi-luvus/config.json`. It lives under `$PI_CODING_AGENT_DIR` when that variable is set. This location survives `pi update`. Seed the file from the shipped example:
+The extension configuration controls the status display. It lives at `~/.pi/agent/extensions/pmux/config.json`, under `$PI_CODING_AGENT_DIR` when that variable is set. This location survives `pi update`. Seed the file from the shipped example:
 
 ```bash
-mkdir -p ~/.pi/agent/extensions/pi-luvus
-cp config.json.example ~/.pi/agent/extensions/pi-luvus/config.json
+mkdir -p ~/.pi/agent/extensions/pmux
+cp config.json.example ~/.pi/agent/extensions/pmux/config.json
 ```
 
-If an older install left a `config.json` at the package root, reads still honor it. The first `/luvus-surface` save migrates it to the new location.
+An older install may have left a `config.json` in the legacy `extensions/pi-luvus` directory or at the package root. Reads honor both when the new file is absent. The first `/pmux-surface` save writes the new location, seeded from the legacy files, which are left in place.
 
 ```json
 {
@@ -216,8 +201,9 @@ If an older install left a `config.json` at the package root, reads still honor 
   "notify": {
     "enabled": true
   },
-  "module": {
-    "autolink": true
+  "contextAlert": {
+    "enabled": false,
+    "threshold": 200000
   },
   "surface": "right"
 }
@@ -225,11 +211,11 @@ If an older install left a `config.json` at the package root, reads still honor 
 
 Git ignores `config.json`. Local overrides stay uncommitted.
 
-`"module.autolink"` controls the module link on start. It defaults to `true`. Set it to `false` to link the module yourself.
+`"contextAlert.enabled"` turns on the context alert. It defaults to `false`. When it is on, a child whose context usage reaches `"contextAlert.threshold"` gets a steer message that tells it to stop the task, commit the finished work or list the uncommitted changes, and end the session with `pmux_done` and a handoff. The threshold is a positive integer token count, or a percentage of the context window written as a string such as `"80%"`. It defaults to `200000` tokens.
 
-`"notify.enabled"` controls the turn-end notification (see [Turn-end notification](#turn-end-notification)). It defaults to `true`. Set it to `false` if Luvus already cues your pi panes for status changes.
+`"notify.enabled"` controls the turn-end notification (see [Turn-end notification](#turn-end-notification)). It defaults to `true`. Set it to `false` if you do not need a status-line notification when an unfocused pane ends a turn.
 
-`"surface"` controls where children open. `"right"` (default) splits your pane side by side. `"down"` stacks the child below. `"tab"` gives it its own workspace tab. The older value `"pane"` is still accepted and means `"right"`. Change it live with `/luvus-surface right|down|tab`. Override one spawn with the `surface` parameter on the `luvus_spawn` tool.
+`"surface"` controls where children open. `"right"` (default) splits your pane side by side. `"down"` stacks the child below. `"tab"` gives it its own workspace tab. The older value `"pane"` is still accepted and means `"right"`. Change it live with `/pmux-surface right|down|tab`. Override one spawn with the `surface` parameter on the `pmux_spawn` tool.
 
 ---
 
@@ -237,13 +223,13 @@ Git ignores `config.json`. Local overrides stay uncommitted.
 
 ```typescript
 // Named agent with defaults from agent definition
-luvus_spawn({ name: "Scout", agent: "scout", task: "Analyze the codebase..." });
+pmux_spawn({ name: "Scout", agent: "scout", task: "Analyze the codebase..." });
 
 // Force a full-context fork for this spawn
-luvus_spawn({ name: "Fork", fork: true, task: "Fix the bug where..." });
+pmux_spawn({ name: "Fork", fork: true, task: "Fix the bug where..." });
 
 // Custom working directory
-luvus_spawn({ name: "Designer", agent: "game-designer", cwd: "agents/game-designer", task: "..." });
+pmux_spawn({ name: "Designer", agent: "game-designer", cwd: "agents/game-designer", task: "..." });
 ```
 
 ### Parameters
@@ -266,12 +252,12 @@ luvus_spawn({ name: "Designer", agent: "game-designer", cwd: "agents/game-design
 
 ## Interrupting a running subagent
 
-Use `luvus_interrupt` to cancel the active turn of a running Pi-backed subagent:
+Use `pmux_interrupt` to cancel the active turn of a running Pi-backed subagent:
 
 ```typescript
-luvus_interrupt({ id: "abcd1234" });
+pmux_interrupt({ id: "abcd1234" });
 // or
-luvus_interrupt({ name: "Scout" });
+pmux_interrupt({ name: "Scout" });
 ```
 
 This sends Escape to the child pane and cancels the active model turn. The session stays alive. The pane, the session file, and the background polling all stay intact. After the interrupt, the widget moves the child back to `waiting` at once and ignores stale pre-interrupt snapshots. If the child starts work later, newer snapshots return it to `active`. Completion, failure, and `caller_ping` still flow normally. This is a turn-level interrupt. It does not terminate a session.
@@ -282,11 +268,11 @@ This sends Escape to the child pane and cancels the active model turn. The sessi
 
 ## Resuming a subagent
 
-`luvus_resume` starts a finished child in a new pane from its session file. It resumes pi children and Claude Code children. For a child that `luvus_spawn` started, the resume restores the role configuration from the spawn: the agent, the working directory, the model, the tool allowlist, the role prompt, the denied tools and the auto-exit value. The pane keeps the display name from the spawn.
+`pmux_resume` starts a finished child in a new pane from its session file. It resumes pi children and Claude Code children. For a child that `pmux_spawn` started, the resume restores the role configuration from the spawn: the agent, the working directory, the model, the tool allowlist, the role prompt, the denied tools and the auto-exit value. The pane keeps the display name from the spawn.
 
-`luvus_spawn` writes a launch record beside the child session file, `<session>.launch.json`. The record holds the values that the spawn resolved. A resume reads that record and does not read the agent file again. The resumed child therefore keeps the role configuration from spawn time even if the agent file changes later.
+`pmux_spawn` writes a launch record beside the child session file, `<session>.launch.json`. The record holds the values that the spawn resolved. A resume reads that record and does not read the agent file again. The resumed child therefore keeps the role configuration from spawn time even if the agent file changes later.
 
-A Claude Code child has no pi session file. Its launch record stores the Claude Code session id when the run ends, and its result carries the child session path. `luvus_resume` starts Claude Code with `--resume <session id>` and `message` as the prompt. When the record has no stored session id, the tool returns an error and starts nothing.
+A Claude Code child has no pi session file. Its launch record stores the Claude Code session id when the run ends, and its result carries the child session path. `pmux_resume` starts Claude Code with `--resume <session id>` and `message` as the prompt. When the record has no stored session id, the tool returns an error and starts nothing.
 
 A session with no launch record, for example one that the skill launched, resumes as a plain pi session named `Resume`. Its tool result says that the role configuration was not restored. When the session file is missing as well, the tool returns an error and starts no pane.
 
@@ -299,17 +285,17 @@ A session with no launch record, for example one that the skill launched, resume
 | `surface`     | string  | `"right"` (default) splits the caller pane side by side. `"down"` stacks it below. `"tab"` opens the resumed session in its own workspace tab. It overrides the `surface` key in `config.json` for this resume.                                                                                      |
 | `autoExit`    | boolean | Whether the resumed session auto-exits after its next response. When absent, the launch record's auto-exit and interactive values apply. `false` runs the resumed child interactively, so stall and recovery transitions do not wake the parent.                                                    |
 
-The `name` parameter is removed: the resumed pane uses the name from the launch record, or `Resume` when there is no record. `luvus_spawn` also no longer takes `resumeSessionId`; use `luvus_resume` with the session file.
+The `name` parameter is removed: the resumed pane uses the name from the launch record, or `Resume` when there is no record. `pmux_spawn` also no longer takes `resumeSessionId`; use `pmux_resume` with the session file.
 
 ---
 
 ## Messaging other agents
 
-Use `luvus_message` to pass text to another agent in the same tree. Everyone keeps working:
+Use `pmux_message` to pass text to another agent in the same tree. Everyone keeps working:
 
 ```typescript
-luvus_message({ to: "parent", message: "Which DB driver should I use?" });
-luvus_message({ to: "Reviewer", message: "API is in src/api.ts" });
+pmux_message({ to: "parent", message: "Which DB driver should I use?" });
+pmux_message({ to: "Reviewer", message: "API is in src/api.ts" });
 ```
 
 Reachable targets: exactly these three, nothing else:
@@ -318,31 +304,31 @@ Reachable targets: exactly these three, nothing else:
 - the display name or id of one of your own running children
 - the display name or id of a running sibling (another running child of your parent)
 
-Grandchildren, grandparents, finished children, and unrelated agents are not reachable. If you message a finished child, the tool returns an error that lists the reachable targets. Use `luvus_resume` for a finished session. If a name is ambiguous, pass the exact subagent id.
+Grandchildren, grandparents, finished children, and unrelated agents are not reachable. If you message a finished child, the tool returns an error that lists the reachable targets. Use `pmux_resume` for a finished session. If a name is ambiguous, pass the exact subagent id.
 
-Delivery uses two paths. Messages to children and siblings go through Luvus `agent prompt`. They appear in the target pane as input with a sender header (for example `[subagent message from Worker (sibling)]`). Messages to `parent` append to the child message file. The parent injects them as a steering message. They never touch a draft that the user types in the parent composer.
+Delivery uses two paths. Messages to children and siblings are typed into the target's tmux pane as literal input (`tmux send-keys -l`), followed by an Enter keypress. They appear in the target pane as input with a sender header (for example `[subagent message from Worker (sibling)]`). tmux cannot tell whether the target is ready for input, so the text is typed as it is: a target on an approval screen receives it as typed input. Messages to `parent` append to the child message file. The parent injects them as a steering message. They never touch a draft that the user types in the parent composer.
 
-Delivery is asynchronous. The tool returns when the message is queued. Any reply arrives later as a separate message. The tool reports a Luvus error such as `agent_not_ready`. It never retries automatically.
+Delivery is asynchronous. The tool returns when the message is queued. Any reply arrives later as a separate message. If tmux returns an error, such as an unknown or closed pane, the tool returns an error that names the target and holds the tmux error text. It never retries automatically.
 
-These tools differ. `caller_ping` and `luvus_done` end the sending session. `luvus_message` does not end it.
+These tools differ. `caller_ping` and `pmux_done` end the sending session. `pmux_message` does not end it.
 
-> **Note:** Claude Code children can receive messages. They have no `luvus_message` sending tool.
+> **Note:** Claude Code children can receive messages. They have no `pmux_message` sending tool.
 
 ---
 
 ## caller_ping: child-to-parent help request
 
-The `caller_ping` tool lets a child request help from its parent. When the child calls it, the child session exits and the parent receives a notification with the help message. The parent then resumes the child session with a response through `luvus_resume`.
+The `caller_ping` tool lets a child request help from its parent. When the child calls it, the child session exits and the parent receives a notification with the help message. The parent then resumes the child session with a response through `pmux_resume`.
 
 `caller_ping` takes one parameter: `message` (required) holds the help text.
 
-`luvus_resume` takes the child `sessionPath` (required) and an optional `message`. It restores the role configuration from the launch record. Read [Resuming a subagent](#resuming-a-subagent) for all parameters.
+`pmux_resume` takes the child `sessionPath` (required) and an optional `message`. It restores the role configuration from the launch record. Read [Resuming a subagent](#resuming-a-subagent) for all parameters.
 
 Interaction flow:
 1. The child calls `caller_ping({ message: "Not sure which schema to use" })`.
-2. The child session exits (like `luvus_done`).
+2. The child session exits (like `pmux_done`).
 3. The parent receives a steer notification: *"Sub-agent Worker needs help: Not sure which schema to use"*.
-4. The parent resumes the child session through `luvus_resume` with the response.
+4. The parent resumes the child session through `pmux_resume` with the response.
 5. The child picks up where it left off with the guidance of the parent.
 
 Example:
@@ -384,7 +370,7 @@ You are a specialized agent that does X...
 | Field                      | Type    | Description                                                                                                                                                                                                                                                                                                                                |
 | -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `name`                     | string  | The agent name. Use it in `agent: "my-agent"`.                                                                                                                                                                                                                                                                                             |
-| `description`              | string  | It appears in `luvus_list` output.                                                                                                                                                                                                                                                                                                     |
+| `description`              | string  | It appears in `pmux_list` output.                                                                                                                                                                                                                                                                                                     |
 | `model`                    | string  | The default model (for example `openrouter/z-ai/glm-5.3-flash`).                                                                                                                                                                                                                                                                             |
 | `thinking`                 | string  | Thinking level: `minimal`, `medium`, `high`.                                                                                                                                                                                                                                                                                               |
 | `tools`                    | string  | Native pi tools only, as a comma-separated list: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`.                                                                                                                                                                                                                                    |
@@ -392,14 +378,14 @@ You are a specialized agent that does X...
 | `session-mode`             | string  | The default child-session mode: `standalone`, `lineage-only`, or `fork`.                                                                                                                                                                                                                                                                   |
 | `spawning`                 | boolean | Set `false` to deny all child-spawning tools.                                                                                                                                                                                                                                                                                              |
 | `deny-tools`               | string  | A comma-separated list of extension tool names to deny.                                                                                                                                                                                                                                                                                    |
-| `auto-exit`                | boolean | Auto-shutdown when the agent finishes its turn, with no `luvus_done` call. If the user sends any input, auto-exit is disabled permanently and the user takes over the session. Use it for autonomous agents (scout, worker). Do not use it for interactive ones. It also sets the default value of `interactive` (see below). |
+| `auto-exit`                | boolean | Auto-shutdown when the agent finishes its turn, with no `pmux_done` call. If the user sends any input, auto-exit is disabled permanently and the user takes over the session. Use it for autonomous agents (scout, worker). Do not use it for interactive ones. It also sets the default value of `interactive` (see below). |
 | `interactive`              | boolean | Default: derived. It overrides whether stall and recovery transitions wake the parent session. It defaults to the inverse of `auto-exit`. Autonomous agents (`auto-exit: true`) are non-interactive and get stall pings. Agents without `auto-exit` are interactive and stay quiet. Explicit values take precedence.                       |
 | `cwd`                      | string  | The default working directory (absolute or relative to project root).                                                                                                                                                                                                                                                                      |
-| `disable-model-invocation` | boolean | It hides this agent from discovery surfaces like `luvus_list`. The agent stays directly invocable by explicit name through `luvus_spawn({ agent: "name", ... })`.                                                                                                                                                                         |
+| `disable-model-invocation` | boolean | It hides this agent from discovery surfaces like `pmux_list`. The agent stays directly invocable by explicit name through `pmux_spawn({ agent: "name", ... })`.                                                                                                                                                                         |
 
 ---
 
-Discovery still resolves precedence before visibility filtering. If a project-local hidden agent has the same name as a visible global or bundled agent, the hidden project agent wins. The lower-precedence agent does not appear in `luvus_list`.
+Discovery still resolves precedence before visibility filtering. If a project-local hidden agent has the same name as a visible global or bundled agent, the hidden project agent wins. The lower-precedence agent does not appear in `pmux_list`.
 
 ### `session-mode`
 
@@ -422,31 +408,31 @@ session-mode: lineage-only
 
 ### `auto-exit` and the completion nudge
 
-Agents with `auto-exit: true` exit themselves. When the agent finishes a turn normally and the user has not taken over the pane, the child writes the `done` `.exit` sidecar and the session ends, with no `luvus_done` call. The last assistant message becomes the result for the parent. An aborted turn (Escape) keeps the session open for inspection or another prompt. Error stops still exit at once with the error sidecar reported to the parent.
+Agents with `auto-exit: true` exit themselves. When the agent finishes a turn normally and the user has not taken over the pane, the child writes the `done` `.exit` sidecar and the session ends, with no `pmux_done` call. The last assistant message becomes the result for the parent. An aborted turn (Escape) keeps the session open for inspection or another prompt. Error stops still exit at once with the error sidecar reported to the parent.
 
 If the user types into an auto-exit agent pane after its first run, the session becomes user-owned. Auto-exit is disabled from that point. The nudge below takes over.
 
-All other sessions exit through an explicit tool call: `luvus_done` to finish, or `caller_ping` to hand a question back to the parent. To make that reliable, the child extension nudges itself. When the agent finishes a turn normally without calling `luvus_done`, it receives a follow-up reminder after 5 seconds:
+All other sessions exit through an explicit tool call: `pmux_done` to finish, or `caller_ping` to hand a question back to the parent. To make that reliable, the child extension nudges itself. When the agent finishes a turn normally without calling `pmux_done`, it receives a follow-up reminder after 5 seconds:
 
 > [Automated reminder] Your last turn ended but this session is still open.
-> If your task is complete, call the luvus_done tool now, with no other text. Your last message was already delivered as your report — do not repeat or summarise it.
+> If your task is complete, call the pmux_done tool now, with no other text. Your last message was already delivered as your report — do not repeat or summarise it.
 > If you are blocked and need input from the caller, call caller_ping with your question.
 > Otherwise, continue working.
 
-These events cancel a pending nudge: the agent starts new work, the user types into the pane, or the agent calls `luvus_done` or `caller_ping`. Error stops never nudge. They still exit at once and report the failure to the parent.
+These events cancel a pending nudge: the agent starts new work, the user types into the pane, or the agent calls `pmux_done` or `caller_ping`. Error stops never nudge. They still exit at once and report the failure to the parent.
 
 Configure the nudge with environment variables (read by the child at launch):
 
 | Variable                     | Default | Purpose                                  |
 | ---------------------------- | ------- | ---------------------------------------- |
-| `PI_LUVUS_NUDGE_DELAY_MS` | `5000`  | Delay before the reminder (minimum 1000) |
-| `PI_LUVUS_NUDGE_DISABLE`  | unset   | Set to `1` to disable the nudge entirely |
+| `PI_PMUX_NUDGE_DELAY_MS` | `5000`  | Delay before the reminder (minimum 1000) |
+| `PI_PMUX_NUDGE_DISABLE`  | unset   | Set to `1` to disable the nudge entirely |
 
-Parent-side idle watchdog. The child nudge depends on the child and the model, so the parent backs it up. For non-interactive children, if the child activity file has said `waiting` (turn ended) for 30 seconds without the session exiting, the parent types a reminder into the pane itself. After two such reminders, if the child still waits another 30 seconds, the parent finishes it as if `luvus_done` had been called. The last assistant message becomes the result, and the pane closes. The parent never touches interactive children. The timings live in `pi-extension/luvus/idle-watchdog.ts`.
+Parent-side idle watchdog. The child nudge depends on the child and the model, so the parent backs it up. For non-interactive children, if the child activity file has said `waiting` (turn ended) for 30 seconds without the session exiting, the parent types a reminder into the pane itself. After two such reminders, if the child still waits another 30 seconds, the parent finishes it as if `pmux_done` had been called. The last assistant message becomes the result, and the pane closes. The parent never touches interactive children. The timings live in `pi-extension/pmux/idle-watchdog.ts`.
 
 What `auto-exit: true` does: it ends the session when the turn of the agent completes normally (see above), and it shapes defaults:
 
-- The task hint tells the agent upfront to call `luvus_done` when finished ("Complete your task autonomously. Call luvus_done when finished.").
+- The task hint tells the agent upfront to call `pmux_done` when finished ("Complete your task autonomously. Call pmux_done when finished.").
 - It sets the default for `interactive` (see below). `auto-exit: true` agents count as autonomous and get stall pings. Agents without it count as interactive and stay quiet.
 
 ```yaml
@@ -479,7 +465,7 @@ name: my-agent
 Or per spawn:
 
 ```typescript
-luvus_spawn({ name: "Scout", agent: "scout", interactive: true, task: "..." });
+pmux_spawn({ name: "Scout", agent: "scout", interactive: true, task: "..." });
 ```
 
 ---
@@ -490,7 +476,7 @@ By default, every child can spawn further children. Control this behavior with f
 
 ### `spawning: false`
 
-It denies all child lifecycle tools (`luvus_spawn`, `luvus_interrupt`, `luvus_list`, `luvus_resume`):
+It denies all child lifecycle tools (`pmux_spawn`, `pmux_interrupt`, `pmux_list`, `pmux_resume`):
 
 ```yaml
 ---
@@ -538,8 +524,8 @@ project/
 ```
 
 ```typescript
-luvus_spawn({ name: "Game Designer", cwd: "agents/game-designer", task: "Design the combat system" });
-luvus_spawn({ name: "SRE", cwd: "agents/sre", task: "Review deployment pipeline" });
+pmux_spawn({ name: "Game Designer", cwd: "agents/game-designer", task: "Design the combat system" });
+pmux_spawn({ name: "SRE", cwd: "agents/sre", task: "Review deployment pipeline" });
 ```
 
 To set a default `cwd`, put it in the agent frontmatter:
@@ -562,11 +548,11 @@ Every child session shows a compact tools widget with available and denied tools
 [scout] — 12 tools · 4 denied  (Ctrl+H)              ← collapsed
 [scout] — 12 available  (Ctrl+H to collapse)          ← expanded
   read, bash, edit, write, todo, ...
-  denied: subagent, luvus_list, ...
+  denied: subagent, pmux_list, ...
 ```
 
 ---
 
 ## Runtime notes
 
-No Unix shell is needed at runtime. Every child spawns with argument arrays. The pane command line is a single `node` command. The package ships no shell scripts. On Windows the launch path works without Git-Bash, WSL, or another Unix layer.
+No Unix shell is needed at runtime. Every child spawns with argument arrays. The pane command line is a single `node` command that tmux sends to the pane. The package ships no shell scripts.

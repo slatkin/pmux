@@ -10,6 +10,7 @@ for (const key of Object.keys(process.env)) {
   if (
     key.startsWith("LUVUS_") ||
     key.startsWith("PI_LUVUS_") ||
+    key.startsWith("PI_PMUX_") ||
     key === "TMUX" ||
     key === "TMUX_PANE"
   ) {

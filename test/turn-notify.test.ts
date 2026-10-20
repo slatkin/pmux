@@ -6,22 +6,28 @@ import {
   turnLabel,
   turnOutcome,
   type TurnNotifierDeps,
-} from "../pi-extension/luvus/turn-notify.ts";
+} from "../pi-extension/pmux/turn-notify.ts";
 import {
   isPaneFocusedAsync,
   pushNotificationAsync,
-  __setLuvusExecForTests__,
-} from "../pi-extension/luvus/luvus.ts";
+  __setTmuxExecForTests__,
+} from "../pi-extension/pmux/tmux.ts";
 
-// A suite run inside a real pi/Luvus pane inherits live identity vars. Clear
-// them so no test can reach real Luvus; each test sets what it needs.
+// A suite run inside a real pi/tmux pane inherits live identity vars. Clear
+// them so no test can reach real tmux; each test sets what it needs.
 for (const key of Object.keys(process.env)) {
-  if (key.startsWith("LUVUS_") || key.startsWith("PI_LUVUS_")) {
+  if (
+    key.startsWith("LUVUS_") ||
+    key.startsWith("PI_LUVUS_") ||
+    key.startsWith("PI_PMUX_") ||
+    key === "TMUX" ||
+    key === "TMUX_PANE"
+  ) {
     delete process.env[key];
   }
 }
 
-const IN_LUVUS = { LUVUS_ENV: "1", LUVUS_BIN_PATH: "/bin/luvus", LUVUS_PANE_ID: "7" };
+const IN_TMUX = { TMUX: "/tmp/tmux-0/default", TMUX_PANE: "%7" };
 const CTX = { cwd: "/work/app", sessionManager: { getSessionName: () => undefined } };
 
 /** Let the fire-and-forget notification chain settle. */
@@ -102,19 +108,19 @@ describe("createTurnNotifier", () => {
   it("pushes success to an unfocused pane with the cwd basename label", async () => {
     const { deps, pushed, focusChecks } = makeDeps();
     const { pi, fire } = makePi();
-    createTurnNotifier(IN_LUVUS, true, deps).register(pi as never);
+    createTurnNotifier(IN_TMUX, true, deps).register(pi as never);
 
     fire("agent_end", ending("stop"));
     await flush();
 
-    assert.deepEqual(focusChecks, ["7"]);
+    assert.deepEqual(focusChecks, ["%7"]);
     assert.deepEqual(pushed, [{ text: "pi turn ended: app", level: "success" }]);
   });
 
   it("uses the session name in the label", async () => {
     const { deps, pushed } = makeDeps();
     const { pi, fire } = makePi();
-    createTurnNotifier(IN_LUVUS, true, deps).register(pi as never);
+    createTurnNotifier(IN_TMUX, true, deps).register(pi as never);
 
     fire("agent_end", ending("stop"), {
       cwd: "/work/app",
@@ -128,7 +134,7 @@ describe("createTurnNotifier", () => {
   it("pushes an error for a failed turn", async () => {
     const { deps, pushed } = makeDeps();
     const { pi, fire } = makePi();
-    createTurnNotifier(IN_LUVUS, true, deps).register(pi as never);
+    createTurnNotifier(IN_TMUX, true, deps).register(pi as never);
 
     fire("agent_end", ending("error"));
     await flush();
@@ -139,7 +145,7 @@ describe("createTurnNotifier", () => {
   it("makes no call when the pane has focus", async () => {
     const { deps, pushed } = makeDeps({ isPaneFocused: async () => true });
     const { pi, fire } = makePi();
-    createTurnNotifier(IN_LUVUS, true, deps).register(pi as never);
+    createTurnNotifier(IN_TMUX, true, deps).register(pi as never);
 
     fire("agent_end", ending("stop"));
     await flush();
@@ -150,7 +156,7 @@ describe("createTurnNotifier", () => {
   it("makes no call for an aborted turn", async () => {
     const { deps, pushed, focusChecks } = makeDeps();
     const { pi, fire } = makePi();
-    createTurnNotifier(IN_LUVUS, true, deps).register(pi as never);
+    createTurnNotifier(IN_TMUX, true, deps).register(pi as never);
 
     fire("agent_end", ending("aborted"));
     await flush();
@@ -162,7 +168,7 @@ describe("createTurnNotifier", () => {
   it("makes no call in a subagent child", async () => {
     const { deps, pushed, focusChecks } = makeDeps();
     const { pi, fire } = makePi();
-    createTurnNotifier({ ...IN_LUVUS, PI_LUVUS_SESSION: "/tmp/s.jsonl" }, true, deps).register(
+    createTurnNotifier({ ...IN_TMUX, PI_PMUX_SESSION: "/tmp/s.jsonl" }, true, deps).register(
       pi as never,
     );
 
@@ -173,10 +179,10 @@ describe("createTurnNotifier", () => {
     assert.deepEqual(pushed, []);
   });
 
-  it("notifies when only PI_LUVUS_NAME is set", async () => {
+  it("notifies when only PI_PMUX_NAME is set", async () => {
     const { deps, pushed } = makeDeps();
     const { pi, fire } = makePi();
-    createTurnNotifier({ ...IN_LUVUS, PI_LUVUS_NAME: "worker" }, true, deps).register(pi as never);
+    createTurnNotifier({ ...IN_TMUX, PI_PMUX_NAME: "worker" }, true, deps).register(pi as never);
 
     fire("agent_end", ending("stop"));
     await flush();
@@ -184,12 +190,10 @@ describe("createTurnNotifier", () => {
     assert.deepEqual(pushed, [{ text: "pi turn ended: app", level: "success" }]);
   });
 
-  it("makes no call outside Luvus", async () => {
+  it("makes no call outside tmux", async () => {
     const { deps, pushed, focusChecks } = makeDeps();
     const { pi, fire } = makePi();
-    createTurnNotifier({ LUVUS_ENV: "1", LUVUS_BIN_PATH: "/bin/luvus" }, true, deps).register(
-      pi as never,
-    );
+    createTurnNotifier({ TMUX: "/tmp/tmux-0/default" }, true, deps).register(pi as never);
 
     fire("agent_end", ending("stop"));
     await flush();
@@ -201,7 +205,7 @@ describe("createTurnNotifier", () => {
   it("makes no call when notifications are disabled", async () => {
     const { deps, pushed, focusChecks } = makeDeps();
     const { pi, fire } = makePi();
-    createTurnNotifier(IN_LUVUS, false, deps).register(pi as never);
+    createTurnNotifier(IN_TMUX, false, deps).register(pi as never);
 
     fire("agent_end", ending("stop"));
     await flush();
@@ -213,11 +217,11 @@ describe("createTurnNotifier", () => {
   it("pushes nothing and does not throw when the focus check fails", async () => {
     const { deps, pushed } = makeDeps({
       isPaneFocused: async () => {
-        throw new Error("luvus down");
+        throw new Error("tmux down");
       },
     });
     const { pi, fire } = makePi();
-    createTurnNotifier(IN_LUVUS, true, deps).register(pi as never);
+    createTurnNotifier(IN_TMUX, true, deps).register(pi as never);
 
     fire("agent_end", ending("stop"));
     await flush();
@@ -228,11 +232,11 @@ describe("createTurnNotifier", () => {
   it("does not throw when the push fails", async () => {
     const { deps } = makeDeps({
       pushNotification: async () => {
-        throw new Error("luvus down");
+        throw new Error("tmux down");
       },
     });
     const { pi, fire } = makePi();
-    createTurnNotifier(IN_LUVUS, true, deps).register(pi as never);
+    createTurnNotifier(IN_TMUX, true, deps).register(pi as never);
 
     fire("agent_end", ending("stop"));
     await flush();
@@ -240,37 +244,36 @@ describe("createTurnNotifier", () => {
   });
 });
 
-describe("luvus turn-notify helpers", () => {
+describe("tmux turn-notify helpers", () => {
   const calls: string[][] = [];
 
   beforeEach(() => {
     calls.length = 0;
-    __setLuvusExecForTests__(async (args) => {
+    __setTmuxExecForTests__((args) => {
       calls.push(args);
-      if (args[0] === "agent") {
-        return JSON.stringify({ result: { agents: [{ pane: "7", focused: true }] } });
-      }
-      return JSON.stringify({ result: {} });
+      if (args[0] === "display-message" && args[1] === "-p") return "1";
+      return "";
     });
   });
 
   afterEach(() => {
-    __setLuvusExecForTests__(null);
+    __setTmuxExecForTests__(null);
   });
 
-  it("reads focus from agent list for the exact pane", async () => {
-    assert.equal(await isPaneFocusedAsync("7"), true);
-    assert.deepEqual(calls, [["agent", "list"]]);
+  it("reads focus from the pane_active flag of the exact pane", async () => {
+    assert.equal(await isPaneFocusedAsync("%7"), true);
+    assert.deepEqual(calls, [["display-message", "-p", "-t", "%7", "#{pane_active}"]]);
   });
 
-  it("treats an unlisted pane as unfocused", async () => {
-    assert.equal(await isPaneFocusedAsync("9"), false);
+  it("treats an unreadable pane as unfocused", async () => {
+    __setTmuxExecForTests__(() => {
+      throw new Error("can't find pane");
+    });
+    assert.equal(await isPaneFocusedAsync("%9"), false);
   });
 
-  it("pushes a notification with the exact args", async () => {
-    await pushNotificationAsync("pi turn ended: app", "success");
-    assert.deepEqual(calls, [
-      ["ui", "notification", "push", "--text", "pi turn ended: app", "--level", "success"],
-    ]);
+  it("pushes a notification to the status line", async () => {
+    await pushNotificationAsync("pi turn ended: app");
+    assert.deepEqual(calls, [["display-message", "pi turn ended: app"]]);
   });
 });

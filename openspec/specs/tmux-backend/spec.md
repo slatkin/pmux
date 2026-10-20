@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Lets the extension run subagent panes in tmux, next to the Luvus host, with the same surface API and the same completion protocol.
+Lets the extension run subagent panes in tmux, the package's only terminal host, with the same surface API and the same completion protocol.
 
 ## Requirements
 
