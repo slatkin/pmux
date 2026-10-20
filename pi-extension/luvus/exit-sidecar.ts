@@ -1,0 +1,65 @@
+/**
+ * The `.exit` sidecar protocol — host independent.
+ *
+ * A child writes `<session file>.exit` when it finishes (done, ping, handoff
+ * or error). The parent polls that file, so the completion channel does not
+ * depend on the terminal host. Both backends read it through this module so
+ * they decode a payload the same way.
+ */
+import { readFileSync } from "node:fs";
+
+export interface PollResult {
+  /** How the subagent exited */
+  reason: "done" | "ping" | "sentinel" | "error" | "handoff";
+  /** Shell exit code (from sentinel). 0 for file-based exits. */
+  exitCode: number;
+  /** Ping data if reason is "ping" */
+  ping?: { name: string; message: string };
+  /** Handoff data if reason is "handoff" (context-alert handoff, D5) */
+  handoff?: { message: string };
+  /** Error message if reason is "error" (auto-retry exhausted, provider overload, etc.) */
+  errorMessage?: string;
+}
+
+/**
+ * Interpret an `.exit` sidecar payload (written by luvus_done / caller_ping /
+ * the error path in luvus-done.ts). Centralized so both the fast and slow
+ * paths in pollForExit decode the payload the same way.
+ */
+export function interpretExitSidecar(data: any): PollResult {
+  if (data?.type === "ping") {
+    return {
+      reason: "ping",
+      exitCode: 0,
+      ping: { name: data.name, message: data.message },
+    };
+  }
+  if (data?.type === "handoff") {
+    const message =
+      typeof data.message === "string" && data.message.trim() !== ""
+        ? data.message
+        : "(handoff text missing)";
+    return { reason: "handoff", exitCode: 0, handoff: { message } };
+  }
+  if (data?.type === "error") {
+    const errorMessage =
+      typeof data.errorMessage === "string" && data.errorMessage.trim() !== ""
+        ? data.errorMessage
+        : "Subagent exited with stopReason=error (no errorMessage in sidecar).";
+    return { reason: "error", exitCode: 1, errorMessage };
+  }
+  return { reason: "done", exitCode: 0 };
+}
+
+/**
+ * Read the `.exit` sidecar next to a session file. Returns the parsed JSON, or
+ * null when the file is missing or is not valid JSON. Never deletes the file —
+ * callers that consume a sidecar remove it themselves.
+ */
+export function readExitSidecar(sessionFile: string): any {
+  try {
+    return JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8"));
+  } catch {
+    return null;
+  }
+}

@@ -2,6 +2,7 @@
  * Smoke tests for the systemPromptMode feature.
  * Tests: frontmatter parsing, identity routing, CLI flag generation.
  */
+import "./host-env.ts";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

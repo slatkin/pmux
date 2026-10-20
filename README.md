@@ -1,6 +1,11 @@
-# pi-luvus
+# pmux
 
-pi integration for [Luvus](https://luvus.dev).
+pi integration for [Luvus](https://luvus.dev) and tmux.
+
+Subagent panes open next to their parent in either host. Under tmux the split
+anchors on the caller's own pane (`$TMUX_PANE`), so a subagent opens beside
+its parent even when another client is attached to another window of the same
+server.
 
 - Reports live status to Luvus. Each pane reports `working` or `idle` (and `done` or `blocked` at exit) through a status lease, pi sessions bind to their pane so closed sessions stay resumable from Luvus, and an unfocused pane pushes a Luvus notification when its turn ends.
 
@@ -9,10 +14,10 @@ pi integration for [Luvus](https://luvus.dev).
 ## Install
 
 ```bash
-pi install npm:pi-luvus
-pi install git:github.com/slatkin/pi-luvus
+pi install npm:pmux
+pi install git:github.com/slatkin/pmux
 # or from a local checkout:
-pi install /path/to/pi-luvus
+pi install /path/to/pmux
 ```
 
 ## External orchestrators (Claude Code)
@@ -20,9 +25,9 @@ pi install /path/to/pi-luvus
 If the orchestrator is not a pi session (for example Claude Code), drive pi subagents through the packaged `pi-luvus` skill. Install it from GitHub or from a local checkout:
 
 ```bash
-npx skills add slatkin/pi-luvus -g -a claude-code
+npx skills add slatkin/pmux -g -a claude-code
 # or from a local checkout:
-npx skills add /path/to/pi-luvus -g -a claude-code
+npx skills add /path/to/pmux -g -a claude-code
 ```
 
 The skill launches each child in its own pane and waits for a terminal Luvus status. For the launcher commands, the completion signal, and close-on-done behavior, read [External orchestrators](docs/guide.md#external-orchestrators-claude-code).

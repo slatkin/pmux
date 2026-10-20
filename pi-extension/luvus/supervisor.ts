@@ -24,9 +24,10 @@ import {
   readScreen,
   runInPane,
   sendEscape,
+  activeHost,
   type PollResult,
   type SurfacePlacement,
-} from "./luvus.ts";
+} from "./backend.ts";
 import { UhpEventStream } from "./uhp-events.ts";
 import {
   buildSubagentToolAllowlist,
@@ -1710,8 +1711,9 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
 
     try {
       // Watch the pane on the UHP event stream: it starts lazily on the first
-      // watcher and stops once the last one releases.
-      const releaseEventWatch = events().watch(surface);
+      // watcher and stops once the last one releases. The stream is a Luvus
+      // feature; under tmux there is none, so the pane is polled instead.
+      const releaseEventWatch = activeHost() === "luvus" ? events().watch(surface) : () => {};
       let result: Awaited<ReturnType<typeof pollForExit>>;
       try {
         result = await deps.luvus.pollForExit(surface, pollSignal, {

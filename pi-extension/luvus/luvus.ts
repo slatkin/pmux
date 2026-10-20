@@ -1,16 +1,30 @@
 /**
- * Luvus backend for subagent panes — the only supported terminal host.
+ * Luvus backend for subagent panes.
  *
  * Every CLI call executes the binary at `$LUVUS_BIN_PATH` directly (no shell,
  * no PATH lookup) and parses the JSON envelope: `.result` on success, `.error`
  * thrown as an Error otherwise. Availability is an env check: pi must run
  * inside a Luvus pane (`LUVUS_ENV`, `LUVUS_BIN_PATH`, `LUVUS_PANE_ID`).
+ *
+ * The tmux backend in `tmux.ts` implements the same surface API; `backend.ts`
+ * dispatches to the active host.
  */
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { slugifyName } from "./slug.ts";
+import { interpretExitSidecar, readExitSidecar, type PollResult } from "./exit-sidecar.ts";
+import {
+  DEFAULT_SURFACE_PLACEMENT,
+  parseSurfacePlacement,
+  type SplitDirection,
+  type SurfacePlacement,
+} from "./placement.ts";
+import type { AgentPromptResult } from "./surface-types.ts";
 import type { UhpEventSource } from "./uhp-events.ts";
+
+export { DEFAULT_SURFACE_PLACEMENT, interpretExitSidecar, parseSurfacePlacement, readExitSidecar };
+export type { AgentPromptResult, PollResult, SplitDirection, SurfacePlacement };
 
 const execFileAsync = promisify(execFile);
 
@@ -206,15 +220,6 @@ function paneReadText(result: LuvusResult): string {
  * Surface placement for a subagent: a split of the caller's pane to the right
  * (side by side) or down (stacked), or its own tab.
  */
-export type SurfacePlacement = "right" | "down" | "tab";
-
-export const DEFAULT_SURFACE_PLACEMENT: SurfacePlacement = "right";
-
-/** Parse a placement value. The legacy "pane" (auto split) means the default split. */
-export function parseSurfacePlacement(value: unknown): SurfacePlacement | undefined {
-  if (value === "pane") return DEFAULT_SURFACE_PLACEMENT;
-  return value === "right" || value === "down" || value === "tab" ? value : undefined;
-}
 
 /**
  * Find the tab hosting the caller's pane via `agent list` (entries carry
@@ -291,7 +296,6 @@ export function createSurface(
 }
 
 /** Split direction for `splitPane`: side by side (`right`) or stacked (`down`). */
-export type SplitDirection = "right" | "down";
 
 /**
  * Split a pane without taking focus and return the new pane id. The caller
@@ -390,13 +394,6 @@ export function sendEscape(surface: string): void {
 }
 
 /** Shape of the `agent prompt` `.result` payload. */
-export interface AgentPromptResult {
-  submitted?: boolean;
-  evidence?: string;
-  pane?: string | number;
-  status?: string;
-  [key: string]: unknown;
-}
 
 /**
  * Deliver `text` to a pane as input and submit it: Luvus `agent prompt` with no
@@ -421,63 +418,7 @@ export function closeSurface(surface: string): void {
   luvus(["pane", "close", surface]);
 }
 
-export interface PollResult {
-  /** How the subagent exited */
-  reason: "done" | "ping" | "sentinel" | "error" | "handoff";
-  /** Shell exit code (from sentinel). 0 for file-based exits. */
-  exitCode: number;
-  /** Ping data if reason is "ping" */
-  ping?: { name: string; message: string };
-  /** Handoff data if reason is "handoff" (context-alert handoff, D5) */
-  handoff?: { message: string };
-  /** Error message if reason is "error" (auto-retry exhausted, provider overload, etc.) */
-  errorMessage?: string;
-}
-
-/**
- * Interpret an `.exit` sidecar payload (written by luvus_done / caller_ping /
- * the error path in luvus-done.ts). Centralized so both the fast and slow
- * paths in pollForExit decode the payload the same way.
- */
-function interpretExitSidecar(data: any): PollResult {
-  if (data?.type === "ping") {
-    return {
-      reason: "ping",
-      exitCode: 0,
-      ping: { name: data.name, message: data.message },
-    };
-  }
-  if (data?.type === "handoff") {
-    const message =
-      typeof data.message === "string" && data.message.trim() !== ""
-        ? data.message
-        : "(handoff text missing)";
-    return { reason: "handoff", exitCode: 0, handoff: { message } };
-  }
-  if (data?.type === "error") {
-    const errorMessage =
-      typeof data.errorMessage === "string" && data.errorMessage.trim() !== ""
-        ? data.errorMessage
-        : "Subagent exited with stopReason=error (no errorMessage in sidecar).";
-    return { reason: "error", exitCode: 1, errorMessage };
-  }
-  return { reason: "done", exitCode: 0 };
-}
-
 export const __pollForExitTest__ = { interpretExitSidecar };
-
-/**
- * Read the `.exit` sidecar next to a session file. Returns the parsed JSON, or
- * null when the file is missing or is not valid JSON. Never deletes the file —
- * callers that consume a sidecar remove it themselves.
- */
-export function readExitSidecar(sessionFile: string): any {
-  try {
-    return JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8"));
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Decide whether a matched crash sentinel can belong to a still-running

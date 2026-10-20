@@ -30,7 +30,7 @@ import {
   agentPrompt,
   parseSurfacePlacement,
   type SurfacePlacement,
-} from "./luvus.ts";
+} from "./backend.ts";
 import { tailerCommandLine } from "./launch.ts";
 import { UhpEventStream } from "./uhp-events.ts";
 import {

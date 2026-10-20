@@ -11,7 +11,8 @@ import { readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildPaneTitle, type LaunchSpec } from "./launch.ts";
-import { agentSend, closeSurface, readExitSidecar } from "./luvus.ts";
+import { agentSend, closeSurface } from "./backend.ts";
+import { readExitSidecar } from "./exit-sidecar.ts";
 
 /**
  * pi wipes a title emitted before it finishes booting (it enters the
@@ -100,7 +101,8 @@ export async function runSpec(
   const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
   const sleep = deps.sleep ?? ((ms: number) => delay(ms));
   const closePane = deps.closePane ?? closeSurface;
-  const pane = base.LUVUS_PANE_ID;
+  // The pane the wrapper runs in: the Luvus pane id, or the tmux pane id.
+  const pane = base.LUVUS_PANE_ID ?? base.TMUX_PANE;
 
   const env: NodeJS.ProcessEnv = { ...base, ...spec.env };
   // The spec is pane-independent: whichever pane runs it becomes the child's

@@ -3,6 +3,7 @@
  * a reload replaces must close the panes it opened, its hub and its installed
  * projection, and it must finish that teardown even when one part is gone.
  */
+import "./host-env.ts";
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { retireStreamRuntime, type StreamRuntime } from "../pi-extension/luvus/index.ts";

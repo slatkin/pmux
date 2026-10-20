@@ -1,7 +1,7 @@
 {
-  "name": "pi-luvus",
+  "name": "pmux",
   "version": "0.1.0",
-  "description": "pi integration for Luvus: subagents in panes, live agent status, turn-end notifications",
+  "description": "pi integration for Luvus and tmux: subagents in panes, live agent status, turn-end notifications",
   "keywords": [
     "pi-package"
   ],

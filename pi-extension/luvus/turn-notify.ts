@@ -13,7 +13,7 @@
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
-import { isMuxAvailable, isPaneFocusedAsync, pushNotificationAsync } from "./luvus.ts";
+import { isMuxAvailable, isPaneFocusedAsync, pushNotificationAsync } from "./backend.ts";
 import { isSubagentChild } from "./child-env.ts";
 
 /** What the ended turn should produce. `none` means no notification. */

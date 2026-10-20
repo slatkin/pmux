@@ -34,7 +34,13 @@ import {
   writeLaunchSpec,
   type LaunchSpec,
 } from "./launch.ts";
-import { createSurface, parseSurfacePlacement, runInPane, type SurfacePlacement } from "./luvus.ts";
+import {
+  createSurface,
+  parseSurfacePlacement,
+  runInPane,
+  type SurfacePlacement,
+  callerPaneId,
+} from "./backend.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
@@ -132,17 +138,23 @@ function isFile(path: string): boolean {
 }
 
 /**
- * Require the three Luvus keys the launch needs, from the injected env rather
- * than this process's own, so a test can prove the refusal.
+ * The host the launch runs in, decided by the injected env. Luvus wins when
+ * both hosts are available.
  */
-function assertLuvusEnv(env: NodeJS.ProcessEnv): asserts env is NodeJS.ProcessEnv & {
-  LUVUS_ENV: string;
-  LUVUS_BIN_PATH: string;
-  LUVUS_PANE_ID: string;
-} {
-  if (!env.LUVUS_ENV || !env.LUVUS_BIN_PATH || !env.LUVUS_PANE_ID) {
+function hostOf(env: NodeJS.ProcessEnv): "luvus" | "tmux" {
+  return env.LUVUS_ENV && env.LUVUS_BIN_PATH && env.LUVUS_PANE_ID ? "luvus" : "tmux";
+}
+
+/**
+ * Require a supported host: the three Luvus keys, or a tmux pane.
+ */
+function assertHostEnv(env: NodeJS.ProcessEnv): void {
+  const luvus = !!(env.LUVUS_ENV && env.LUVUS_BIN_PATH && env.LUVUS_PANE_ID);
+  const tmux = !!(env.TMUX && env.TMUX_PANE);
+  if (!luvus && !tmux) {
     throw new Error(
-      "must run inside Luvus (LUVUS_ENV, LUVUS_BIN_PATH and LUVUS_PANE_ID must all be set)",
+      "must run inside Luvus (LUVUS_ENV, LUVUS_BIN_PATH and LUVUS_PANE_ID must all be set) " +
+        "or inside a tmux pane (TMUX and TMUX_PANE must be set)",
     );
   }
 }
@@ -168,8 +180,24 @@ function scratchBase(name: string, id: string): string {
   return `${slug}-${id}`;
 }
 
-/** The parent-contact footer appended to the brief. */
-function parentFooter(parent: string, pane: string): string {
+/**
+ * The parent-contact footer appended to the brief. Under Luvus the child
+ * reaches the parent with `luvus agent send`; under tmux there is no such
+ * channel, so the report is the child's last assistant message.
+ */
+function parentFooter(parent: string, pane: string, host: "luvus" | "tmux"): string {
+  if (host === "tmux") {
+    return `Your parent is a session named ${parent} (pane ${pane}).
+Plain text printed in your own pane is never seen. Your last assistant message is the report the parent reads.
+
+So do ALL of the following before you stop:
+1. Finish the task.
+2. Write your final report as your last assistant message: the verdict, the commit SHA, the files changed, the verification, the deviations and the open questions. Put the verdict first.
+3. Then call the luvus_done tool to close your session.
+
+If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or luvus_message to reach the parent.
+If an automated reminder tells you to call luvus_done, ignore its claim that your last message was already delivered.`;
+  }
   return `Your parent is a session named ${parent} (pane ${pane}).
 Plain text printed in your own pane is never seen. The only way to reach it is bash: luvus agent send ${parent} '<text>'.
 
@@ -207,7 +235,7 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
   if (!isDirectory(cwd)) throw new Error(`cwd is not a directory: ${cwd}`);
   if (!isFile(brief)) throw new Error(`brief is not a file: ${brief}`);
   assertNodeVersion();
-  assertLuvusEnv(env);
+  assertHostEnv(env);
 
   const rolePaths = agentDefinitionPaths(role, cwd);
   const definition = loadAgentDefaults(role, cwd);
@@ -243,7 +271,10 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
   }
   const briefText = readFileSync(brief, "utf8");
   writeFileSync(rolePromptPath, definition.body ? `${definition.body}\n` : "");
-  writeFileSync(promptPath, `${briefText}\n${parentFooter(parent, env.LUVUS_PANE_ID)}\n`);
+  writeFileSync(
+    promptPath,
+    `${briefText}\n${parentFooter(parent, callerPaneId(env), hostOf(env))}\n`,
+  );
 
   const specEnv = encodeChildEnv({
     name,
@@ -282,8 +313,8 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
   };
   writeLaunchSpec(specPath, spec);
 
-  const pane = createSurface(name, placement, env.LUVUS_PANE_ID);
-  runInPane(pane, paneLine);
+  const pane = createSurface(name, placement, callerPaneId(env), hostOf(env));
+  runInPane(pane, paneLine, hostOf(env));
 
   write(JSON.stringify({ pane, session: sessionFile, launch: specPath }) + "\n");
   return 0;
@@ -298,7 +329,7 @@ function resumeCommand(values: CliValues, deps: CliDeps, placement: SurfacePlace
   const promptPath = required("--prompt", values.prompt);
   if (!isFile(launchPath)) throw new Error(`launch spec is not a file: ${launchPath}`);
   if (!isFile(promptPath)) throw new Error(`prompt is not a file: ${promptPath}`);
-  assertLuvusEnv(env);
+  assertHostEnv(env);
 
   const spec = readLaunchSpec(launchPath);
   // A resume reuses the spec unchanged, so its session and close grace carry
@@ -310,13 +341,13 @@ function resumeCommand(values: CliValues, deps: CliDeps, placement: SurfacePlace
     sentPrompt = `${promptPath}.resume.md`;
     writeFileSync(
       sentPrompt,
-      `${readFileSync(promptPath, "utf8")}\n${parentFooter(spec.parent, env.LUVUS_PANE_ID)}\n`,
+      `${readFileSync(promptPath, "utf8")}\n${parentFooter(spec.parent, callerPaneId(env), hostOf(env))}\n`,
     );
   }
   const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);
 
-  const pane = createSurface(values.name ?? spec.name, placement, env.LUVUS_PANE_ID);
-  runInPane(pane, paneLine);
+  const pane = createSurface(values.name ?? spec.name, placement, callerPaneId(env), hostOf(env));
+  runInPane(pane, paneLine, hostOf(env));
 
   write(JSON.stringify({ pane, launch: launchPath }) + "\n");
   return 0;

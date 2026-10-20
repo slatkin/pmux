@@ -2,6 +2,8 @@
 
 This package serves two orchestrators: a pi parent that uses the extension's tools, and an external orchestrator (e.g. Claude Code) that runs pi children in Luvus panes through the packaged `pi-luvus` skill (`skills/pi-luvus/`, spec'd in `external-orchestration`). Changes to `pi-extension/luvus/luvus-done.ts`, the `PI_LUVUS_*` env vars, or the `.exit` sidecar format must keep `external-orchestration` passing.
 
+Subagent panes run in one of two hosts. `pi-extension/luvus/luvus.ts` is the Luvus backend, `pi-extension/luvus/tmux.ts` is the tmux backend, and `pi-extension/luvus/backend.ts` dispatches to the active one. Both implement the same surface API; host-independent pieces (placement, the `.exit` sidecar, the prompt result) live in their own modules. A tmux split always anchors on `$TMUX_PANE` — never on the server's most recently used window.
+
 ## Project Structure & Module Organization
 
 This package is a Pi extension that integrates pi with Luvus: asynchronous subagents in panes, live agent status, and Luvus bar and notification modules. Runtime TypeScript lives in `pi-extension/luvus/`: `index.ts` registers tools and commands, `luvus.ts` handles panes and tabs, and the other modules manage sessions, status, activity, and completion. Agent definitions live in `agents/*.md`; the Claude stop hook (a node script) is under `pi-extension/luvus/plugin/hooks/`. Unit tests are in `test/*.test.ts` and `test/test.ts`; Behavior specifications and active proposals live in `openspec/`.

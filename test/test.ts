@@ -5,16 +5,13 @@ import assert from "node:assert/strict";
 // LUVUS_* variables explicitly per test. An ambient Luvus session (running
 // the suite inside a pi sub-agent pane) would turn any un-stubbed Luvus call
 // into a real pane mutation — including `pane close $LUVUS_PANE_ID`, which
-// kills the very session running the suite. Clear those keys for the entire
-// test process. The same goes for PI_LUVUS_*: a suite run inside a
-// sub-agent pane inherits its identity (PI_LUVUS_SESSION,
-// PI_LUVUS_AUTO_EXIT, …), which flips the nudge/auto-exit paths under test
-// and can write a `.exit` sidecar for the real session.
-for (const key of Object.keys(process.env)) {
-  if (key.startsWith("LUVUS_") || key.startsWith("PI_LUVUS_")) {
-    delete process.env[key];
-  }
-}
+// kills the very session running the suite. The same goes for the tmux host
+// keys and for PI_LUVUS_*: a suite run inside a sub-agent pane inherits its
+// identity (PI_LUVUS_SESSION, PI_LUVUS_AUTO_EXIT, …), which flips the
+// nudge/auto-exit paths under test and can write a `.exit` sidecar for the
+// real session. `host-env.ts` clears all of them for this process.
+import "./host-env.ts";
+
 import {
   mkdtempSync,
   writeFileSync,
