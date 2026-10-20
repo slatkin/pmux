@@ -71,16 +71,17 @@ that a given pi event produces.
 | `input` | `user-prompt-submit` | `cwd`, `prompt`, `session_id` |
 | `tool_execution_start` | `activity-log` | `tool_name`, `tool_input` |
 | `tool_execution_end` | `activity-log` | `tool_name`, `tool_input`, `tool_response` |
-| `agent_settled` with outcome `error` | `stop-failure` | `error` |
-| `agent_settled` with outcome `completed` or `aborted` | `stop` | `last_assistant_message` |
-| `ui_prompt_start` | `notification` | `wait_reason` |
+| `agent_settled` with the outcome from `agent_before_settle` being `error` | `stop-failure` | `error` |
+| `agent_settled` with the outcome from `agent_before_settle` being `completed` or `aborted` | `stop` | `last_assistant_message` |
+| `ui_prompt_start` | `notification` | `notification_type` |
 | `ui_prompt_end` | `user-prompt-submit` | empty `prompt` |
 | `session_shutdown` | `session-end` | `end_reason` |
 
-`agent_settled` is the event that ends a run, and its `outcome` says how the
-run ended. The last assistant message is the text of the last assistant
-message in the run, which the publisher keeps as it goes, because
-`agent_settled` does not carry the messages.
+`agent_settled` is the event that ends a run. pi 1.3.0's `agent_settled`
+carries only `aborted`, so the outcome is read from `agent_before_settle`
+and kept until the run settles. The last assistant message is the text of
+the last assistant message in the run, which the publisher also keeps as it
+goes, because `agent_settled` does not carry the messages.
 
 `tool_execution_start` and `tool_execution_end` both publish an activity
 entry, so that the sidebar's activity log shows the tool while it runs and

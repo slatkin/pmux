@@ -1,7 +1,7 @@
 /**
- * The sidebar publisher, tested without pi, without tmux and without a
- * sidebar: the payload builders are pure functions, the binary lookup takes
- * its file check as an argument, and the spawner is injected.
+ * The sidebar publisher, tested without pi, tmux or a sidebar: the builders
+ * are pure, the lookup takes its file check, the spawner is injected, and
+ * deferred publishes are awaited with a setImmediate tick.
  */
 import "./host-env.ts";
 import { describe, it } from "node:test";
@@ -44,12 +44,16 @@ function makeSpawn() {
 }
 
 const ENV = { TMUX: "/tmp/tmux-0/default", TMUX_PANE: "%7", PATH: "/usr/bin" };
+const BIN = "/opt/sidebar/bin/tmux-agent-sidebar";
+const binaryThere = (path: string) => path === BIN;
 
-function publishWith(
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+async function publishWith(
   deps: Partial<Parameters<typeof createSidebarPublisher>[0]>,
   event: string,
   payload: unknown,
-): Array<{ command: string; args: string[]; stdin: string }> {
+) {
   const { spawn, calls } = makeSpawn();
   createSidebarPublisher({
     env: ENV,
@@ -57,64 +61,69 @@ function publishWith(
     spawn,
     ...deps,
   } as Parameters<typeof createSidebarPublisher>[0]).publish(event, payload);
+  await flush();
   return calls;
 }
 
 describe("resolveSidebarBinary", () => {
   const existsFor = (paths: string[]) => (path: string) => paths.includes(path);
-  const bin = "/opt/sidebar/bin/tmux-agent-sidebar";
   const homeBin = "/home/u/.tmux/plugins/tmux-agent-sidebar/bin/tmux-agent-sidebar";
   const homeRelease = "/home/u/.tmux/plugins/tmux-agent-sidebar/target/release/tmux-agent-sidebar";
 
-  it("prefers the environment override", () => {
-    const env = { TMUX_AGENT_SIDEBAR_BIN: bin, HOME: "/home/u", PATH: "/usr/bin" };
-    assert.equal(resolveSidebarBinary(env, existsFor([bin, homeBin])), bin);
-  });
-
-  it("skips an override whose file is not there", () => {
-    const env = { TMUX_AGENT_SIDEBAR_BIN: bin, HOME: "/home/u", PATH: "" };
-    assert.equal(resolveSidebarBinary(env, existsFor([homeBin])), homeBin);
-  });
-
-  it("uses the plugin bin path", () => {
-    const env = { HOME: "/home/u", PATH: "" };
-    assert.equal(resolveSidebarBinary(env, existsFor([homeBin])), homeBin);
-  });
-
-  it("falls back to the plugin release build", () => {
-    const env = { HOME: "/home/u", PATH: "" };
-    assert.equal(resolveSidebarBinary(env, existsFor([homeRelease])), homeRelease);
-  });
-
-  it("falls back to PATH", () => {
-    const env = { HOME: "/home/u", PATH: "/usr/local/bin:/usr/bin" };
-    assert.equal(
-      resolveSidebarBinary(env, existsFor(["/usr/bin/tmux-agent-sidebar"])),
-      "/usr/bin/tmux-agent-sidebar",
-    );
-  });
-
-  it("returns null when nothing is found", () => {
-    const env = { HOME: "/home/u", PATH: "/usr/bin" };
-    assert.equal(resolveSidebarBinary(env, existsNever), null);
+  it("walks the order: override, plugin bin, plugin release, PATH, none", () => {
+    const cases = [
+      {
+        env: { TMUX_AGENT_SIDEBAR_BIN: BIN, HOME: "/home/u", PATH: "" },
+        exists: existsFor([BIN, homeBin]),
+        want: BIN,
+      },
+      {
+        env: { TMUX_AGENT_SIDEBAR_BIN: BIN, HOME: "/home/u", PATH: "" },
+        exists: existsFor([homeBin]),
+        want: homeBin,
+      },
+      { env: { HOME: "/home/u", PATH: "" }, exists: existsFor([homeRelease]), want: homeRelease },
+      {
+        env: { HOME: "/home/u", PATH: "/usr/local/bin:/usr/bin" },
+        exists: existsFor(["/usr/bin/tmux-agent-sidebar"]),
+        want: "/usr/bin/tmux-agent-sidebar",
+      },
+      { env: { HOME: "/home/u", PATH: "/usr/bin" }, exists: existsNever, want: null },
+    ];
+    for (const { env, exists, want } of cases) {
+      assert.equal(resolveSidebarBinary(env, exists), want);
+    }
   });
 });
 
 describe("payload builders", () => {
-  it("buildSessionStart", () => {
-    assert.deepEqual(buildSessionStart({ source: "startup", cwd: "/work/app", sessionId: "s1" }), {
+  const session = { cwd: "/work/app", sessionId: "s1" };
+
+  it("carries the session's cwd and session_id on every session-scoped payload", () => {
+    assert.deepEqual(buildSessionStart({ source: "startup", session }), {
       cwd: "/work/app",
       session_id: "s1",
       source: "startup",
     });
-  });
-
-  it("buildSessionStart carries the worktree when the pane has one", () => {
+    assert.deepEqual(buildUserPromptSubmit({ prompt: "hi", session }), {
+      prompt: "hi",
+      cwd: "/work/app",
+      session_id: "s1",
+    });
+    assert.deepEqual(buildStop({ lastAssistantMessage: "done", session }), {
+      last_assistant_message: "done",
+      cwd: "/work/app",
+      session_id: "s1",
+    });
+    assert.deepEqual(buildStopFailure({ error: "provider exploded", session }), {
+      error: "provider exploded",
+      cwd: "/work/app",
+      session_id: "s1",
+    });
     assert.deepEqual(
       buildSessionStart({
         source: "startup",
-        cwd: "/work/app",
-        sessionId: "s1",
+        session,
         worktree: { path: "/work/app/.worktrees/foo", branch: "agent/foo" },
       }),
       {
@@ -126,22 +135,11 @@ describe("payload builders", () => {
     );
   });
 
-  it("buildUserPromptSubmit", () => {
-    assert.deepEqual(buildUserPromptSubmit({ prompt: "hi", cwd: "/work/app", sessionId: "s1" }), {
-      prompt: "hi",
-      cwd: "/work/app",
-      session_id: "s1",
-    });
-  });
-
-  it("buildActivityLog at tool start has no tool_response", () => {
+  it("activity-log: tool start has no tool_response, tool end carries the result", () => {
     assert.deepEqual(buildActivityLog({ toolName: "bash", toolInput: { command: "ls" } }), {
       tool_name: "bash",
       tool_input: { command: "ls" },
     });
-  });
-
-  it("buildActivityLog at tool end carries the result", () => {
     assert.deepEqual(
       buildActivityLog({
         toolName: "read",
@@ -152,27 +150,10 @@ describe("payload builders", () => {
     );
   });
 
-  it("buildStop", () => {
-    assert.deepEqual(
-      buildStop({ lastAssistantMessage: "done", cwd: "/work/app", sessionId: "s1" }),
-      { last_assistant_message: "done", cwd: "/work/app", session_id: "s1" },
-    );
-  });
-
-  it("buildStopFailure", () => {
-    assert.deepEqual(
-      buildStopFailure({ error: "provider exploded", cwd: "/work/app", sessionId: "s1" }),
-      { error: "provider exploded", cwd: "/work/app", session_id: "s1" },
-    );
-  });
-
-  it("buildNotification names the kind of prompt", () => {
+  it("notification names the kind of prompt; session-end names the reason", () => {
     assert.deepEqual(buildNotification({ waitReason: "confirm" }), {
       notification_type: "confirm",
     });
-  });
-
-  it("buildSessionEnd", () => {
     assert.deepEqual(buildSessionEnd({ endReason: "quit" }), { end_reason: "quit" });
   });
 
@@ -187,20 +168,19 @@ describe("payload builders", () => {
 
   it("lastAssistantMessage takes the last assistant message's text", () => {
     const messages = [
-      { role: "user", content: [{ type: "text", text: "hi" }] },
       {
         role: "assistant",
         content: [
           { type: "thinking", thinking: "hmm" },
-          { type: "text", text: "part one " },
-          { type: "text", text: "part two" },
+          { type: "text", text: "a " },
+          { type: "text", text: "b" },
         ],
         stopReason: "stop",
       },
       { role: "user", content: [{ type: "text", text: "noise" }] },
     ];
     assert.deepEqual(lastAssistantMessage(messages), {
-      text: "part one part two",
+      text: "a b",
       stopReason: "stop",
       errorMessage: undefined,
     });
@@ -219,60 +199,82 @@ describe("payload builders", () => {
 });
 
 describe("sidebarSwitchEnabled", () => {
-  it("TMUX_AGENT_SIDEBAR=0 turns publishing off", () => {
+  it("TMUX_AGENT_SIDEBAR=0 turns publishing off; anything else leaves it on", () => {
     assert.equal(sidebarSwitchEnabled({ TMUX_AGENT_SIDEBAR: "0" }), false);
-  });
-
-  it("any other value, and the absence of the variable, leave it on", () => {
     assert.equal(sidebarSwitchEnabled({}), true);
     assert.equal(sidebarSwitchEnabled({ TMUX_AGENT_SIDEBAR: "1" }), true);
   });
 });
 
 describe("publisher", () => {
-  it("spawns the binary with the protocol command line and the payload on stdin", () => {
-    const bin = "/opt/sidebar/bin/tmux-agent-sidebar";
-    const calls = publishWith(
-      {
-        env: { ...ENV, TMUX_AGENT_SIDEBAR_BIN: bin },
-        exists: (path) => path === bin,
-      },
+  it("spawns the binary with the protocol command line and the payload on stdin", async () => {
+    const calls = await publishWith(
+      { env: { ...ENV, TMUX_AGENT_SIDEBAR_BIN: BIN }, exists: binaryThere },
       "user-prompt-submit",
       { prompt: "hi" },
     );
     assert.deepEqual(calls, [
-      { command: bin, args: ["hook", "pi", "user-prompt-submit"], stdin: '{"prompt":"hi"}' },
+      { command: BIN, args: ["hook", "pi", "user-prompt-submit"], stdin: '{"prompt":"hi"}' },
     ]);
   });
 
-  it("does nothing when the binary is missing", () => {
-    const calls = publishWith({}, "session-start", { cwd: "/w" });
-    assert.deepEqual(calls, []);
-  });
-
-  it("does nothing when TMUX_PANE is unset", () => {
-    const bin = "/opt/sidebar/bin/tmux-agent-sidebar";
-    const calls = publishWith({ env: {}, exists: (path) => path === bin }, "session-start", {
-      cwd: "/w",
-    });
-    assert.deepEqual(calls, []);
-  });
-
-  it("does nothing when the switch is off", () => {
-    const bin = "/opt/sidebar/bin/tmux-agent-sidebar";
-    const calls = publishWith(
-      { env: { ...ENV, TMUX_AGENT_SIDEBAR: "0" }, exists: (path) => path === bin },
-      "session-start",
-      { cwd: "/w" },
-    );
-    assert.deepEqual(calls, []);
-  });
-
-  it("swallows a throwing spawner", () => {
-    const bin = "/opt/sidebar/bin/tmux-agent-sidebar";
-    const calls = publishWith(
+  it("refuses to publish, with no spawn, when a guard fails", () => {
+    const cases = [
       {
-        exists: (path) => path === bin,
+        name: "switch off",
+        deps: { env: { ...ENV, TMUX_AGENT_SIDEBAR: "0" }, exists: binaryThere },
+      },
+      { name: "no pane", deps: { env: {}, exists: binaryThere } },
+      { name: "binary missing", deps: { exists: existsNever } },
+    ];
+    for (const { name, deps } of cases) {
+      const { spawn, calls } = makeSpawn();
+      createSidebarPublisher({
+        env: ENV,
+        exists: existsNever,
+        spawn,
+        ...deps,
+      } as Parameters<typeof createSidebarPublisher>[0]).publish("session-start", { cwd: "/w" });
+      assert.deepEqual(calls, [], name);
+    }
+  });
+
+  it("defers the spawn, keeps the event order, and looks the binary up once", async () => {
+    let lookups = 0;
+    const { spawn, calls } = makeSpawn();
+    const publisher = createSidebarPublisher({
+      env: { ...ENV, TMUX_AGENT_SIDEBAR_BIN: BIN },
+      exists: (path) => {
+        lookups++;
+        return path === BIN;
+      },
+      spawn,
+    });
+    publisher.publish("activity-log", { tool_name: "start" });
+    publisher.publish("activity-log", { tool_name: "end" });
+    // Nothing spawned inside the caller's turn: the work happens later.
+    assert.deepEqual(calls, []);
+    await flush();
+    assert.deepEqual(
+      calls.map((call) => call.stdin),
+      ['{"tool_name":"start"}', '{"tool_name":"end"}'],
+    );
+    publisher.publishSync("session-end", { end_reason: "quit" });
+    // publishSync emits without a flush; one lookup serves the whole session.
+    assert.equal(publisher.canPublish(), true);
+    assert.equal(lookups, 1);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls[2], {
+      command: BIN,
+      args: ["hook", "pi", "session-end"],
+      stdin: '{"end_reason":"quit"}',
+    });
+  });
+
+  it("swallows a throwing spawner and a throwing stdin, and writes nothing to the output", async () => {
+    const spawnCalls = await publishWith(
+      {
+        exists: binaryThere,
         spawn: () => {
           throw new Error("EACCES");
         },
@@ -280,16 +282,12 @@ describe("publisher", () => {
       "activity-log",
       { tool_name: "bash" },
     );
-    assert.deepEqual(calls, []);
-  });
-
-  it("swallows a throwing stdin and writes nothing to the session output", () => {
-    const bin = "/opt/sidebar/bin/tmux-agent-sidebar";
+    assert.deepEqual(spawnCalls, []);
     const writes: string[] = [];
     let published = false;
     createSidebarPublisher({
       env: ENV,
-      exists: (path) => path === bin,
+      exists: binaryThere,
       spawn: () => ({
         stdin: {
           write(chunk: string) {
@@ -302,6 +300,7 @@ describe("publisher", () => {
         },
       }),
     }).publish("stop", { last_assistant_message: "x" });
+    await flush();
     assert.deepEqual(writes, []);
     assert.equal(published, false);
   });

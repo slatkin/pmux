@@ -15,6 +15,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
 import { isTmuxAvailable, isPaneFocusedAsync, pushNotificationAsync } from "./tmux.ts";
 import { isSubagentChild } from "./child-env.ts";
+import { lastAssistantMessage } from "./last-assistant.ts";
 
 /** What the ended turn should produce. `none` means no notification. */
 export type TurnOutcome = "ended" | "failed" | "none";
@@ -26,14 +27,9 @@ export type TurnOutcome = "ended" | "failed" | "none";
  * normally.
  */
 export function turnOutcome(messages: readonly unknown[]): TurnOutcome {
-  let stopReason: unknown;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i] as { role?: unknown; stopReason?: unknown } | null | undefined;
-    if (message && message.role === "assistant") {
-      stopReason = message.stopReason;
-      break;
-    }
-  }
+  // The shared walk (last-assistant.ts) finds the same last assistant
+  // message the sidebar's stop payload reads, so the two cannot disagree.
+  const stopReason = lastAssistantMessage(messages)?.stopReason;
   if (stopReason === "aborted") return "none";
   if (stopReason === "error" || stopReason === "timeout") return "failed";
   return "ended";

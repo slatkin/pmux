@@ -19,6 +19,11 @@
  */
 import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { lastAssistantMessage, stopFailureError, type LastAssistant } from "./last-assistant.ts";
+
+// The last-assistant walk is shared with turn-notify.ts; the names stay
+// reachable from this module's public surface.
+export { lastAssistantMessage, stopFailureError, type LastAssistant };
 
 // ── Binary lookup (design D3) ──
 
@@ -60,6 +65,17 @@ export function resolveSidebarBinary(
 
 // ── Payload builders (design D5, D6) ──
 
+/** The identity every session-scoped payload carries (design D8). */
+export interface SidebarSession {
+  cwd: string;
+  sessionId: string;
+}
+
+/** The cwd and the session id, in the protocol's key order. */
+function sessionFields(session: SidebarSession): { cwd: string; session_id: string } {
+  return { cwd: session.cwd, session_id: session.sessionId };
+}
+
 /** The worktree fields the sidebar's protocol accepts. The window options
  * carry the worktree path and the branch; the other fields are unknown to a
  * pi producer and stay out of the payload. */
@@ -86,13 +102,11 @@ export function worktreeFromOptions(options: {
 
 export function buildSessionStart(params: {
   source: string;
-  cwd: string;
-  sessionId: string;
+  session: SidebarSession;
   worktree?: SidebarWorktree;
 }): Record<string, unknown> {
   const payload: Record<string, unknown> = {
-    cwd: params.cwd,
-    session_id: params.sessionId,
+    ...sessionFields(params.session),
     source: params.source,
   };
   if (params.worktree) payload.worktree = params.worktree;
@@ -101,14 +115,9 @@ export function buildSessionStart(params: {
 
 export function buildUserPromptSubmit(params: {
   prompt: string;
-  cwd: string;
-  sessionId: string;
+  session: SidebarSession;
 }): Record<string, unknown> {
-  return {
-    prompt: params.prompt,
-    cwd: params.cwd,
-    session_id: params.sessionId,
-  };
+  return { prompt: params.prompt, ...sessionFields(params.session) };
 }
 
 export function buildActivityLog(params: {
@@ -126,26 +135,16 @@ export function buildActivityLog(params: {
 
 export function buildStop(params: {
   lastAssistantMessage: string;
-  cwd: string;
-  sessionId: string;
+  session: SidebarSession;
 }): Record<string, unknown> {
-  return {
-    last_assistant_message: params.lastAssistantMessage,
-    cwd: params.cwd,
-    session_id: params.sessionId,
-  };
+  return { last_assistant_message: params.lastAssistantMessage, ...sessionFields(params.session) };
 }
 
 export function buildStopFailure(params: {
   error: string;
-  cwd: string;
-  sessionId: string;
+  session: SidebarSession;
 }): Record<string, unknown> {
-  return {
-    error: params.error,
-    cwd: params.cwd,
-    session_id: params.sessionId,
-  };
+  return { error: params.error, ...sessionFields(params.session) };
 }
 
 export function buildNotification(params: { waitReason: string }): Record<string, unknown> {
@@ -160,46 +159,8 @@ export function buildSessionEnd(params: { endReason: string }): Record<string, u
 //
 // `agent_settled` says how a run ended but does not carry the run's messages,
 // so the last assistant message is taken from `agent_end` and kept until the
-// run settles.
-
-/** The last assistant message of a run: its text, stop reason and error. */
-export interface LastAssistant {
-  text: string;
-  stopReason?: string;
-  errorMessage?: string;
-}
-
-/**
- * The last assistant message in a run's messages, or `null` when the run has
- * none. Pure: the publisher keeps it between `agent_end` and `agent_settled`.
- */
-export function lastAssistantMessage(messages: readonly unknown[]): LastAssistant | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i] as
-      | { role?: unknown; content?: unknown; stopReason?: unknown; errorMessage?: unknown }
-      | null
-      | undefined;
-    if (!message || message.role !== "assistant") continue;
-    const parts = Array.isArray(message.content)
-      ? (message.content as Array<{ type?: unknown; text?: unknown }>)
-      : [];
-    const text = parts
-      .filter((part) => part && part.type === "text")
-      .map((part) => (typeof part.text === "string" ? part.text : ""))
-      .join("");
-    return {
-      text,
-      stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined,
-      errorMessage: typeof message.errorMessage === "string" ? message.errorMessage : undefined,
-    };
-  }
-  return null;
-}
-
-/** The error text of a failed run: pi's own message, else the stop reason. */
-export function stopFailureError(last: LastAssistant | null): string {
-  return last?.errorMessage || last?.stopReason || "error";
-}
+// run settles. The walk itself lives in last-assistant.ts, shared with
+// turn-notify.ts, and is re-exported above for this module's public surface.
 
 // ── Publisher (design D2) ──
 
@@ -237,8 +198,23 @@ const DEFAULT_DEPS: SidebarDeps = {
 };
 
 export interface SidebarPublisher {
-  /** Fire and forget: spawn the sidebar, write the payload, move on. */
+  /**
+   * Whether publishing is actually possible: the switch on, the pane set and
+   * the binary found. Cheap and synchronous, so a caller can skip its own
+   * work (the worktree read) when the answer is no. Caches the lookup.
+   */
+  canPublish(): boolean;
+  /**
+   * Fire and forget: the guards run now, the spawn, the JSON.stringify and
+   * the stdin write are deferred (setImmediate), so serializing a large tool
+   * payload never runs inside pi's event handler.
+   */
   publish(event: string, payload: unknown): void;
+  /**
+   * The synchronous publish, for an event the session must not lose: it
+   * spawns and writes now, without waiting for the deferred queue.
+   */
+  publishSync(event: string, payload: unknown): void;
 }
 
 /**
@@ -255,22 +231,52 @@ export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): Sideba
   // starts without the sidebar stays quiet.
   let binary: string | null | undefined;
 
+  // The guards are cheap and synchronous; the expensive part (stringify the
+  // payload, spawn, write) runs off the event handler's path.
+  const guardsPass = (): boolean => {
+    if (!sidebarSwitchEnabled(deps.env)) return false;
+    // The pane comes from the publisher's own environment; a session
+    // outside tmux has no pane to describe.
+    return Boolean(deps.env.TMUX_PANE);
+  };
+
+  const emit = (event: string, payload: unknown): void => {
+    try {
+      binary ??= resolveSidebarBinary(deps.env, deps.exists);
+      if (!binary) return;
+      const child = deps.spawn(binary, ["hook", "pi", event], { env: deps.env });
+      child.stdin.write(JSON.stringify(payload));
+      child.stdin.end();
+    } catch {
+      // A missing, broken or slow sidebar never disturbs the session.
+    }
+  };
+
   return {
+    canPublish(): boolean {
+      try {
+        if (!guardsPass()) return false;
+        binary ??= resolveSidebarBinary(deps.env, deps.exists);
+        return binary !== null;
+      } catch {
+        return false;
+      }
+    },
+
     publish(event: string, payload: unknown): void {
       try {
-        if (!sidebarSwitchEnabled(deps.env)) return;
-        // The pane comes from the publisher's own environment; a session
-        // outside tmux has no pane to describe.
-        const pane = deps.env.TMUX_PANE;
-        if (!pane) return;
-        binary ??= resolveSidebarBinary(deps.env, deps.exists);
-        if (!binary) return;
-        const child = deps.spawn(binary, ["hook", "pi", event], { env: deps.env });
-        child.stdin.write(JSON.stringify(payload));
-        child.stdin.end();
+        if (!guardsPass()) return;
+        // setImmediate keeps the relative order: events published in one
+        // handler turn reach the sidebar in the order they were published.
+        setImmediate(() => emit(event, payload));
       } catch {
         // A missing, broken or slow sidebar never disturbs the session.
       }
+    },
+
+    publishSync(event: string, payload: unknown): void {
+      if (!guardsPass()) return;
+      emit(event, payload);
     },
   };
 }
