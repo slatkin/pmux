@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines how a sub-agent session reliably reaches completion: explicit `luvus_done` / `caller_ping`, restored child-side auto-exit for `auto-exit: true` agents, and a child-side completion nudge for sessions that remain open.
+Defines how a sub-agent session reliably reaches completion: explicit `pmux_done` / `caller_ping`, restored child-side auto-exit for `auto-exit: true` agents, and a child-side completion nudge for sessions that remain open.
 
 ## Requirements
 

@@ -1,7 +1,7 @@
 # external-orchestration Specification
 
 ## Purpose
-Defines the contract that lets an orchestrator that is not a pi session, such as Claude Code, run pi subagents in Luvus panes. It covers the packaged skill, how it launches children, how they report and close, and how they resume.
+Defines the contract that lets an orchestrator that is not a pi session, such as Claude Code, run pi subagents in tmux panes. It covers the packaged skill, how it launches children, how they report and close, and how they resume.
 
 ## Requirements
 

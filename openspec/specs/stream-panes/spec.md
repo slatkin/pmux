@@ -1,7 +1,7 @@
 # stream-panes Specification
 
 ## Purpose
-Lets a user watch an agent's thinking and tool usage in dedicated Luvus panes, while the main transcript shows only the conversation.
+Lets a user watch an agent's thinking and tool usage in dedicated tmux panes, while the main transcript shows only the conversation.
 
 ## Requirements
 

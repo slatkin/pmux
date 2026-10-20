@@ -1,7 +1,7 @@
 # luvus-agent-titles Specification
 
 ## Purpose
-Defines the titles that live pi panes and resumable pi sessions show in the Luvus AGENTS sidebar, so you can tell pi sessions apart.
+Defines the pane titles that live pi sessions show in tmux, so you can tell pi sessions apart.
 
 ## Requirements
 

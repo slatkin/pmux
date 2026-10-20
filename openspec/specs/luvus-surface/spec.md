@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines how the subagent surface placement choice (pane or tab) is resolved and persisted: a user-set default in `config.json`, a live `/luvus-surface` slash command in the TUI, and a per-call `surface` tool override.
+Defines how the subagent surface placement choice (pane or tab) is resolved and persisted: a user-set default in `config.json`, a live `/pmux-surface` slash command in the TUI, and a per-call `surface` tool override.
 
 ## Requirements
 

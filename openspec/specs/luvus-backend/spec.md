@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Defines how the subagents extension opens, drives, observes, interrupts and closes subagent panes through the Luvus CLI. Luvus is one of two supported terminal hosts, next to tmux.
+Defines how the subagents extension opens, drives, observes, interrupts and closes subagent panes in the terminal host. The tmux-specific mechanics live in `tmux-backend`.
 
 ## Requirements
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Lets pi agents in one subagent tree (a parent, its running children, and siblings) exchange short text messages while they run. Luvus delivers each message into the target agent's pane.
+Lets pi agents in one subagent tree (a parent, its running children, and siblings) exchange short text messages while they run. tmux delivers each message into the target agent's pane.
 
 ## Requirements
 

@@ -1,7 +1,7 @@
 # portable-launch Specification
 
 ## Purpose
-Launch pi children in Luvus panes through a shell-free, platform-independent Node CLI (`cli.ts`) and launch-spec JSON, so the pi-parent extension and external orchestrators start, resume and close children the same way on Linux, macOS and Windows.
+Launch pi children in tmux panes through a shell-free, platform-independent Node CLI (`cli.ts`) and launch-spec JSON, so the pi-parent extension and external orchestrators start, resume and close children the same way on Linux, macOS and Windows.
 
 ## Requirements
 
