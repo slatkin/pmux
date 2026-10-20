@@ -193,6 +193,19 @@ export function runInPane(surface: string, line: string): void {
   tmux(["send-keys", "-t", surface, "Enter"]);
 }
 
+/**
+ * Read window options for a pane. `display-message` resolves an option on the
+ * pane first and falls through to the pane's window, so window-scope options
+ * (for example the sidebar's `@agent-sidebar-spawned-*` markers) are visible
+ * from any pane of the window. Unset options come back as empty strings.
+ */
+export function readWindowOptions(pane: string, names: string[]): string[] {
+  const template = names.map((name) => `#{${name}}`).join("\n");
+  const out = tmux(["display-message", "-p", "-t", pane, template]);
+  const values = out.split("\n");
+  return names.map((_, i) => values[i] ?? "");
+}
+
 /** Read the visible contents of a pane (sync). */
 export function readScreen(surface: string, lines = 50): string {
   return tailLines(

@@ -18,6 +18,7 @@ import {
   readScreen,
   runInPane,
   agentPrompt,
+  readWindowOptions,
 } from "./tmux.ts";
 import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import {
@@ -60,6 +61,21 @@ import { decodeChildEnv, isSubagentChild } from "./child-env.ts";
 import { loadStatusConfig, loadSurfaceConfig, writeSurfaceConfig } from "./status.ts";
 import { createTurnNotifier } from "./turn-notify.ts";
 import { createLiveTitleController } from "./live-title.ts";
+import {
+  buildActivityLog,
+  buildNotification,
+  buildSessionEnd,
+  buildSessionStart,
+  buildStop,
+  buildStopFailure,
+  buildUserPromptSubmit,
+  createSidebarPublisher,
+  lastAssistantMessage,
+  stopFailureError,
+  worktreeFromOptions,
+  type LastAssistant,
+  type SidebarWorktree,
+} from "./sidebar.ts";
 
 // Survive /reload: the supervisor owns every timer, poll watcher and event
 // wiring this module load started. /reload re-imports this file, so shutting
@@ -84,6 +100,29 @@ function errorText(error: unknown): string {
 
 function getSupervisor(): Supervisor | undefined {
   return (globalThis as any)[SUPERVISOR_KEY] as Supervisor | undefined;
+}
+
+// ── Sidebar worktree markers (design D7) ──
+//
+// The sidebar records the worktree and the branch as window options on the
+// window it spawns an agent into. `display-message` falls through pane scope
+// to window scope, so any pane of that window can read them.
+const SIDEBAR_WORKTREE_OPTION = "@agent-sidebar-spawned-worktree";
+const SIDEBAR_BRANCH_OPTION = "@agent-sidebar-spawned-branch";
+
+/** The pane's sidebar worktree, or undefined when the pane has none. */
+function readSidebarWorktree(pane: string | undefined): SidebarWorktree | undefined {
+  if (!pane) return undefined;
+  try {
+    const [worktree, branch] = readWindowOptions(pane, [
+      SIDEBAR_WORKTREE_OPTION,
+      SIDEBAR_BRANCH_OPTION,
+    ]);
+    return worktreeFromOptions({ worktree, branch });
+  } catch {
+    // A missing or wedged tmux server must not break the session start.
+    return undefined;
+  }
 }
 
 function createSupervisorInstance(): Supervisor {
@@ -471,6 +510,120 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   // First-prompt OSC title for unnamed non-subagent panes. A subagent child
   // sets PI_PMUX_NAME, so it keeps its `<name> — <task>` title.
   createLiveTitleController().register(pi);
+
+  // ── Sidebar publishing (openspec/changes/2026-10-20-sidebar-events) ──
+  //
+  // Every pi session on this machine loads this extension, so this is where
+  // the tmux sidebar's pi producer lives. The publisher is fire and forget
+  // and swallows every failure; see sidebar.ts.
+  const sidebar = createSidebarPublisher();
+
+  // Run-scoped captures: `agent_settled` carries neither the messages nor
+  // the outcome, so the last assistant message is kept from `agent_end` and
+  // the outcome from `agent_before_settle` until the run settles. Tool args
+  // are kept per call id, because `tool_execution_end` does not repeat them.
+  let lastAssistant: LastAssistant | null = null;
+  let settledOutcome: "completed" | "aborted" | "error" | undefined;
+  const runningToolArgs = new Map<string, unknown>();
+
+  pi.on("session_start", (event, ctx) => {
+    sidebar.publish(
+      "session-start",
+      buildSessionStart({
+        source: event?.reason ?? "",
+        cwd: ctx.cwd,
+        sessionId: ctx.sessionManager.getSessionId(),
+        worktree: readSidebarWorktree(process.env.TMUX_PANE),
+      }),
+    );
+  });
+
+  pi.on("input", (event, ctx) => {
+    sidebar.publish(
+      "user-prompt-submit",
+      buildUserPromptSubmit({
+        prompt: event.text,
+        cwd: ctx.cwd,
+        sessionId: ctx.sessionManager.getSessionId(),
+      }),
+    );
+  });
+
+  pi.on("tool_execution_start", (event) => {
+    runningToolArgs.set(event.toolCallId, event.args);
+    sidebar.publish(
+      "activity-log",
+      buildActivityLog({ toolName: event.toolName, toolInput: event.args }),
+    );
+  });
+
+  pi.on("tool_execution_end", (event) => {
+    const toolInput = runningToolArgs.get(event.toolCallId) ?? {};
+    runningToolArgs.delete(event.toolCallId);
+    sidebar.publish(
+      "activity-log",
+      buildActivityLog({
+        toolName: event.toolName,
+        toolInput,
+        toolResponse: event.result,
+      }),
+    );
+  });
+
+  pi.on("agent_end", (event) => {
+    lastAssistant = lastAssistantMessage(event.messages);
+  });
+
+  pi.on("agent_before_settle", (event) => {
+    settledOutcome = event.outcome;
+  });
+
+  pi.on("agent_settled", (_event, ctx) => {
+    const outcome = settledOutcome ?? "completed";
+    if (outcome === "error") {
+      sidebar.publish(
+        "stop-failure",
+        buildStopFailure({
+          error: stopFailureError(lastAssistant),
+          cwd: ctx.cwd,
+          sessionId: ctx.sessionManager.getSessionId(),
+        }),
+      );
+    } else {
+      sidebar.publish(
+        "stop",
+        buildStop({
+          lastAssistantMessage: lastAssistant?.text ?? "",
+          cwd: ctx.cwd,
+          sessionId: ctx.sessionManager.getSessionId(),
+        }),
+      );
+    }
+    lastAssistant = null;
+    settledOutcome = undefined;
+  });
+
+  // A blocking extension prompt (a permission dialog, for example) is a wait
+  // for a human; the end of the wait returns the pane to running without
+  // touching the prompt text it already shows.
+  pi.on("ui_prompt_start", (event) => {
+    sidebar.publish("notification", buildNotification({ waitReason: event.kind }));
+  });
+
+  pi.on("ui_prompt_end", (_event, ctx) => {
+    sidebar.publish(
+      "user-prompt-submit",
+      buildUserPromptSubmit({
+        prompt: "",
+        cwd: ctx.cwd,
+        sessionId: ctx.sessionManager.getSessionId(),
+      }),
+    );
+  });
+
+  pi.on("session_shutdown", (event) => {
+    sidebar.publish("session-end", buildSessionEnd({ endReason: event?.reason ?? "" }));
+  });
 
   pi.on("session_start", (_event, ctx) => {
     latestCtx = ctx;
