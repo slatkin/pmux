@@ -9,8 +9,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as subagentsModule from "../pi-extension/luvus/index.ts";
-import { __setTmuxExecForTests__ } from "../pi-extension/luvus/tmux.ts";
+import * as subagentsModule from "../pi-extension/pmux/index.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 import { createEnvGuard, createMockApi, type Handler, type Notification } from "./stream-fakes.ts";
 
 export interface StreamCommand {

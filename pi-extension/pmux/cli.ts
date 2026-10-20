@@ -43,7 +43,7 @@ import { removeChildStatus, statusFilePath, type ChildStatusRecord } from "./sta
 import { slugifyName } from "./slug.ts";
 import { encodeChildEnv, resolveDenyTools } from "./child-env.ts";
 
-/** Absolute path to `pi-extension/luvus`. */
+/** Absolute path to `pi-extension/pmux`. */
 const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 
 /** Pane-side entry point; the pane runs this file with `node`. */
@@ -275,7 +275,7 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
       "--session",
       sessionFile,
       "-e",
-      join(SUBAGENTS_DIR, "luvus-done.ts"),
+      join(SUBAGENTS_DIR, "pmux-done.ts"),
       "--model",
       definition.thinking ? `${definition.model}:${definition.thinking}` : definition.model,
       "--append-system-prompt",

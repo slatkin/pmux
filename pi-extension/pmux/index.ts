@@ -81,7 +81,7 @@ import { createLiveTitleController } from "./live-title.ts";
 // coexist in one process (e.g. a global install plus the project copy), and a
 // shared key would let one copy shut down the other's supervisor.
 const INSTANCE_KEY = `#${import.meta.url}`;
-const SUPERVISOR_KEY = Symbol.for(`pi-luvus/supervisor${INSTANCE_KEY}`);
+const SUPERVISOR_KEY = Symbol.for(`pmux/supervisor${INSTANCE_KEY}`);
 
 /** The pi that registration bound last; the supervisor's deps.send targets it. */
 let activePi: ExtensionAPI | null = null;
@@ -111,7 +111,7 @@ export interface StreamRuntime {
   tui?: unknown;
 }
 
-const STREAM_KEY = Symbol.for(`pi-luvus/streams${INSTANCE_KEY}`);
+const STREAM_KEY = Symbol.for(`pmux/streams${INSTANCE_KEY}`);
 
 /**
  * Close what the previous module load left behind: its installed projection,
@@ -430,7 +430,7 @@ function createSupervisorInstance(): Supervisor {
       activePi?.sendMessage(message, options);
     },
     ui: () => latestCtx,
-    luvus: {
+    pmux: {
       createSurface,
       runInPane,
       closeSurface,
@@ -789,7 +789,7 @@ export const __test__ = {
 
 /**
  * True when this pi process is a subagent child: it carries a sidecar session
- * path, and its launch args load `luvus-done.ts`. That extension owns the
+ * path, and its launch args load `pmux-done.ts`. That extension owns the
  * child's status reporter. A second reporter would keep its own terminal latch,
  * so this registration is skipped here to keep one reporter per child. A plain
  * pane (no child env) registers as before.

@@ -6,12 +6,12 @@ import {
   turnLabel,
   turnOutcome,
   type TurnNotifierDeps,
-} from "../pi-extension/luvus/turn-notify.ts";
+} from "../pi-extension/pmux/turn-notify.ts";
 import {
   isPaneFocusedAsync,
   pushNotificationAsync,
   __setTmuxExecForTests__,
-} from "../pi-extension/luvus/tmux.ts";
+} from "../pi-extension/pmux/tmux.ts";
 
 // A suite run inside a real pi/tmux pane inherits live identity vars. Clear
 // them so no test can reach real tmux; each test sets what it needs.

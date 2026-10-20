@@ -14,8 +14,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /** Paths that mark a package root, relative to it. */
-const CLI_RELATIVE = join("pi-extension", "luvus", "cli.ts");
-const DONE_RELATIVE = join("pi-extension", "luvus", "luvus-done.ts");
+const CLI_RELATIVE = join("pi-extension", "pmux", "cli.ts");
+const DONE_RELATIVE = join("pi-extension", "pmux", "pmux-done.ts");
 
 /** Install command named by the not-found error. */
 const INSTALL_COMMAND = "pi install git:github.com/slatkin/pi-luvus";
@@ -48,7 +48,7 @@ function agentConfigDir(env: NodeJS.ProcessEnv): string {
 export function packageRootCandidates(shimPath: string, env: NodeJS.ProcessEnv): string[] {
   const candidates: string[] = [];
   if (env.PI_PMUX_DIR) candidates.push(env.PI_PMUX_DIR);
-  // This file lives at <root>/skills/pi-luvus/launch.ts.
+  // This file lives at <root>/skills/pmux/launch.ts.
   candidates.push(resolve(dirname(resolved(shimPath)), "..", ".."));
   candidates.push(join(agentConfigDir(env), "git", "github.com", "slatkin", "pi-luvus"));
   return candidates;

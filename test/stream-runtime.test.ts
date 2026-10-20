@@ -6,9 +6,9 @@
 import "./host-env.ts";
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { retireStreamRuntime, type StreamRuntime } from "../pi-extension/luvus/index.ts";
-import { __setTmuxExecForTests__ } from "../pi-extension/luvus/tmux.ts";
-import type { StreamHub } from "../pi-extension/luvus/stream-state.ts";
+import { retireStreamRuntime, type StreamRuntime } from "../pi-extension/pmux/index.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
+import type { StreamHub } from "../pi-extension/pmux/stream-state.ts";
 
 describe("stream runtime reload teardown", () => {
   afterEach(() => __setTmuxExecForTests__(null));

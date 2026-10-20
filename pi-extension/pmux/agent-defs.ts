@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Absolute path to `pi-extension/luvus`. https://github.com/nodejs/node/issues/37845 */
+/** Absolute path to `pi-extension/pmux`. https://github.com/nodejs/node/issues/37845 */
 const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 
 export type SubagentSessionMode = "standalone" | "lineage-only" | "fork";
@@ -130,7 +130,7 @@ export function loadAgentDefaults(agentName: string, cwd = process.cwd()): Agent
  *
  * Pi 0.70+ applies --tools to built-in, extension, and custom tools. If a
  * subagent definition restricts tools to e.g. "read,bash,write", the child
- * control tools from luvus-done.ts would otherwise be hidden, leaving a
+ * control tools from pmux-done.ts would otherwise be hidden, leaving a
  * manually resumed or user-touched subagent unable to call pmux_done.
  * A role without a `tools` line falls back to DEFAULT_SUBAGENT_TOOLS.
  */

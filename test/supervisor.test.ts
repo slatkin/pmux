@@ -23,25 +23,25 @@ import {
   type SteerMessage,
   type SupervisorContext,
   type SupervisorDeps,
-} from "../pi-extension/luvus/supervisor.ts";
-import { paneCommandLine, readLaunchSpec } from "../pi-extension/luvus/launch.ts";
-import { DEFAULT_STATUS_LINE_LIMIT } from "../pi-extension/luvus/status.ts";
+} from "../pi-extension/pmux/supervisor.ts";
+import { paneCommandLine, readLaunchSpec } from "../pi-extension/pmux/launch.ts";
+import { DEFAULT_STATUS_LINE_LIMIT } from "../pi-extension/pmux/status.ts";
 import {
   LAUNCH_RECORD_VERSION,
   getLaunchRecordFile,
   readLaunchRecord,
   writeLaunchRecord,
   type LaunchRecord,
-} from "../pi-extension/luvus/launch-record.ts";
-import type { PollResult } from "../pi-extension/luvus/exit-sidecar.ts";
+} from "../pi-extension/pmux/launch-record.ts";
+import type { PollResult } from "../pi-extension/pmux/exit-sidecar.ts";
 import {
   classifyStatus,
   createStatusState,
   observeStatus,
   type StatusSnapshot,
-} from "../pi-extension/luvus/status.ts";
+} from "../pi-extension/pmux/status.ts";
 
-const SUBAGENTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "pi-extension", "luvus");
+const SUBAGENTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "pi-extension", "pmux");
 const CLI = join(SUBAGENTS_DIR, "cli.ts");
 
 const SESSION_HEADER = { type: "session", id: "sess-001", version: 3 };
@@ -59,7 +59,7 @@ const ASSISTANT_MSG = {
   message: { role: "assistant", content: [{ type: "text", text: "Here is my plan..." }] },
 };
 
-type LuvusPoll = SupervisorDeps["luvus"]["pollForExit"];
+type TmuxPoll = SupervisorDeps["pmux"]["pollForExit"];
 
 interface TestEnv {
   dir: string;
@@ -69,7 +69,7 @@ interface TestEnv {
 
 /**
  * Temp session and agent roots with fake LUVUS_* values. No test here talks to
- * Luvus: every deps.luvus operation is injected below.
+ * Surface: every deps.pmux operation is injected below.
  */
 function createEnv(): TestEnv {
   const dir = mkdtempSync(join(tmpdir(), "supervisor-test-"));
@@ -108,10 +108,10 @@ function writeAgentFile(agentsDir: string, name: string, frontmatter: string, bo
   writeFileSync(join(agentsDir, `${name}.md`), `---\n${frontmatter}\n---\n\n${body}\n`);
 }
 
-function createPollQueue(override?: LuvusPoll) {
+function createPollQueue(override?: TmuxPoll) {
   const pending: Array<(result: PollResult) => void> = [];
   const signals: AbortSignal[] = [];
-  const poll: LuvusPoll =
+  const poll: TmuxPoll =
     override ??
     ((_surface, signal) => {
       signals.push(signal);
@@ -136,7 +136,7 @@ function createPollQueue(override?: LuvusPoll) {
 interface SupervisorOptions {
   closeSurfaceThrows?: boolean;
   ui?: boolean;
-  pollForExit?: LuvusPoll;
+  pollForExit?: TmuxPoll;
   onRunInPane?: (line: string) => void;
   /** Throw on the first message that matches, to exercise the watcher error path. */
   failSendOnce?: (message: SteerMessage) => boolean;
@@ -165,7 +165,7 @@ function makeSupervisor(env: TestEnv, options: SupervisorOptions = {}) {
             ui: { setWidget() {} },
           } as unknown as ReturnType<SupervisorDeps["ui"]>)
         : null,
-    luvus: {
+    pmux: {
       createSurface: (name, placement) => {
         surfaces.push({ name, placement });
         return String(nextPane++);
@@ -378,7 +378,7 @@ describe("supervisor launch", () => {
       );
 
       // The spec is written where the old shell script went, and it is no script.
-      const scriptsDir = join(env.dir, "sessions", "artifacts", "sess-001", "luvus-scripts");
+      const scriptsDir = join(env.dir, "sessions", "artifacts", "sess-001", "pmux-scripts");
       assert.deepEqual(
         readFileNames(scriptsDir).filter((file) => file.endsWith(".sh")),
         [],
@@ -451,7 +451,7 @@ describe("supervisor launch", () => {
           "--session",
           running.sessionFile,
           "-e",
-          join(SUBAGENTS_DIR, "luvus-done.ts"),
+          join(SUBAGENTS_DIR, "pmux-done.ts"),
           "--model",
           "test-model",
           "--append-system-prompt",
@@ -611,7 +611,7 @@ describe("supervisor resume", () => {
 
       // The prompt file holds the messaging hint and then the message.
       const promptArg = spec.args.at(-1) ?? "";
-      assert.match(promptArg, /^@.*luvus-resume.*\.md$/);
+      assert.match(promptArg, /^@.*pmux-resume.*\.md$/);
       const prompt = readFileSync(promptArg.slice(1), "utf8");
       assert.match(prompt, /You can message `parent` with pmux_message/);
       assert.ok(prompt.indexOf("You can message") < prompt.indexOf("Continue the work"));

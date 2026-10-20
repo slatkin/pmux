@@ -25,22 +25,22 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import * as subagentsModule from "../pi-extension/luvus/index.ts";
+import * as subagentsModule from "../pi-extension/pmux/index.ts";
 
 import {
   getNewEntries,
   findLastAssistantMessage,
   seedSubagentSessionFile,
-} from "../pi-extension/luvus/session.ts";
+} from "../pi-extension/pmux/session.ts";
 
-import { interpretExitSidecar } from "../pi-extension/luvus/exit-sidecar.ts";
-import { __setTmuxExecForTests__ } from "../pi-extension/luvus/tmux.ts";
-import { readLaunchSpec } from "../pi-extension/luvus/launch.ts";
+import { interpretExitSidecar } from "../pi-extension/pmux/exit-sidecar.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
+import { readLaunchSpec } from "../pi-extension/pmux/launch.ts";
 import {
   LAUNCH_RECORD_VERSION,
   getLaunchRecordFile,
   writeLaunchRecord,
-} from "../pi-extension/luvus/launch-record.ts";
+} from "../pi-extension/pmux/launch-record.ts";
 import {
   advanceStatusState,
   buildActivityLabel,
@@ -59,25 +59,25 @@ import {
   getDefaultConfigPath,
   loadSurfaceConfig,
   writeSurfaceConfig,
-} from "../pi-extension/luvus/status.ts";
+} from "../pi-extension/pmux/status.ts";
 import {
   createSubagentActivityRecorder,
   getSubagentActivityFile,
   readSubagentActivityFile,
-} from "../pi-extension/luvus/activity.ts";
+} from "../pi-extension/pmux/activity.ts";
 import {
   shouldMarkUserTookOver,
   shouldAutoExitOnAgentEnd,
   shouldScheduleAgentEndNudge,
   findLatestAssistantError,
-} from "../pi-extension/luvus/luvus-done.ts";
+} from "../pi-extension/pmux/pmux-done.ts";
 import {
   DEFAULT_SUBAGENT_TOOLS,
   agentDefinitionPaths,
   getBundledAgentsDir,
   parseAgentDefinition,
-} from "../pi-extension/luvus/agent-defs.ts";
-import subagentDoneExtension from "../pi-extension/luvus/luvus-done.ts";
+} from "../pi-extension/pmux/agent-defs.ts";
+import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
 // --- Fixture ---
 // Captured live via `$LUVUS_BIN_PATH pane split $LUVUS_PANE_ID --no-focus` on 2026-09-28
 // (design.md Decision 3): the new pane id is `result.pane`.
@@ -1638,7 +1638,7 @@ describe("subagent discovery", () => {
     });
   });
 });
-describe("luvus-done.ts", () => {
+describe("pmux-done.ts", () => {
   describe("shouldMarkUserTookOver", () => {
     it("ignores the initial injected task before the first agent run", () => {
       assert.equal(shouldMarkUserTookOver(false), false);
@@ -1711,7 +1711,7 @@ describe("luvus-done.ts", () => {
   });
 });
 
-describe("luvus-done nudge", () => {
+describe("pmux-done nudge", () => {
   /** Load the child extension with a mock pi API under the given env. */
   function loadChildExtension(env: Record<string, string | undefined>) {
     const saved = new Map(Object.keys(env).map((k) => [k, process.env[k]]));
@@ -2374,7 +2374,7 @@ describe("subagent activity snapshots", () => {
 
   it("rejects malformed activity fields used by classification and rendering", () => {
     withTempDir((dir) => {
-      mkdirSync(join(dir, "luvus-activity"), { recursive: true });
+      mkdirSync(join(dir, "pmux-activity"), { recursive: true });
       const cases = [
         { activeSince: "bad" },
         { waitingSince: "bad" },
@@ -2558,7 +2558,7 @@ describe("subagent messaging", () => {
   });
 
   it("includes PI_PMUX_PARENT_ROSTER in the spawn env builder", () => {
-    const rosterFile = "/s/artifacts/parent/luvus-roster.json";
+    const rosterFile = "/s/artifacts/parent/pmux-roster.json";
     const spawn = testApi().buildSpawnEnvParts({
       name: "Worker",
       subagentSessionFile: "/s/worker.jsonl",

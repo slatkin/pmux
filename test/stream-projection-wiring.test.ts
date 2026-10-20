@@ -10,7 +10,7 @@ import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { connect, type Socket } from "node:net";
 import { Container } from "@earendil-works/pi-tui";
-import { StreamFilterView } from "../pi-extension/luvus/stream-projection.ts";
+import { StreamFilterView } from "../pi-extension/pmux/stream-projection.ts";
 import { assistant, chatWith, regularLayout, type FakeTui } from "./stream-fakes.ts";
 import { createStreamHarness } from "./stream-harness.ts";
 

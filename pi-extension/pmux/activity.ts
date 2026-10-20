@@ -115,7 +115,7 @@ const KNOWN_EVENTS = new Set<SubagentActivityEvent>([
 const MAX_ACTIVITY_STRING_LENGTH = 200;
 
 export function getSubagentActivityFile(artifactDir: string, runningChildId: string): string {
-  return join(artifactDir, "luvus-activity", `${runningChildId}.json`);
+  return join(artifactDir, "pmux-activity", `${runningChildId}.json`);
 }
 
 function requireObject(value: unknown): Record<string, unknown> | null {

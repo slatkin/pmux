@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { main } from "../pi-extension/luvus/cli.ts";
-import { statusFilePath, writeChildStatus } from "../pi-extension/luvus/status-file.ts";
+import { main } from "../pi-extension/pmux/cli.ts";
+import { statusFilePath, writeChildStatus } from "../pi-extension/pmux/status-file.ts";
 
 /** One `wait` invocation with captured stdout and stderr. */
 async function runWait(

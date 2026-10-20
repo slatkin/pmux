@@ -7,7 +7,7 @@ import {
   decideGoneAction,
   decideIdleAction,
   type IdleWatchState,
-} from "../pi-extension/luvus/idle-watchdog.ts";
+} from "../pi-extension/pmux/idle-watchdog.ts";
 
 const T0 = 1_000_000;
 

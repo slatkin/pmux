@@ -10,8 +10,8 @@ import {
   defaultSocketDir,
   type StreamHub,
   type StreamName,
-} from "../pi-extension/luvus/stream-state.ts";
-import { registerStreamEventHandlers } from "../pi-extension/luvus/index.ts";
+} from "../pi-extension/pmux/stream-state.ts";
+import { registerStreamEventHandlers } from "../pi-extension/pmux/index.ts";
 
 function lineReader(socket: Socket) {
   let buffer = "";

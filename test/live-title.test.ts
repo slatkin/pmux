@@ -15,7 +15,7 @@ import {
   firstUserPromptText,
   __resetLiveTitleForTests__,
   type SessionEntryLike,
-} from "../pi-extension/luvus/live-title.ts";
+} from "../pi-extension/pmux/live-title.ts";
 
 interface MockCtx {
   titles: string[];

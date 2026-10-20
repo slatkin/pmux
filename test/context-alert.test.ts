@@ -13,8 +13,8 @@ import {
   parseContextAlertConfig,
   shouldAlert,
   DEFAULT_CONTEXT_ALERT_THRESHOLD_TOKENS,
-} from "../pi-extension/luvus/context-alert.ts";
-import { loadStatusConfig, parseStatusConfig } from "../pi-extension/luvus/status.ts";
+} from "../pi-extension/pmux/context-alert.ts";
+import { loadStatusConfig, parseStatusConfig } from "../pi-extension/pmux/status.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -211,7 +211,7 @@ describe("context-alert handoff log", () => {
   });
 });
 
-describe("context-alert in the child (luvus-done)", () => {
+describe("context-alert in the child (pmux-done)", () => {
   let freshImports = 0;
 
   interface ChildHarness {
@@ -220,7 +220,7 @@ describe("context-alert in the child (luvus-done)", () => {
     sentMessages: Array<{ message: string; opts?: any }>;
     sessionFile: string;
     configPath: string;
-    /** The freshly imported luvus-done module instance (for its test exports). */
+    /** The freshly imported pmux-done module instance (for its test exports). */
     mod: any;
     restore: () => void;
   }
@@ -276,7 +276,7 @@ describe("context-alert in the child (luvus-done)", () => {
     let mod: any;
     try {
       mod = await import(
-        `${pathToFileURL(join(REPO_ROOT, "pi-extension", "luvus", "luvus-done.ts")).href}?ctxalert=${++freshImports}`
+        `${pathToFileURL(join(REPO_ROOT, "pi-extension", "pmux", "pmux-done.ts")).href}?ctxalert=${++freshImports}`
       );
       (mod.default as (pi: unknown) => void)(mockPi);
     } catch (error) {
@@ -438,7 +438,7 @@ describe("context-alert in the child (luvus-done)", () => {
       assert.equal(sentMessages.length, 0);
 
       const { loadContextAlertConfig } = await import(
-        `${pathToFileURL(join(REPO_ROOT, "pi-extension", "luvus", "luvus-done.ts")).href}?ctxalert-loader`
+        `${pathToFileURL(join(REPO_ROOT, "pi-extension", "pmux", "pmux-done.ts")).href}?ctxalert-loader`
       );
       assert.deepEqual(loadContextAlertConfig(configPath), {
         enabled: false,

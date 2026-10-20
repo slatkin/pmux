@@ -24,7 +24,7 @@ import {
   runInPane,
   sendEscape,
   splitPane,
-} from "../pi-extension/luvus/tmux.ts";
+} from "../pi-extension/pmux/tmux.ts";
 
 /** Record every tmux call and answer with `reply`. */
 function stub(reply: (args: string[]) => string): string[][] {

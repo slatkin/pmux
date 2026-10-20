@@ -83,7 +83,7 @@ import {
   type IdleWatchState,
 } from "./idle-watchdog.ts";
 
-/** Absolute path to `pi-extension/luvus`. https://github.com/nodejs/node/issues/37845 */
+/** Absolute path to `pi-extension/pmux`. https://github.com/nodejs/node/issues/37845 */
 const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 
 /** Pane-side entry point every pi-parent launch spec runs through. */
@@ -209,7 +209,7 @@ export interface RunningSubagent {
   sessionFile: string;
   /** Session entries this run starts after: 0 for a spawn, N for a resume. */
   entryCountBefore: number;
-  /** Launch-spec path written under `<artifactDir>/luvus-scripts/`. */
+  /** Launch-spec path written under `<artifactDir>/pmux-scripts/`. */
   launchScriptFile?: string;
   activityFile?: string;
   activity?: SubagentActivityState;
@@ -259,8 +259,8 @@ export interface SupervisorDeps {
   send: SendFn;
   /** Latest ExtensionContext for widget updates, or null before session_start. */
   ui: () => ExtensionContext | null;
-  /** Luvus surface operations. */
-  luvus: {
+  /** Surface operations for the pane host (tmux). */
+  pmux: {
     createSurface: typeof createSurface;
     runInPane: typeof runInPane;
     closeSurface: typeof closeSurface;
@@ -438,9 +438,9 @@ export function getArtifactDir(sessionDir: string, sessionId: string): string {
   return join(sessionDir, "artifacts", sessionId);
 }
 
-/** Where this process publishes its roster: `<artifactDir>/luvus-roster.json`. */
+/** Where this process publishes its roster: `<artifactDir>/pmux-roster.json`. */
 export function getRosterFile(artifactDir: string): string {
-  return join(artifactDir, "luvus-roster.json");
+  return join(artifactDir, "pmux-roster.json");
 }
 
 /** The file a child appends parent-bound messages to. */
@@ -968,7 +968,7 @@ function buildPiLaunch(request: BackendLaunchRequest): BackendLaunch {
   // Build pi argv (no shell: every value stays exactly one argument).
   const piArgs: string[] = ["--session", run.sessionFile];
 
-  const subagentDonePath = join(SUBAGENTS_DIR, "luvus-done.ts");
+  const subagentDonePath = join(SUBAGENTS_DIR, "pmux-done.ts");
   piArgs.push("-e", subagentDonePath);
 
   if (record.model) {
@@ -1022,7 +1022,7 @@ function buildPiLaunch(request: BackendLaunchRequest): BackendLaunch {
     if (resume.message) {
       const promptPath = writeRunContextFile(
         request.artifactDir,
-        "luvus-resume",
+        "pmux-resume",
         slugifyName(record.name, { hyphenate: false }) || "resume",
         `${buildLaunchMessagingHint(request.siblingNames)}\n\n${resume.message}`,
       );
@@ -1510,7 +1510,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     const now = Date.now();
     observeRunningSubagent(running, now);
 
-    const interruption = requestSubagentInterrupt(running, sendEscapeKey ?? deps.luvus.sendEscape);
+    const interruption = requestSubagentInterrupt(running, sendEscapeKey ?? deps.pmux.sendEscape);
     if ("error" in interruption) {
       return {
         content: [{ type: "text" as const, text: interruption.error }],
@@ -1543,7 +1543,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     // A resume reuses the session file, so a stale status from an earlier run
     // must not survive into this one.
     if (request.run.sessionFile) removeChildStatus(request.run.sessionFile);
-    deps.luvus.runInPane(request.run.surface, paneLine);
+    deps.pmux.runInPane(request.run.surface, paneLine);
 
     runningSubagents.set(running.id, running);
     writeRoster();
@@ -1600,7 +1600,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     // Compute the launch-spec path and its pane line before any pane exists, so
     // an unsafe path fails without leaving an empty pane behind.
     const launchBase = slugifyName(params.name || "subagent", { hyphenate: false });
-    const launchScriptFile = join(artifactDir, "luvus-scripts", `${launchBase}-${id}.json`);
+    const launchScriptFile = join(artifactDir, "pmux-scripts", `${launchBase}-${id}.json`);
     const paneLine = paneCommandLine(SUBAGENTS_CLI_PATH, launchScriptFile);
 
     const launchBehavior = resolveLaunchBehavior(params, agentDefs);
@@ -1630,7 +1630,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     // Use pre-created surface (parallel mode) or create a new one.
     // For new surfaces, pause briefly so the shell is ready before sending the command.
     const surfacePreCreated = !!options?.surface;
-    const surface = options?.surface ?? deps.luvus.createSurface(params.name, options?.placement);
+    const surface = options?.surface ?? deps.pmux.createSurface(params.name, options?.placement);
     if (!surfacePreCreated) {
       await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
     }
@@ -1677,7 +1677,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
   /** Close a finished run's pane, drop its entry and refresh the roster. */
   function releaseRun(running: RunningSubagent): void {
     try {
-      deps.luvus.closeSurface(running.surface);
+      deps.pmux.closeSurface(running.surface);
     } catch {
       // The pane may already be gone (closed by hand); the run's result stands.
     }
@@ -1704,7 +1704,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     try {
       // Watch the pane: the sidecar file is the primary signal, the terminal
       // sentinel the fallback for a child that died without writing one.
-      const result = await deps.luvus.pollForExit(surface, pollSignal, {
+      const result = await deps.pmux.pollForExit(surface, pollSignal, {
         interval: 1000,
         sessionFile,
         sentinelFile: running.sentinelFile,
@@ -1720,7 +1720,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
         onTick() {
           observeRunningSubagent(running);
           deliverParentMessages(running, send);
-          runIdleWatchdog(running, deps.luvus.agentPrompt);
+          runIdleWatchdog(running, deps.pmux.agentPrompt);
         },
       });
       // A child can write its last message just before exiting; deliver it before
@@ -1730,7 +1730,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
 
       const backend = backendFor(running);
-      const extracted = backend.extractResult(running, result, deps.luvus.readScreen);
+      const extracted = backend.extractResult(running, result, deps.pmux.readScreen);
       const afterExit = backend.afterExit(running);
 
       releaseRun(running);
@@ -1963,12 +1963,12 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       // exists, so an unsafe path fails without leaving an empty pane behind.
       const launchScriptFile = join(
         artifactDir,
-        "luvus-scripts",
+        "pmux-scripts",
         `${slugifyName(name, { fallback: "resume", hyphenate: false })}-resume-${Date.now()}.json`,
       );
       const paneLine = paneCommandLine(SUBAGENTS_CLI_PATH, launchScriptFile);
 
-      const surface = deps.luvus.createSurface(name, options?.placement);
+      const surface = deps.pmux.createSurface(name, options?.placement);
       await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
 
       // Mirror the spawn's cwd lookup: only a record that names a cwd can have

@@ -33,11 +33,11 @@ import {
   validateLaunchSpec,
   writeLaunchSpec,
   type LaunchSpec,
-} from "../pi-extension/luvus/launch.ts";
-import { runSpec } from "../pi-extension/luvus/run.ts";
-import { main } from "../pi-extension/luvus/cli.ts";
-import { __setTmuxExecForTests__ } from "../pi-extension/luvus/tmux.ts";
-import { main as shimMain } from "../skills/pi-luvus/launch.ts";
+} from "../pi-extension/pmux/launch.ts";
+import { runSpec } from "../pi-extension/pmux/run.ts";
+import { main } from "../pi-extension/pmux/cli.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
+import { main as shimMain } from "../skills/pmux/launch.ts";
 
 function withTempDir(run: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "pi-launch-test-"));
@@ -581,7 +581,7 @@ describe("runSpec close on done", () => {
 // ─── cli.ts ─────────────────────────────────────────────────────────────────
 
 const REPO_ROOT = resolve(TEST_DIR, "..");
-const CLI = join(REPO_ROOT, "pi-extension", "luvus", "cli.ts");
+const CLI = join(REPO_ROOT, "pi-extension", "pmux", "cli.ts");
 
 let workdir = "";
 const paneCalls: string[] = [];
@@ -776,7 +776,7 @@ describe("cli.ts start", () => {
   });
 
   it("ignores the Luvus variables when tmux is absent", async () => {
-    const dir = mkdtempSync(join(workdir, "luvus-vars-"));
+    const dir = mkdtempSync(join(workdir, "pmux-vars-"));
     const cwd = mkdtempSync(join(dir, "cwd-"));
     const scratch = join(dir, "scratch");
     const message = await startFailure({
@@ -842,7 +842,7 @@ describe("cli.ts start", () => {
     assert.equal(argValue(spec.args, "--session"), res.json.session);
     assert.equal(
       argValue(spec.args, "-e"),
-      join(REPO_ROOT, "pi-extension", "luvus", "luvus-done.ts"),
+      join(REPO_ROOT, "pi-extension", "pmux", "pmux-done.ts"),
     );
     assert.equal(argValue(spec.args, "--model"), "test-model:high");
     assert.equal(argValue(spec.args, "--append-system-prompt"), res.rolePromptPath);
@@ -1279,11 +1279,11 @@ describe("cli.ts last-message", () => {
   });
 });
 
-// ─── skills/pi-luvus/launch.ts ──────────────────────────────────────────
+// ─── skills/pmux/launch.ts ──────────────────────────────────────────
 
-const SHIM = join(REPO_ROOT, "skills", "pi-luvus", "launch.ts");
-const SHIM_CLI = join(REPO_ROOT, "pi-extension", "luvus", "cli.ts");
-const SHIM_DONE = join(REPO_ROOT, "pi-extension", "luvus", "luvus-done.ts");
+const SHIM = join(REPO_ROOT, "skills", "pmux", "launch.ts");
+const SHIM_CLI = join(REPO_ROOT, "pi-extension", "pmux", "cli.ts");
+const SHIM_DONE = join(REPO_ROOT, "pi-extension", "pmux", "pmux-done.ts");
 const GIT_INSTALL_RELATIVE = join("git", "github.com", "slatkin", "pi-luvus");
 
 interface ShimModule {
@@ -1300,9 +1300,9 @@ async function importShim(path: string): Promise<ShimModule> {
   return (await import(`${pathToFileURL(path).href}?shim=${++shimImports}`)) as ShimModule;
 }
 
-/** Copy the shipped shim into its own `<root>/skills/pi-luvus/` tree. */
+/** Copy the shipped shim into its own `<root>/skills/pmux/` tree. */
 function copyShim(root: string): string {
-  const dir = join(root, "skills", "pi-luvus");
+  const dir = join(root, "skills", "pmux");
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "launch.ts");
   copyFileSync(SHIM, path);
@@ -1311,18 +1311,18 @@ function copyShim(root: string): string {
 
 /**
  * A fake extension root with this checkout's behaviour: a copy of
- * `pi-extension/luvus` whose `tmux.ts` re-exports the checkout's own
+ * `pi-extension/pmux` whose `tmux.ts` re-exports the checkout's own
  * module, so this process's tmux seam still sees the pane calls. Returns the
  * resolved root.
  */
 function makeInstall(root: string): string {
   mkdirSync(join(root, "pi-extension"), { recursive: true });
-  cpSync(join(REPO_ROOT, "pi-extension", "luvus"), join(root, "pi-extension", "luvus"), {
+  cpSync(join(REPO_ROOT, "pi-extension", "pmux"), join(root, "pi-extension", "pmux"), {
     recursive: true,
   });
-  const checkoutTmux = pathToFileURL(join(REPO_ROOT, "pi-extension", "luvus", "tmux.ts")).href;
+  const checkoutTmux = pathToFileURL(join(REPO_ROOT, "pi-extension", "pmux", "tmux.ts")).href;
   writeFileSync(
-    join(root, "pi-extension", "luvus", "tmux.ts"),
+    join(root, "pi-extension", "pmux", "tmux.ts"),
     `export * from ${JSON.stringify(checkoutTmux)};\n`,
   );
   return realpathSync(root);
@@ -1335,7 +1335,7 @@ function startCwd(caseDir: string): string {
   return cwd;
 }
 
-describe("skills/pi-luvus/launch.ts", () => {
+describe("skills/pmux/launch.ts", () => {
   it("prefers PI_PMUX_DIR over the checkout", async () => {
     const caseDir = mkdtempSync(join(workdir, "shim-override-"));
     const home = mkdtempSync(join(caseDir, "home-"));
@@ -1348,12 +1348,12 @@ describe("skills/pi-luvus/launch.ts", () => {
     // spec and its sentinel is on -e.
     assert.equal(
       argValue(started.spec.args, "-e"),
-      join(install, "pi-extension", "luvus", "luvus-done.ts"),
+      join(install, "pi-extension", "pmux", "pmux-done.ts"),
     );
     assert.deepEqual(paneCalls, [
       "split-window -d -h -t %21 -P -F #{pane_id}",
       "select-pane -t %24 -T scout-1",
-      `send-keys -t %24 -l ${paneCommandLine(join(install, "pi-extension", "luvus", "cli.ts"), started.json.launch, started.promptPath)}`,
+      `send-keys -t %24 -l ${paneCommandLine(join(install, "pi-extension", "pmux", "cli.ts"), started.json.launch, started.promptPath)}`,
       "send-keys -t %24 Enter",
     ]);
   });
@@ -1428,10 +1428,10 @@ describe("skills/pi-luvus/launch.ts", () => {
       cwd: startCwd(caseDir),
       env: { HOME: home },
     });
-    const installCli = join(install, "pi-extension", "luvus", "cli.ts");
+    const installCli = join(install, "pi-extension", "pmux", "cli.ts");
     assert.equal(
       argValue(started.spec.args, "-e"),
-      join(install, "pi-extension", "luvus", "luvus-done.ts"),
+      join(install, "pi-extension", "pmux", "pmux-done.ts"),
     );
     assert.deepEqual(paneCalls, [
       "split-window -d -h -t %21 -P -F #{pane_id}",
@@ -1444,7 +1444,7 @@ describe("skills/pi-luvus/launch.ts", () => {
 
 // ─── plugin/hooks/on-stop.js ─────────────────────────────────────────────────
 
-const HOOK = join(REPO_ROOT, "pi-extension", "luvus", "plugin", "hooks", "on-stop.js");
+const HOOK = join(REPO_ROOT, "pi-extension", "pmux", "plugin", "hooks", "on-stop.js");
 
 interface HookOutcome {
   status: number;

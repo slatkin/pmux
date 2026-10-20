@@ -8,10 +8,10 @@ import {
   encodeChildEnv,
   isSubagentChild,
   type ChildEnv,
-} from "../pi-extension/luvus/child-env.ts";
-import { buildSpawnEnvParts, resolveDenyTools } from "../pi-extension/luvus/supervisor.ts";
-import subagentsExtension from "../pi-extension/luvus/index.ts";
-import subagentDoneExtension from "../pi-extension/luvus/luvus-done.ts";
+} from "../pi-extension/pmux/child-env.ts";
+import { buildSpawnEnvParts, resolveDenyTools } from "../pi-extension/pmux/supervisor.ts";
+import subagentsExtension from "../pi-extension/pmux/index.ts";
+import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
 
 test("round-trips a full ChildEnv", () => {
   const full: ChildEnv = {
@@ -66,7 +66,7 @@ test("isSubagentChild is true only when PI_PMUX_SESSION is set", () => {
   assert.equal(isSubagentChild({}), false);
 });
 
-/** Just enough of the extension API for `index.ts` and `luvus-done.ts`. */
+/** Just enough of the extension API for `index.ts` and `pmux-done.ts`. */
 function makeMockPi() {
   const registeredTools: Array<any> = [];
   return {

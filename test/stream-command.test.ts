@@ -6,7 +6,7 @@
  */
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { tailerCommandLine } from "../pi-extension/luvus/launch.ts";
+import { tailerCommandLine } from "../pi-extension/pmux/launch.ts";
 import { createStreamHarness } from "./stream-harness.ts";
 
 describe("stream command", () => {

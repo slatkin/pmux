@@ -9,18 +9,18 @@ import {
   removeChildStatus,
   statusFilePath,
   writeChildStatus,
-} from "../pi-extension/luvus/status-file.ts";
-import subagentDoneExtension from "../pi-extension/luvus/luvus-done.ts";
-import { runSpec } from "../pi-extension/luvus/run.ts";
-import { main } from "../pi-extension/luvus/cli.ts";
-import { readLaunchSpec, LAUNCH_SPEC_VERSION } from "../pi-extension/luvus/launch.ts";
-import { __setTmuxExecForTests__ } from "../pi-extension/luvus/tmux.ts";
+} from "../pi-extension/pmux/status-file.ts";
+import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
+import { runSpec } from "../pi-extension/pmux/run.ts";
+import { main } from "../pi-extension/pmux/cli.ts";
+import { readLaunchSpec, LAUNCH_SPEC_VERSION } from "../pi-extension/pmux/launch.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 import {
   createSupervisor,
   type SupervisorContext,
   type SupervisorDeps,
-} from "../pi-extension/luvus/supervisor.ts";
-import { DEFAULT_STATUS_LINE_LIMIT } from "../pi-extension/luvus/status.ts";
+} from "../pi-extension/pmux/supervisor.ts";
+import { DEFAULT_STATUS_LINE_LIMIT } from "../pi-extension/pmux/status.ts";
 
 async function withTempDir(run: (dir: string) => void | Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "pmux-status-"));
@@ -438,7 +438,7 @@ function makeSupervisorHarness(_env: SupervisorTestEnv): SupervisorHarness {
   const supervisor = createSupervisor({
     send: () => {},
     ui: () => null,
-    luvus: {
+    pmux: {
       createSurface: () => String(nextPane++),
       runInPane: (_surface, line) => {
         runs.push({ surface: _surface, line });
@@ -448,7 +448,7 @@ function makeSupervisorHarness(_env: SupervisorTestEnv): SupervisorHarness {
       readScreen: () => "",
       pollForExit: () => new Promise(() => {}),
       agentPrompt: () => ({ submitted: true }),
-    } as unknown as SupervisorDeps["luvus"],
+    } as unknown as SupervisorDeps["pmux"],
     statusConfig: {
       enabled: true,
       lineLimit: DEFAULT_STATUS_LINE_LIMIT,

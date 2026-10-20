@@ -17,9 +17,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { main } from "../pi-extension/luvus/cli.ts";
-import { isSentinelFile, pruneScratch, pruneSentinels } from "../pi-extension/luvus/prune.ts";
-import { __setTmuxExecForTests__ } from "../pi-extension/luvus/tmux.ts";
+import { main } from "../pi-extension/pmux/cli.ts";
+import { isSentinelFile, pruneScratch, pruneSentinels } from "../pi-extension/pmux/prune.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 
 const DAY_MS = 86_400_000;
 let workdir = "";

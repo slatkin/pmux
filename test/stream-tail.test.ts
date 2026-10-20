@@ -4,8 +4,8 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createStreamHub } from "../pi-extension/luvus/stream-state.ts";
-import { streamTailScriptPath } from "../pi-extension/luvus/launch.ts";
+import { createStreamHub } from "../pi-extension/pmux/stream-state.ts";
+import { streamTailScriptPath } from "../pi-extension/pmux/launch.ts";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "pi-stream-tail-"));

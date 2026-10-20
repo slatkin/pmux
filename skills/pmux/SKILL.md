@@ -1,5 +1,5 @@
 ---
-name: pi-luvus
+name: pmux
 description: Delegated subagents for build, review, recon, or doc work across the rust-worker, reviewer, scout, worker, and advisor roles, each running as a pi process in its own tmux pane and reporting back through its session file. Relevant to requests phrased as launching, spinning up, spawning, starting, or delegating to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, review-fix loops repeating until pass, or mbv-orchestrator campaign work.
 ---
 
@@ -11,7 +11,7 @@ tool) for these roles. Requires a tmux session (`TMUX` and `TMUX_PANE` set);
 outside tmux this skill does not apply. If the user wants the orchestrator to
 do the work itself rather than launching a separate agent — a direct review
 with no agent requested — do it directly instead. The child runs pi with the
-`luvus-done` extension, which gives it the `pmux_done` tool plus auto-exit:
+`pmux-done` extension, which gives it the `pmux_done` tool plus auto-exit:
 an `auto-exit: true` child whose turn ends normally closes itself (writing the
 `.exit` sidecar); any other child that ends a turn without calling
 `pmux_done` gets a 5-second completion nudge reminding it until it does.
