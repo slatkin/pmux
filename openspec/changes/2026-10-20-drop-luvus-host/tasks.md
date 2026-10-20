@@ -35,7 +35,7 @@
 - [x] 4.4 Move `pi-extension/luvus/` to `pi-extension/pmux/`, rename `luvus-done.ts` to `pmux-done.ts`, and update every import, `package.json` (`pi.extensions`) and the test imports.
 - [x] 4.5 Move `skills/pi-luvus/` to `skills/pmux/` and update the launcher shim's paths and the install text. The GitHub path is `slatkin/pmux`.
 - [x] 4.6 Move the config directory to `extensions/pmux/` with a read fallback to the old directory, write new settings to the new directory, and move the scratch directory to `<tmp>/pmux`. `handoffs.jsonl` starts new in the new directory.
-- [ ] 4.7 Update the agent role files, the README, the guide and `AGENTS.md` (the Luvus-host and naming sections).
+- [x] 4.7 Update the agent role files, the README, the guide and `AGENTS.md` (the Luvus-host and naming sections).
 
 ## 5. Specs
 
