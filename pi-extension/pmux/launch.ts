@@ -4,9 +4,9 @@
  * OSC title, and shell-free pi resolution.
  *
  * Nothing here executes a shell. The pane command line is the single
- * irreducible shell surface: Luvus `pane run` types it into the pane's
- * interactive shell, so every token it carries must mean the same thing in
- * bash, zsh, fish, PowerShell and cmd.exe.
+ * irreducible shell surface: it is typed into the pane's interactive shell,
+ * so every token it carries must mean the same thing in bash, zsh, fish,
+ * PowerShell and cmd.exe.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -149,7 +149,7 @@ function assertPaneToken(value: string): void {
 }
 
 /**
- * Build the single command line `luvus pane run` types into a pane. The bare
+ * Build the single command line that is typed into a pane. The bare
  * `node` avoids PowerShell treating a quoted executable path as a string;
  * every later token is double-quoted, and a token carrying anything a shell
  * would expand is rejected before any pane is split.

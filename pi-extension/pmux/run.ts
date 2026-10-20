@@ -7,7 +7,7 @@
  * child's exit code, so the CLI can exit with it.
  */
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildPaneTitle, type LaunchSpec } from "./launch.ts";
@@ -45,25 +45,6 @@ interface ChildOutcome {
   code: number | null;
   signal: NodeJS.Signals | null;
   error?: Error;
-}
-
-/**
- * Count the child's real reports to `parent` in its session file. The footer's
- * own `'<text>'` placeholders do not count. Any quoting of the message counts.
- */
-function countReports(sessionFile: string | undefined, parent: string): number {
-  if (!sessionFile) return 0;
-  try {
-    const text = readFileSync(sessionFile, "utf8");
-    // Single, double (JSON-escaped), or unquoted `$(...)` message; a `<`
-    // after the quote marks a placeholder.
-    const name = parent.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return (
-      text.match(new RegExp(`agent send ${name} (?:'(?!<)|\\\\?"(?!<)|\\$)`, "g"))?.length ?? 0
-    );
-  } catch {
-    return 0;
-  }
 }
 
 /** Map a finished child to its report code, printing why it could not start. */
@@ -110,7 +91,6 @@ export async function runSpec(
   // surface.
   if (pane) env.PI_PMUX_SURFACE = pane;
 
-  const reportsBefore = spec.parent ? countReports(spec.sessionFile, spec.parent) : 0;
   const args = prompt ? [...spec.args, `@${prompt}`] : [...spec.args];
 
   // Best-effort title, late enough to survive the child's boot. Unref'd so it
@@ -164,15 +144,16 @@ export async function runSpec(
     }
   }
 
-  // A child that exits without `luvus agent send` leaves the parent asleep
-  // forever; wake it with the exit state so it can read the session.
-  if (spec.parent && countReports(spec.sessionFile, spec.parent) <= reportsBefore) {
+  // The child's report is its last assistant message, which this wrapper
+  // cannot see in the session file; wake the parent with the exit state so
+  // it can read the session.
+  if (spec.parent) {
     const sidecar = spec.sessionFile ? readExitSidecar(spec.sessionFile)?.type : undefined;
     const state = sidecar ?? (code === 0 ? "exited" : `crashed (code ${code})`);
     try {
       (deps.sendToParent ?? agentSend)(
         spec.parent,
-        `${spec.name} ${state} without sending a report. Read its last message: node <skill-dir>/launch.ts last-message --session ${spec.sessionFile ?? "<session>"}`,
+        `${spec.name} ${state}. Its report is its last assistant message, which the wrapper cannot read. Read its last message: node <skill-dir>/launch.ts last-message --session ${spec.sessionFile ?? "<session>"}`,
       );
     } catch (error) {
       writeErr(

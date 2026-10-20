@@ -3,11 +3,11 @@
  *
  * pi sets its own OSC title (`π - <cwd>`, or `π - <name> - <cwd>`) on session
  * bind. An unnamed pane therefore shows only its folder, so every unnamed pi
- * pane looks the same in the Luvus AGENTS sidebar. This module sets a title
- * from the first user prompt instead: `π - <prompt> - <cwd basename>`.
+ * pane looks the same in a pane list. This module sets a title from the
+ * first user prompt instead: `π - <prompt> - <cwd basename>`.
  *
- * Only an OSC title wins in Luvus, and only a non-subagent unnamed session
- * may claim one. pi resets the title on reload, so the title is set again on
+ * Only an OSC title distinguishes an unnamed pane, and only a non-subagent
+ * unnamed session may claim one. pi resets the title on reload, so the title is set again on
  * `session_start` from the first user message already in the session.
  *
  * The prompt-cut rule is shared with the subagent pane title in `launch.ts`,

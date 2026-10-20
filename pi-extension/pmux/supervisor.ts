@@ -1289,10 +1289,9 @@ function backendFor(owner: { cli?: string } | null | undefined): SubagentBackend
 
 /**
  * Create the parent-side subagent supervisor (design D1). It owns the running
- * map, the roster, the widget and status intervals, its own poll abort
- * controller and its UHP event stream. `send`, `ui`, the Luvus operations and
- * the event stream factory are injected, so tests can run without a real pi
- * or Luvus.
+ * map, the roster, the widget and status intervals, and its own poll abort
+ * controller. `send`, `ui` and the tmux operations are injected, so tests can
+ * run without a real pi or tmux.
  */
 export function createSupervisor(deps: SupervisorDeps): Supervisor {
   let shutdownDone = false;
@@ -1327,7 +1326,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       file: getRosterFile(
         getArtifactDir(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId()),
       ),
-      parentPane: process.env.LUVUS_PANE_ID ?? "",
+      parentPane: process.env.TMUX_PANE ?? "",
       parentName: decodeChildEnv(process.env).name ?? "parent",
     };
   }

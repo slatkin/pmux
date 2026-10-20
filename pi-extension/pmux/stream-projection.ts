@@ -526,17 +526,17 @@ export class StreamProjection {
   private install(): void {
     const slot = findChatContainer(this.tui);
     if (!slot) {
-      this.warnMismatch("Luvus streams: transcript layout not recognised; showing it unchanged");
+      this.warnMismatch("pmux streams: transcript layout not recognised; showing it unchanged");
       return;
     }
     const view = new StreamFilterView(slot.container);
     view.setAttachState(this.state);
     view.onMismatch = () => {
       this.uninstall();
-      this.warnMismatch("Luvus streams: transcript layout changed; restoring the transcript");
+      this.warnMismatch("pmux streams: transcript layout changed; restoring the transcript");
     };
     if (slot.parent.children[slot.index] !== slot.container) {
-      this.warnMismatch("Luvus streams: transcript layout not recognised; showing it unchanged");
+      this.warnMismatch("pmux streams: transcript layout not recognised; showing it unchanged");
       return;
     }
     slot.parent.children[slot.index] = view;

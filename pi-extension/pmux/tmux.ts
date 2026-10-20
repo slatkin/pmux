@@ -224,7 +224,7 @@ export function closeSurface(surface: string): void {
   }
 }
 
-/** Shape of the prompt delivery result, matching the Luvus backend. */
+/** Shape of the prompt delivery result, as the tmux backend returns it. */
 export type { AgentPromptResult };
 
 /**

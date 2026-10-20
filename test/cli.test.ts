@@ -294,11 +294,12 @@ describe("resolvePiCommand", () => {
 });
 
 describe("runSpec", () => {
-  it("wakes the parent when the child exits without a report", async () => {
+  it("wakes the parent when the child exits", async () => {
     await withTempDirAsync(async (dir) => {
       const session = join(dir, "session.jsonl");
-      // An earlier run's report and the footer placeholder must not count.
-      writeFileSync(session, "agent send boss 'old report'\nagent send boss '<text>'\n");
+      // The wrapper cannot see the child's last assistant message in the
+      // session file, so its contents do not change the wake-up.
+      writeFileSync(session, "agent send boss 'old report'\n");
       const sent: string[] = [];
       await runSpec(
         {
@@ -319,70 +320,8 @@ describe("runSpec", () => {
         },
       );
       assert.equal(sent.length, 1);
-      assert.match(sent[0], /^boss:rev exited without sending a report/);
-    });
-  });
-
-  it("stays quiet when the session gained a report", async () => {
-    await withTempDirAsync(async (dir) => {
-      const session = join(dir, "session.jsonl");
-      const stub = join(dir, "reporter.mjs");
-      writeFileSync(
-        stub,
-        `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(session)}, "agent send boss 'PASS'\\n");`,
-      );
-      const sent: string[] = [];
-      await runSpec(
-        {
-          version: LAUNCH_SPEC_VERSION,
-          name: "rev",
-          env: {},
-          command: process.execPath,
-          args: [stub],
-          sessionFile: session,
-          parent: "boss",
-        },
-        undefined,
-        {
-          env: { PATH: process.env.PATH },
-          stdout: () => {},
-          stderr: () => {},
-          sendToParent: (to, text) => sent.push(`${to}:${text}`),
-        },
-      );
-      assert.deepEqual(sent, []);
-    });
-  });
-
-  it("counts a double-quoted report", async () => {
-    await withTempDirAsync(async (dir) => {
-      const session = join(dir, "session.jsonl");
-      const stub = join(dir, "reporter.mjs");
-      // JSONL escapes the quote: luvus agent send boss \"$(cat r.txt)\"
-      writeFileSync(
-        stub,
-        `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(session)}, 'agent send boss \\\\"$(cat r.txt)\\\\"\\n');`,
-      );
-      const sent: string[] = [];
-      await runSpec(
-        {
-          version: LAUNCH_SPEC_VERSION,
-          name: "rev",
-          env: {},
-          command: process.execPath,
-          args: [stub],
-          sessionFile: session,
-          parent: "boss",
-        },
-        undefined,
-        {
-          env: { PATH: process.env.PATH },
-          stdout: () => {},
-          stderr: () => {},
-          sendToParent: (to, text) => sent.push(`${to}:${text}`),
-        },
-      );
-      assert.deepEqual(sent, []);
+      assert.match(sent[0], /^boss:rev exited\. /);
+      assert.match(sent[0], /last-message --session /);
     });
   });
 

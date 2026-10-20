@@ -68,20 +68,20 @@ interface TestEnv {
 }
 
 /**
- * Temp session and agent roots with fake LUVUS_* values. No test here talks to
+ * Temp session and agent roots with a fake `TMUX_PANE`. No test here talks to
  * Surface: every deps.pmux operation is injected below.
  */
 function createEnv(): TestEnv {
   const dir = mkdtempSync(join(tmpdir(), "supervisor-test-"));
   const saved = new Map(
-    ["PI_CODING_AGENT_DIR", "PI_PMUX_SHELL_READY_DELAY_MS", "PI_PMUX_NAME", "LUVUS_PANE_ID"].map(
+    ["PI_CODING_AGENT_DIR", "PI_PMUX_SHELL_READY_DELAY_MS", "PI_PMUX_NAME", "TMUX_PANE"].map(
       (key) => [key, process.env[key]],
     ),
   );
   process.env.PI_CODING_AGENT_DIR = join(dir, "agent");
   process.env.PI_PMUX_SHELL_READY_DELAY_MS = "0";
   process.env.PI_PMUX_NAME = "parent";
-  process.env.LUVUS_PANE_ID = "21";
+  process.env.TMUX_PANE = "%21";
   const ctx: SupervisorContext = {
     cwd: dir,
     sessionManager: {

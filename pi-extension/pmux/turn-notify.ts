@@ -45,7 +45,7 @@ export function turnLabel(sessionName: string | undefined, cwd: string): string 
   return name ? name : basename(cwd) || cwd;
 }
 
-/** The two Luvus calls the notifier makes. Injectable so tests need no Luvus. */
+/** The two tmux calls the notifier makes. Injectable so tests need no tmux. */
 export interface TurnNotifierDeps {
   isPaneFocused(pane: string): Promise<boolean>;
   pushNotification(text: string, level: "success" | "error"): Promise<void>;

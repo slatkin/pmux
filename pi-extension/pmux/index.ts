@@ -232,7 +232,7 @@ function errorText(error: unknown): string {
 /** Dependencies of the `/stream` command handler, resolved per call. */
 export interface StreamCommandDeps {
   notify: (text: string, level: "info" | "warning" | "error") => void;
-  /** The Luvus pane this pi process runs in, when known. */
+  /** The tmux pane this pi process runs in, when known. */
   paneId: string | undefined;
   /** Session id seeding the stream socket name, when a session exists. */
   sessionId: string | undefined;
@@ -657,7 +657,7 @@ const SubagentMessageParams = Type.Object({
 
 /**
  * Validate, resolve and deliver one `pmux_message` call. Exported for unit
- * testing: `deps` lets a test observe whether Luvus was used at all.
+ * testing: `deps` lets a test observe whether tmux was used at all.
  */
 export function sendSubagentMessage(
   input: { to: string; message: string },
@@ -856,9 +856,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "pmux_spawn",
       label: "Subagent",
       description:
-        "Start a subagent in a new Luvus pane. The tool is fire-and-forget: it returns only an acknowledgement. When the subagent finishes, its result arrives automatically as a steer message that starts a new turn. Do not poll, sleep, read logs, or call other tools to check status. Do not fabricate or guess the result. After the call, end your turn or do other independent work, for example start more subagents. Set placement with the surface parameter.",
+        "Start a subagent in a new tmux pane. The tool is fire-and-forget: it returns only an acknowledgement. When the subagent finishes, its result arrives automatically as a steer message that starts a new turn. Do not poll, sleep, read logs, or call other tools to check status. Do not fabricate or guess the result. After the call, end your turn or do other independent work, for example start more subagents. Set placement with the surface parameter.",
       promptSnippet:
-        "Start an async subagent in a Luvus pane or tab (surface parameter); its result arrives later as a steer message.",
+        "Start an async subagent in a tmux pane or tab (surface parameter); its result arrives later as a steer message.",
       parameters: SubagentParams,
 
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -1160,7 +1160,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "pmux_resume",
       label: "Resume Subagent",
       description:
-        "Resume an earlier subagent session in a new Luvus pane, to continue a cancelled run or give follow-up work. Delivery is the same as subagent: fire-and-forget, the result arrives as a steer message, do not poll or fabricate it. Set placement with the surface parameter.",
+        "Resume an earlier subagent session in a new tmux pane, to continue a cancelled run or give follow-up work. Delivery is the same as subagent: fire-and-forget, the result arrives as a steer message, do not poll or fabricate it. Set placement with the surface parameter.",
       promptSnippet:
         "Resume an earlier subagent session (surface parameter); its result arrives later as a steer message.",
       parameters: Type.Object({

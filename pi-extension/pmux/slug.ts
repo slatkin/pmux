@@ -1,6 +1,6 @@
 /**
- * One slug builder for the names this package derives from free text: Luvus
- * pane names, scratch file stems, and artifact file names. The callers differ
+ * One slug builder for the names this package derives from free text: pane
+ * names, scratch file stems, and artifact file names. The callers differ
  * in which characters survive and how the result is capped, so those axes are
  * options rather than separate near-copies.
  */

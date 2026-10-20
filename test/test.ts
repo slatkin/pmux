@@ -2604,7 +2604,7 @@ describe("subagent messaging", () => {
       hasParent: true,
       ownChildren: [{ id: "d4", name: "Scout", surface: "27" }],
       parentRoster: {
-        parentPane: "21",
+        parentPane: "%21",
         parentName: "parent",
         children: [
           { id: "b2", name: "Reviewer", pane: "25", cli: "pi" },
@@ -2634,7 +2634,7 @@ describe("subagent messaging", () => {
       hasParent: true,
       ownChildren: [{ id: "d4", name: "Scout", surface: "27" }],
       parentRoster: {
-        parentPane: "21",
+        parentPane: "%21",
         parentName: "parent",
         children: [{ id: "b2", name: "Worker", pane: "25", cli: "pi" }],
       },
