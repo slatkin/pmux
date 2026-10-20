@@ -280,37 +280,6 @@ describe("resolvePiCommand", () => {
 });
 
 describe("runSpec", () => {
-  it("wakes the parent when the child exits", async () => {
-    await withTempDirAsync(async (dir) => {
-      const session = join(dir, "session.jsonl");
-      // The wrapper cannot see the child's last assistant message in the
-      // session file, so its contents do not change the wake-up.
-      writeFileSync(session, "agent send boss 'old report'\n");
-      const sent: string[] = [];
-      await runSpec(
-        {
-          version: LAUNCH_SPEC_VERSION,
-          name: "rev",
-          env: {},
-          command: process.execPath,
-          args: [PI_STUB],
-          sessionFile: session,
-          parent: "boss",
-        },
-        undefined,
-        {
-          env: { PATH: process.env.PATH },
-          stdout: () => {},
-          stderr: () => {},
-          sendToParent: (to, text) => sent.push(`${to}:${text}`),
-        },
-      );
-      assert.equal(sent.length, 1);
-      assert.match(sent[0], /^boss:rev exited\. /);
-      assert.match(sent[0], /last-message --session /);
-    });
-  });
-
   it("prints the sentinel and returns the child's code (0)", async () => {
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, { env: { PI_STUB_CODE: "0" } });

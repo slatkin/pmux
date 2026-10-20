@@ -242,35 +242,6 @@ export function agentPrompt(pane: string, text: string): AgentPromptResult {
   return { submitted: true, pane };
 }
 
-/**
- * Find the pane that carries `name` as its title. Subagent panes are named
- * after the subagent, so the title is the agent name.
- */
-function findPaneByName(name: string): string | null {
-  let listing: string;
-  try {
-    listing = tmux(["list-panes", "-a", "-F", "#{pane_id} #{pane_title}"]);
-  } catch {
-    return null;
-  }
-  for (const line of listing.split("\n")) {
-    const separator = line.indexOf(" ");
-    if (separator < 0) continue;
-    const pane = line.slice(0, separator).trim();
-    const title = line.slice(separator + 1).trim();
-    if (pane && title === name) return pane;
-  }
-  return null;
-}
-
-/** Send `text` to a named agent pane, waking it. */
-export function agentSend(name: string, text: string): void {
-  const pane = findPaneByName(name);
-  if (!pane) throw new Error(`No pane named ${name}.`);
-  tmux(["send-keys", "-t", pane, "-l", text]);
-  tmux(["send-keys", "-t", pane, "Enter"]);
-}
-
 /** Whether the pane currently has focus. */
 export async function isPaneFocusedAsync(pane: string): Promise<boolean> {
   try {

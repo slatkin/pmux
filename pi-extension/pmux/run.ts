@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildPaneTitle, type LaunchSpec } from "./launch.ts";
-import { agentSend, closeSurface } from "./tmux.ts";
+import { closeSurface } from "./tmux.ts";
 import { exitSidecarPath, readExitSidecar, writeExitSidecar } from "./exit-sidecar.ts";
 import { isTerminalChildStatus, readChildStatus, writeChildStatus } from "./status-file.ts";
 
@@ -37,8 +37,6 @@ export interface RunSpecDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Pane close; defaults to the tmux backend. */
   closePane?: (pane: string) => void;
-  /** Parent wake-up; defaults to the tmux backend. */
-  sendToParent?: (parent: string, text: string) => void;
 }
 
 interface ChildOutcome {
@@ -134,10 +132,6 @@ export async function runSpec(
   const code = reportExit(outcome, spec.command, writeErr);
   write(`__SUBAGENT_DONE_${code}__\n`);
 
-  // The child's own sidecar, read before the wrapper writes its own below: the
-  // wake-up text has to describe the child's outcome, not the wrapper's.
-  const childSidecar = spec.sessionFile ? readExitSidecar(spec.sessionFile)?.type : undefined;
-
   // A child that died left `working` or `idle` on disk and no sidecar: mark it
   // blocked with the exit code so a status wait ends, and write the `error`
   // sidecar the parent polls, so a crashed child ends the run at once instead
@@ -160,23 +154,6 @@ export async function runSpec(
         source: "wrapper",
         exitCode: code,
       });
-    }
-  }
-
-  // The child's report is its last assistant message, which this wrapper
-  // cannot see in the session file; wake the parent with the exit state so
-  // it can read the session.
-  if (spec.parent) {
-    const state = childSidecar ?? (code === 0 ? "exited" : `crashed (code ${code})`);
-    try {
-      (deps.sendToParent ?? agentSend)(
-        spec.parent,
-        `${spec.name} ${state}. Its report is its last assistant message, which the wrapper cannot read. Read its last message: node <skill-dir>/launch.ts last-message --session ${spec.sessionFile ?? "<session>"}`,
-      );
-    } catch (error) {
-      writeErr(
-        `Failed to wake parent ${spec.parent}: ${error instanceof Error ? error.message : String(error)}\n`,
-      );
     }
   }
 
