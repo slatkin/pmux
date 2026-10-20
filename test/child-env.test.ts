@@ -1,3 +1,4 @@
+import "./host-env.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
