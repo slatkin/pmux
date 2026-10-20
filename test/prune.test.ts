@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main } from "../pi-extension/luvus/cli.ts";
 import { isSentinelFile, pruneScratch, pruneSentinels } from "../pi-extension/luvus/prune.ts";
-import { __setLuvusExecForTests__ } from "../pi-extension/luvus/luvus.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/luvus/tmux.ts";
 
 const DAY_MS = 86_400_000;
 let workdir = "";
@@ -29,7 +29,7 @@ before(() => {
 });
 
 after(() => {
-  __setLuvusExecForTests__(null);
+  __setTmuxExecForTests__(null);
   rmSync(workdir, { recursive: true, force: true });
 });
 
@@ -138,14 +138,9 @@ describe("cli.ts prune", () => {
   });
 
   it("start removes old scratch files in the same directory", async () => {
-    __setLuvusExecForTests__((args) => {
-      if (args[0] === "pane" && args[1] === "split") {
-        return JSON.stringify({
-          id: "1",
-          result: { pane: "24", revision: 1, type: "pane", tab: "1", workspace: "2" },
-        });
-      }
-      return JSON.stringify({ id: "1", result: { revision: 1, type: "ok" } });
+    __setTmuxExecForTests__((args) => {
+      if (args[0] === "split-window") return "%24";
+      return "";
     });
     const dir = mkdtempSync(join(workdir, "autoprune-"));
     const cwd = mkdtempSync(join(dir, "cwd-"));
@@ -181,9 +176,8 @@ describe("cli.ts prune", () => {
       {
         env: {
           PATH: process.env.PATH,
-          LUVUS_ENV: "1",
-          LUVUS_BIN_PATH: "in-process",
-          LUVUS_PANE_ID: "21",
+          TMUX: "/tmp/tmux-0/default",
+          TMUX_PANE: "%21",
         },
         stdout: (text) => stdout.push(text),
         stderr: () => {},

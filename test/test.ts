@@ -1,4 +1,4 @@
-import { describe, it, before, after, mock, beforeEach } from "node:test";
+import { describe, it, before, after, mock } from "node:test";
 import assert from "node:assert/strict";
 
 // The whole suite drives the Luvus backend through its own seam and sets the
@@ -33,21 +33,8 @@ import {
   seedSubagentSessionFile,
 } from "../pi-extension/luvus/session.ts";
 
-import {
-  pollForExit,
-  sentinelLooksLive,
-  closeSurface,
-  createSurface,
-  isMuxAvailable,
-  readScreen,
-  sendEscape,
-  agentPrompt,
-  readExitSidecar,
-  runInPane,
-  __pollForExitTest__,
-  __setLuvusExecForTests__,
-} from "../pi-extension/luvus/luvus.ts";
-import { __setUhpSpawnForTests__ } from "../pi-extension/luvus/uhp-events.ts";
+import { interpretExitSidecar } from "../pi-extension/luvus/exit-sidecar.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/luvus/tmux.ts";
 import { readLaunchSpec } from "../pi-extension/luvus/launch.ts";
 import {
   LAUNCH_RECORD_VERSION,
@@ -90,9 +77,7 @@ import {
   getBundledAgentsDir,
   parseAgentDefinition,
 } from "../pi-extension/luvus/agent-defs.ts";
-import { __resetRegistrationForTests__ } from "../pi-extension/luvus/luvus-status.ts";
 import subagentDoneExtension from "../pi-extension/luvus/luvus-done.ts";
-
 // --- Fixture ---
 // Captured live via `$LUVUS_BIN_PATH pane split $LUVUS_PANE_ID --no-focus` on 2026-09-28
 // (design.md Decision 3): the new pane id is `result.pane`.
@@ -2038,216 +2023,9 @@ describe("luvus-done nudge", () => {
       }
     });
   });
-
-  /**
-   * In-process Luvus fake: logs each invocation together with whether the
-   * `.exit` sidecar existed at that moment, so a test can prove the terminal
-   * status report ran before the sidecar write.
-   */
-  function installFakeLuvus(dir: string, sidecarFile: string): { bin: string; log: string } {
-    const log = join(dir, "luvus-stub.log");
-    __setLuvusExecForTests__((args) => {
-      const sidecar = existsSync(sidecarFile) ? "sidecar=yes" : "sidecar=no";
-      appendFileSync(log, `${sidecar} ${args.join(" ")}\n`);
-      return '{"id":"1","result":{"revision":1,"type":"ok"}}';
-    });
-    return { bin: "in-process", log };
-  }
-
-  it("reports done to Luvus before writing the done sidecar", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      const { bin, log } = installFakeLuvus(dir, `${sessionFile}.exit`);
-      const { tools, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: bin,
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        const doneTool = tools.find((t) => t.name === "luvus_done");
-        assert.ok(doneTool, "expected luvus_done to be registered");
-        await doneTool.execute("t1", {}, undefined, undefined, { shutdown() {} });
-
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
-        const lines = readFileSync(log, "utf8").trim().split("\n");
-        assert.equal(lines.length, 1);
-        assert.match(lines[0], /^sidecar=no /);
-        assert.match(lines[0], /--status done /);
-        assert.doesNotMatch(lines[0], /--message/);
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
-
-  it("reports blocked with the ping question before writing the ping sidecar", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      const { bin, log } = installFakeLuvus(dir, `${sessionFile}.exit`);
-      const { tools, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        PI_LUVUS_NAME: "PingChild",
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: bin,
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        const pingTool = tools.find((t) => t.name === "caller_ping");
-        assert.ok(pingTool, "expected caller_ping to be registered");
-        await pingTool.execute("t1", { message: "which target?" }, undefined, undefined, {
-          shutdown() {},
-        });
-
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
-          type: "ping",
-          name: "PingChild",
-          message: "which target?",
-        });
-        const line = readFileSync(log, "utf8").trim();
-        assert.match(line, /^sidecar=no /);
-        assert.match(line, /--status blocked /);
-        assert.match(line, /--message which target\?/);
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
-
-  it("reports done before the auto-exit sidecar", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      const { bin, log } = installFakeLuvus(dir, `${sessionFile}.exit`);
-      const { handlers, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        PI_LUVUS_AUTO_EXIT: "1",
-        PI_LUVUS_NUDGE_DISABLE: "1",
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: bin,
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        fire(handlers, "agent_start");
-        fire(
-          handlers,
-          "agent_end",
-          { messages: [{ role: "assistant", stopReason: "stop" }] },
-          { shutdown() {} },
-        );
-
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
-        const lines = readFileSync(log, "utf8").trim().split("\n");
-        assert.match(lines.at(-1)!, /^sidecar=no /);
-        assert.match(lines.at(-1)!, /--status done /);
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
-
-  it("reports blocked with the error text before the error sidecar", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      const { bin, log } = installFakeLuvus(dir, `${sessionFile}.exit`);
-      const { handlers, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: bin,
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        fire(handlers, "agent_start");
-        fire(
-          handlers,
-          "agent_end",
-          {
-            messages: [{ role: "assistant", stopReason: "error", errorMessage: "529 overloaded" }],
-          },
-          { shutdown() {} },
-        );
-
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
-          type: "error",
-          errorMessage: "529 overloaded",
-          stopReason: "error",
-        });
-        const lines = readFileSync(log, "utf8").trim().split("\n");
-        assert.match(lines.at(-1)!, /^sidecar=no /);
-        assert.match(lines.at(-1)!, /--status blocked /);
-        assert.match(lines.at(-1)!, /--message 529 overloaded/);
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
-
-  it("writes the sidecar and shuts down when the status report fails", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      __setLuvusExecForTests__(() => {
-        throw new Error("stub Luvus failed");
-      });
-      const { tools, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: "in-process",
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        const doneTool = tools.find((t) => t.name === "luvus_done");
-        assert.ok(doneTool, "expected luvus_done to be registered");
-        let shutdownCalled = false;
-        await doneTool.execute("t1", {}, undefined, undefined, {
-          shutdown: () => (shutdownCalled = true),
-        });
-
-        assert.equal(shutdownCalled, true);
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
-
-  it("does not report a terminal status outside Luvus", async () => {
-    await withTempDir(async (dir) => {
-      __resetRegistrationForTests__();
-      const sessionFile = join(dir, "child.jsonl");
-      const { bin, log } = installFakeLuvus(dir, `${sessionFile}.exit`);
-      const { tools, restoreEnv } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        LUVUS_ENV: undefined,
-        LUVUS_BIN_PATH: bin,
-        LUVUS_PANE_ID: "7",
-      });
-      try {
-        const doneTool = tools.find((t) => t.name === "luvus_done");
-        assert.ok(doneTool, "expected luvus_done to be registered");
-        await doneTool.execute("t1", {}, undefined, undefined, { shutdown() {} });
-
-        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), { type: "done" });
-        assert.equal(existsSync(log), false);
-      } finally {
-        __setLuvusExecForTests__(null);
-        restoreEnv();
-      }
-    });
-  });
 });
 
-describe("luvus.ts interpretExitSidecar", () => {
-  const { interpretExitSidecar } = __pollForExitTest__;
-
+describe("interpretExitSidecar", () => {
   it("decodes ping payloads", () => {
     assert.deepEqual(interpretExitSidecar({ type: "ping", name: "Worker", message: "need help" }), {
       reason: "ping",
@@ -2459,41 +2237,25 @@ describe("luvus_resume tool", () => {
       });
 
       const runs: string[] = [];
-      __setLuvusExecForTests__((args) => {
-        if (args[0] === "pane" && args[1] === "run") {
-          runs.push(String(args[3]));
-          return '{"id":"1","result":{"revision":1,"type":"ok"}}';
+      __setTmuxExecForTests__((args) => {
+        if (args[0] === "send-keys" && args[3] === "-l") {
+          runs.push(String(args[4]));
+          return "";
         }
-        if (args[0] === "pane" && args[1] === "read") {
-          return JSON.stringify({ id: "1", result: { revision: 1, text: "", type: "pane_read" } });
+        if (args[0] === "capture-pane") {
+          return "";
         }
-        return '{"id":"1","result":{"pane":"24","revision":1,"tab":"1","type":"pane","workspace":"2"}}';
-      });
-      // No real UHP child: a silent stream, and an empty agent snapshot.
-      __setUhpSpawnForTests__((args) => {
-        if (args[0] === "agent") {
-          return {
-            stdout: (async function* () {
-              yield Buffer.from(`${JSON.stringify({ result: { agents: [] } })}\n`);
-            })(),
-            kill() {},
-          };
-        }
-        return { stdout: (async function* () {})(), kill() {} };
+        return "%24";
       });
 
       const saved = new Map(
-        [
-          "LUVUS_ENV",
-          "LUVUS_BIN_PATH",
-          "LUVUS_PANE_ID",
-          "PI_LUVUS_NAME",
-          "PI_LUVUS_SHELL_READY_DELAY_MS",
-        ].map((key) => [key, process.env[key]]),
+        ["TMUX", "TMUX_PANE", "PI_LUVUS_NAME", "PI_LUVUS_SHELL_READY_DELAY_MS"].map((key) => [
+          key,
+          process.env[key],
+        ]),
       );
-      process.env.LUVUS_ENV = "1";
-      process.env.LUVUS_BIN_PATH = "in-process";
-      process.env.LUVUS_PANE_ID = "21";
+      process.env.TMUX = "/tmp/tmux-0/default";
+      process.env.TMUX_PANE = "%21";
       process.env.PI_LUVUS_NAME = "parent";
       process.env.PI_LUVUS_SHELL_READY_DELAY_MS = "0";
 
@@ -2531,8 +2293,7 @@ describe("luvus_resume tool", () => {
         assert.deepEqual(spec.args.slice(-3), ["--resume", "session-abc", "Continue the work"]);
       } finally {
         subagentsModule.__test__.getCurrentSupervisor().shutdown();
-        __setLuvusExecForTests__(null);
-        __setUhpSpawnForTests__(null);
+        __setTmuxExecForTests__(null);
         for (const [key, value] of saved) {
           restoreEnvVar(key, value);
         }
@@ -3311,621 +3072,7 @@ describe("subagents widget rendering", () => {
   });
 });
 
-describe("luvus.ts", () => {
-  it("still exports the pane helpers the extension uses", () => {
-    assert.equal(typeof runInPane, "function");
-    assert.equal(typeof readExitSidecar, "function");
-  });
-});
-
-describe("luvus backend", () => {
-  // In-process Luvus seam: echoes the same canned JSON envelopes per command
-  // as the old CLI stub, driven by $LUVUS_STUB_MODE, and logs each invocation
-  // to $LUVUS_STUB_LOG so tests can assert the exact argv.
-  function installLuvusStub(): void {
-    __setLuvusExecForTests__((args) => {
-      const log = process.env.LUVUS_STUB_LOG;
-      if (log) appendFileSync(log, args.join(" ") + "\n");
-      const mode = process.env.LUVUS_STUB_MODE;
-      if (mode === "error") return '{"error":{"code":"boom","message":"stub exploded"}}';
-      if (mode === "no-pane") return '{"id":"1","result":{"revision":1,"type":"pane"}}';
-      if (mode === "not-ready") {
-        return '{"error":{"code":"agent_not_ready","message":"agent_not_ready: target is showing a blocked prompt"}}';
-      }
-      switch (`${args[0]} ${args[1]}`) {
-        case "pane split":
-          return '{"id":"1","result":{"pane":"24","revision":329037,"tab":"1","type":"pane","workspace":"2"}}';
-        case "pane read": {
-          // LUVUS_STUB_SCREEN lets a test put a specific text on the pane.
-          const screen = process.env.LUVUS_STUB_SCREEN ?? "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8";
-          return JSON.stringify({
-            id: "1",
-            result: { revision: 1, text: screen, type: "pane_read" },
-          });
-        }
-        case "agent prompt":
-          return '{"id":"1","result":{"pane":"24","submitted":true,"evidence":"queued","status":"idle","type":"agent_prompt"}}';
-        case "agent list": {
-          const agents = process.env.LUVUS_STUB_AGENTS
-            ? JSON.parse(process.env.LUVUS_STUB_AGENTS)
-            : mode === "no-caller"
-              ? [{ pane: "99", tab: "2", type: "agent" }]
-              : [{ pane: "21", tab: "1", focused: true, type: "agent" }];
-          return JSON.stringify({ id: "1", result: { agents, type: "agent_list" } });
-        }
-        case "pane move":
-          return mode === "move-error"
-            ? '{"error":{"code":"boom","message":"stub move exploded"}}'
-            : '{"id":"1","result":{"pane":"24","revision":2,"tab":"3","type":"pane_move","workspace":"1"}}';
-        case "tab focus":
-          return mode === "focus-error"
-            ? '{"error":{"code":"boom","message":"stub focus exploded"}}'
-            : '{"id":"1","result":{"revision":3,"type":"ok"}}';
-        case "pane close":
-          return mode === "close-error"
-            ? '{"error":{"code":"pane_not_found","message":"pane not found: already closed"}}'
-            : '{"id":"1","result":{"revision":1,"type":"ok"}}';
-        default:
-          return '{"id":"1","result":{"revision":1,"type":"ok"}}';
-      }
-    });
-  }
-
-  /**
-   * Set env vars for the duration of fn, restoring afterwards. Undefined
-   * deletes the variable — tests must pass all three LUVUS_* keys explicitly
-   * because the runner itself may run inside Luvus with them ambient.
-   */
-  function withLuvusEnv(env: Record<string, string | undefined>, fn: () => unknown): unknown {
-    const saved = new Map(Object.keys(env).map((k) => [k, process.env[k]]));
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    try {
-      return fn();
-    } finally {
-      for (const [key, value] of saved) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
-  }
-
-  const allLuvusKeys = (over: Record<string, string | undefined>) => ({
-    LUVUS_ENV: undefined,
-    LUVUS_BIN_PATH: undefined,
-    LUVUS_PANE_ID: undefined,
-    ...over,
-  });
-
-  let stubDir: string;
-  let stubPath: string;
-
-  /** A UHP child whose stdout ends only when killed (a healthy, silent stream). */
-  function silentUhpChild(): { stdout: AsyncIterable<Buffer>; kill(): void } {
-    let wake: (() => void) | null = null;
-    let closed = false;
-    const stdout: AsyncIterable<Buffer> = {
-      [Symbol.asyncIterator]() {
-        return {
-          async next(): Promise<IteratorResult<Buffer>> {
-            while (!closed) {
-              await new Promise<void>((resolve) => {
-                wake = resolve;
-              });
-            }
-            return { value: undefined, done: true };
-          },
-        };
-      },
-    };
-    return {
-      stdout,
-      kill() {
-        closed = true;
-        const w = wake;
-        wake = null;
-        w?.();
-      },
-    };
-  }
-
-  before(() => {
-    stubDir = mkdtempSync(join(tmpdir(), "luvus-stub-"));
-    stubPath = "in-process";
-    installLuvusStub();
-    // The module-level UHP event stream is faked in tests: no child process
-    // spawns, and `agent list` answers an empty snapshot and exits.
-    __setUhpSpawnForTests__((args) => {
-      if (args[0] === "agent") {
-        return {
-          stdout: (async function* () {
-            yield Buffer.from(`${JSON.stringify({ result: { agents: [] } })}\n`);
-          })(),
-          kill() {},
-        };
-      }
-      return silentUhpChild();
-    });
-  });
-
-  after(() => {
-    __setLuvusExecForTests__(null);
-    __setUhpSpawnForTests__(null);
-    rmSync(stubDir, { recursive: true, force: true });
-  });
-
-  it("is available only when all three LUVUS_* env vars are set", () => {
-    assert.equal(
-      withLuvusEnv(
-        allLuvusKeys({ LUVUS_ENV: "1", LUVUS_BIN_PATH: stubPath, LUVUS_PANE_ID: "21" }),
-        isMuxAvailable,
-      ),
-      true,
-    );
-    assert.equal(
-      withLuvusEnv(allLuvusKeys({ LUVUS_BIN_PATH: stubPath, LUVUS_PANE_ID: "21" }), isMuxAvailable),
-      false,
-    );
-    assert.equal(
-      withLuvusEnv(allLuvusKeys({ LUVUS_ENV: "1", LUVUS_BIN_PATH: stubPath }), isMuxAvailable),
-      false,
-    );
-    assert.equal(
-      withLuvusEnv(allLuvusKeys({ LUVUS_ENV: "1", LUVUS_PANE_ID: "21" }), isMuxAvailable),
-      false,
-    );
-    assert.equal(withLuvusEnv(allLuvusKeys({}), isMuxAvailable), false);
-  });
-
-  it("createSurface splits the caller pane unfocused and reads the pane id from the 1.1 fixture", () => {
-    const log = join(stubDir, "calls.log");
-    const surface = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => createSurface("Scout"),
-    );
-    assert.equal(surface, "24");
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), [
-      "pane split 21 --right --no-focus",
-      "pane name scout --pane 24",
-    ]);
-  });
-
-  it("createSurface slugifies free-text names into valid Luvus pane names", () => {
-    const log = join(stubDir, "calls-slug.log");
-    withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => createSurface("Review: API diff!"),
-    );
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.equal(calls[1], "pane name review-api-diff --pane 24");
-  });
-
-  it("createSurface throws with the raw JSON when the split result has no pane id", () => {
-    assert.throws(
-      () =>
-        withLuvusEnv(
-          allLuvusKeys({
-            LUVUS_ENV: "1",
-            LUVUS_BIN_PATH: stubPath,
-            LUVUS_PANE_ID: "21",
-            LUVUS_STUB_MODE: "no-pane",
-          }),
-          () => createSurface("Scout"),
-        ),
-      /no pane id/,
-    );
-  });
-
-  it("createSurface tab placement looks up the caller tab, moves the pane, and restores focus", () => {
-    const log = join(stubDir, "calls-tab.log");
-    const surface = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => createSurface("Scout", "tab"),
-    );
-    assert.equal(surface, "24");
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), [
-      "agent list",
-      "pane split 21 --right --no-focus",
-      "pane name scout --pane 24",
-      "pane move 24 --new-tab",
-      "tab focus 1",
-    ]);
-  });
-
-  it("createSurface tab placement keeps pane placement when the caller tab is unknown", () => {
-    const log = join(stubDir, "calls-nocaller.log");
-    const surface = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-        LUVUS_STUB_MODE: "no-caller",
-      }),
-      () => createSurface("Scout", "tab"),
-    );
-    assert.equal(surface, "24");
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.ok(calls.includes("agent list"));
-    assert.ok(!calls.some((call) => call.startsWith("pane move")));
-    assert.ok(!calls.some((call) => call.startsWith("tab focus")));
-  });
-
-  it("createSurface tab placement keeps the pane when the move fails and skips focus restore", () => {
-    const log = join(stubDir, "calls-moveerr.log");
-    const surface = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-        LUVUS_STUB_MODE: "move-error",
-      }),
-      () => createSurface("Scout", "tab"),
-    );
-    assert.equal(surface, "24");
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.ok(calls.includes("pane move 24 --new-tab"));
-    assert.ok(!calls.some((call) => call.startsWith("tab focus")));
-  });
-
-  it("createSurface tab placement still succeeds when focus restore fails", () => {
-    const log = join(stubDir, "calls-focuserr.log");
-    const surface = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-        LUVUS_STUB_MODE: "focus-error",
-      }),
-      () => createSurface("Scout", "tab"),
-    );
-    assert.equal(surface, "24");
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.ok(calls.includes("pane move 24 --new-tab"));
-    assert.ok(calls.includes("tab focus 1"));
-  });
-
-  it("createSurface right placement never calls agent list", () => {
-    const log = join(stubDir, "calls-plainpane.log");
-    withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => createSurface("Scout", "right"),
-    );
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.deepEqual(calls, ["pane split 21 --right --no-focus", "pane name scout --pane 24"]);
-  });
-
-  it("createSurface down placement stacks the pane below the caller", () => {
-    const log = join(stubDir, "calls-down.log");
-    withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => createSurface("Scout", "down"),
-    );
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.deepEqual(calls, ["pane split 21 --down --no-focus", "pane name scout --pane 24"]);
-  });
-
-  it("surfaces the Luvus .error message as an Error", () => {
-    assert.throws(
-      () =>
-        withLuvusEnv(
-          allLuvusKeys({
-            LUVUS_ENV: "1",
-            LUVUS_BIN_PATH: stubPath,
-            LUVUS_PANE_ID: "21",
-            LUVUS_STUB_MODE: "error",
-          }),
-          () => closeSurface("24"),
-        ),
-      /stub exploded/,
-    );
-  });
-
-  it("readScreen tails the screen to n lines", () => {
-    const screen = withLuvusEnv(
-      allLuvusKeys({ LUVUS_ENV: "1", LUVUS_BIN_PATH: stubPath, LUVUS_PANE_ID: "21" }),
-      () => readScreen("24", 3),
-    );
-    assert.equal(screen, "l6\nl7\nl8");
-  });
-
-  it("sendEscape sends the escape key through agent keys", () => {
-    const log = join(stubDir, "calls-esc.log");
-    withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => sendEscape("24"),
-    );
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["agent keys 24 esc"]);
-  });
-
-  it("runInPane sends one command line to the pane", () => {
-    const log = join(stubDir, "calls-run.log");
-    withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => runInPane("24", 'node "/ext/cli.ts" "run" "/spec.json"'),
-    );
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), [
-      'pane run 24 node "/ext/cli.ts" "run" "/spec.json"',
-    ]);
-  });
-
-  it("readExitSidecar returns the payload, or null for a missing or malformed sidecar", async () => {
-    await withTempDir(async (dir) => {
-      const sessionFile = join(dir, "child.jsonl");
-      assert.equal(readExitSidecar(sessionFile), null);
-      writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
-      assert.deepEqual(readExitSidecar(sessionFile), { type: "done" });
-      writeFileSync(`${sessionFile}.exit`, "{ nope");
-      assert.equal(readExitSidecar(sessionFile), null);
-    });
-  });
-
-  it("agentPrompt sends `agent prompt` without --wait and unwraps the queued answer", () => {
-    const log = join(stubDir, "calls-prompt.log");
-    const result = withLuvusEnv(
-      allLuvusKeys({
-        LUVUS_ENV: "1",
-        LUVUS_BIN_PATH: stubPath,
-        LUVUS_PANE_ID: "21",
-        LUVUS_STUB_LOG: log,
-      }),
-      () => agentPrompt("24", "hello"),
-    ) as { submitted?: boolean; evidence?: string; pane?: string };
-    assert.equal(result.submitted, true);
-    assert.equal(result.evidence, "queued");
-    assert.equal(result.pane, "24");
-    const calls = readFileSync(log, "utf8").trim().split("\n");
-    assert.deepEqual(calls, ["agent prompt 24 hello"]);
-    assert.equal(calls.join("\n").includes("--wait"), false);
-  });
-
-  it("agentPrompt surfaces agent_not_ready without retrying", () => {
-    const log = join(stubDir, "calls-prompt-notready.log");
-    assert.throws(
-      () =>
-        withLuvusEnv(
-          allLuvusKeys({
-            LUVUS_ENV: "1",
-            LUVUS_BIN_PATH: stubPath,
-            LUVUS_PANE_ID: "21",
-            LUVUS_STUB_MODE: "not-ready",
-            LUVUS_STUB_LOG: log,
-          }),
-          () => agentPrompt("24", "hi"),
-        ),
-      /agent_not_ready/,
-    );
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["agent prompt 24 hi"]);
-  });
-
-  // Adopts the close-error stub mode: `pane close` fails as if the user
-  // closed the pane by hand. Unlike withLuvusEnv above, this helper holds
-  // the env across awaits so watchSubagent still sees the stub after its
-  // first tick.
-  async function withLuvusEnvAsync(
-    env: Record<string, string | undefined>,
-    fn: () => Promise<any>,
-  ): Promise<any> {
-    const saved = new Map(Object.keys(env).map((k) => [k, process.env[k]]));
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    try {
-      return await fn();
-    } finally {
-      for (const [key, value] of saved) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
-      }
-    }
-  }
-
-  describe("pollForExit screen handling", () => {
-    /** Run pollForExit until it ends or the deadline aborts it; report the
-     * last argv logged and whether a result was produced. */
-    async function pollUntil(
-      env: Record<string, string | undefined>,
-      options: Partial<Parameters<typeof pollForExit>[2]> & {
-        deadlineMs: number;
-        interval?: number;
-      },
-    ): Promise<{
-      result: Awaited<ReturnType<typeof pollForExit>> | null;
-      aborted: boolean;
-      calls: string[];
-    }> {
-      const log = join(stubDir, `calls-${Math.random().toString(16).slice(2)}.log`);
-      return withLuvusEnvAsync(allLuvusKeys({ ...env, LUVUS_STUB_LOG: log }), async () => {
-        // Self-contained seam: don't depend on the enclosing describe's before hook.
-        installLuvusStub();
-        const controller = new AbortController();
-        const deadline = setTimeout(() => controller.abort(), options.deadlineMs);
-        let result: Awaited<ReturnType<typeof pollForExit>> | null = null;
-        let aborted = false;
-        try {
-          result = await pollForExit("24", controller.signal, {
-            interval: options.interval ?? 10,
-            ...options,
-          });
-        } catch (error) {
-          if (!/Aborted/.test(String(error)))
-            console.error("POLLFOREXIT-RAW-ERROR", JSON.stringify(String(error?.stack ?? error)));
-          aborted = /Aborted/.test(String(error));
-        } finally {
-          clearTimeout(deadline);
-          installLuvusStub();
-        }
-        const calls = existsSync(log)
-          ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
-          : [];
-        return { result, aborted, calls };
-      });
-    }
-
-    it("accepts a matched screen sentinel when no live agent hosts the pane", async () => {
-      const outcome = await pollUntil(
-        {
-          LUVUS_ENV: "1",
-          LUVUS_BIN_PATH: stubPath,
-          LUVUS_PANE_ID: "21",
-          LUVUS_STUB_SCREEN: "done __SUBAGENT_DONE_3__",
-          // No entry for pane 24 at all.
-          LUVUS_STUB_AGENTS: "[]",
-        },
-        { deadlineMs: 1000 },
-      );
-      assert.equal(outcome.aborted, false);
-      assert.deepEqual(outcome.result, { reason: "sentinel", exitCode: 3 });
-      assert.ok(outcome.calls.includes("pane read 24"));
-      assert.ok(outcome.calls.includes("agent list"));
-    });
-
-    it("accepts a screen sentinel when the pane only holds a terminal done lease", async () => {
-      const outcome = await pollUntil(
-        {
-          LUVUS_ENV: "1",
-          LUVUS_BIN_PATH: stubPath,
-          LUVUS_PANE_ID: "21",
-          LUVUS_STUB_SCREEN: "__SUBAGENT_DONE_0__\n",
-          LUVUS_STUB_AGENTS: '[{"pane":"24","status":"done","authority":"integration_report"}]',
-        },
-        { deadlineMs: 1000 },
-      );
-      assert.deepEqual(outcome.result, { reason: "sentinel", exitCode: 0 });
-    });
-
-    for (const [label, agents] of [
-      [
-        "a working process-tree agent",
-        '[{"pane":"24","status":"working","authority":"process_tree"}]',
-      ],
-      ["an idle process-tree agent", '[{"pane":"24","status":"idle","authority":"process_tree"}]'],
-      [
-        "an agent with a non-terminal lease",
-        '[{"pane":"24","status":"working","authority":"integration_report"}]',
-      ],
-    ] as Array<[string, string]>) {
-      it(`keeps polling when the sentinel text sits under ${label}`, async () => {
-        const outcome = await pollUntil(
-          {
-            LUVUS_ENV: "1",
-            LUVUS_BIN_PATH: stubPath,
-            LUVUS_PANE_ID: "21",
-            LUVUS_STUB_SCREEN: "done __SUBAGENT_DONE_3__",
-            LUVUS_STUB_AGENTS: agents,
-          },
-          { deadlineMs: 160, interval: 30 },
-        );
-        assert.equal(outcome.result, null);
-        assert.equal(outcome.aborted, true);
-        // Every tick re-scanned and re-confirmed instead of claiming completion.
-        assert.ok(outcome.calls.filter((call) => call === "pane read 24").length >= 2);
-        assert.ok(outcome.calls.filter((call) => call === "agent list").length >= 2);
-      });
-    }
-
-    it("skips the whole screen scan while maySkipScreenScan returns true", async () => {
-      const outcome = await pollUntil(
-        {
-          LUVUS_ENV: "1",
-          LUVUS_BIN_PATH: stubPath,
-          LUVUS_PANE_ID: "21",
-          LUVUS_STUB_SCREEN: "__SUBAGENT_DONE_0__\n",
-        },
-        { deadlineMs: 120, interval: 30, maySkipScreenScan: () => true },
-      );
-      assert.equal(outcome.result, null);
-      assert.equal(outcome.aborted, true);
-      assert.deepEqual(outcome.calls, []);
-    });
-
-    it("sentinelLooksLive classifies agent-list rows without touching the CLI", () => {
-      assert.equal(
-        sentinelLooksLive(
-          { agents: [{ pane: "24", status: "working", authority: "process_tree" }] },
-          "24",
-        ),
-        true,
-      );
-      assert.equal(
-        sentinelLooksLive(
-          { agents: [{ pane: "24", status: "idle", authority: "process_tree" }] },
-          "24",
-        ),
-        true,
-      );
-      assert.equal(
-        sentinelLooksLive(
-          { agents: [{ pane: "24", status: "done", authority: "integration_report" }] },
-          "24",
-        ),
-        false,
-      );
-      assert.equal(sentinelLooksLive({ agents: [{ pane: "24", status: "blocked" }] }, "24"), false);
-      assert.equal(sentinelLooksLive({ agents: [{ pane: "99", status: "done" }] }, "24"), false);
-      assert.equal(sentinelLooksLive({ agents: [] }, "24"), false);
-      assert.equal(sentinelLooksLive(null, "24"), false);
-    });
-  });
-});
-
 describe("subagent child status ownership", () => {
-  beforeEach(() => {
-    // The status reporter's registration guard is module-level; reset it so
-    // each test below registers through a fresh runtime.
-    __resetRegistrationForTests__();
-  });
-
-  /** Record every Luvus CLI call the extension makes through the test seam. */
-  function recordLuvusCalls(): string[][] {
-    const calls: string[][] = [];
-    __setLuvusExecForTests__((args) => {
-      calls.push(args);
-      return "{}";
-    });
-    return calls;
-  }
-
   function makeRecordingPi() {
     const handlers = new Map<string, Array<(data?: unknown, ctx?: unknown) => void>>();
     const registeredTools: Array<any> = [];
@@ -3967,26 +3114,6 @@ describe("subagent child status ownership", () => {
     },
   };
 
-  /** Set the Luvus env plus an optional child marker; returns a restore function. */
-  function withStatusEnv(childSession: string | null): () => void {
-    const keys = ["LUVUS_ENV", "LUVUS_BIN_PATH", "LUVUS_PANE_ID", "PI_LUVUS_SESSION"];
-    const saved = new Map(keys.map((k) => [k, process.env[k]]));
-    process.env.LUVUS_ENV = "1";
-    process.env.LUVUS_BIN_PATH = "/bin/luvus";
-    process.env.LUVUS_PANE_ID = "7";
-    if (childSession === null) delete process.env.PI_LUVUS_SESSION;
-    else process.env.PI_LUVUS_SESSION = childSession;
-    return () => {
-      for (const [k, v] of saved) restoreEnvVar(k, v);
-      __setLuvusExecForTests__(null);
-    };
-  }
-
-  /** Status lease calls only: agent report / agent release. */
-  function statusCalls(calls: string[][]): string[][] {
-    return calls.filter((a) => a[0] === "agent" && (a[1] === "report" || a[1] === "release"));
-  }
-
   it("isSubagentChild detects a child by PI_LUVUS_SESSION", () => {
     assert.equal(
       subagentsModule.isSubagentChild({ PI_LUVUS_SESSION: "/tmp/s.jsonl" } as NodeJS.ProcessEnv),
@@ -3995,70 +3122,26 @@ describe("subagent child status ownership", () => {
     assert.equal(subagentsModule.isSubagentChild({} as NodeJS.ProcessEnv), false);
   });
 
-  it("skips the status reporter in a subagent child", async () => {
-    const restore = withStatusEnv("/tmp/sub-session.jsonl");
-    try {
-      const calls = recordLuvusCalls();
-      const target = makeRecordingPi();
-      subagentsModule.default(target.pi);
-      target.fire("session_start", undefined, CTX);
-      await new Promise((resolve) => setImmediate(resolve));
-      // An aborted turn keeps the turn notifier silent; only the status
-      // reporter could react to agent_end here.
-      target.fire("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, CTX);
-      await new Promise((resolve) => setImmediate(resolve));
-      target.fire("session_shutdown", undefined, CTX);
-      assert.deepEqual(statusCalls(calls), []);
-    } finally {
-      restore();
-    }
-  });
-
-  it("registers the status reporter in a plain pane", async () => {
-    const restore = withStatusEnv(null);
-    try {
-      const calls = recordLuvusCalls();
-      const target = makeRecordingPi();
-      subagentsModule.default(target.pi);
-      target.fire("session_start", undefined, CTX);
-      await new Promise((resolve) => setImmediate(resolve));
-      target.fire("agent_end", { messages: [{ role: "assistant", stopReason: "aborted" }] }, CTX);
-      await new Promise((resolve) => setImmediate(resolve));
-      target.fire("session_shutdown", undefined, CTX);
-      const seen = statusCalls(calls);
-      assert.equal(
-        seen.filter((a) => a[1] === "report" && a[a.indexOf("--status") + 1] === "idle").length >=
-          1,
-        true,
-      );
-      assert.equal(seen.filter((a) => a[1] === "release").length, 1);
-    } finally {
-      restore();
-    }
-  });
-
   it("spawns through the current supervisor after a session restart", async () => {
     await withTempDir(async (dir) => {
       const calls: string[][] = [];
-      __setLuvusExecForTests__((args) => {
+      __setTmuxExecForTests__((args) => {
         calls.push(args);
-        if (args[0] === "pane" && args[1] === "split") {
-          return '{"id":"1","result":{"pane":"24","revision":1,"type":"pane","tab":"1","workspace":"2"}}';
+        if (args[0] === "split-window") {
+          return "%24";
         }
-        return '{"id":"1","result":{"revision":1,"type":"ok"}}';
+        return "";
       });
       const saved: Array<[string, string | undefined]> = [
         ["PI_CODING_AGENT_DIR", process.env.PI_CODING_AGENT_DIR],
         ["PI_LUVUS_SHELL_READY_DELAY_MS", process.env.PI_LUVUS_SHELL_READY_DELAY_MS],
-        ["LUVUS_ENV", process.env.LUVUS_ENV],
-        ["LUVUS_BIN_PATH", process.env.LUVUS_BIN_PATH],
-        ["LUVUS_PANE_ID", process.env.LUVUS_PANE_ID],
+        ["TMUX", process.env.TMUX],
+        ["TMUX_PANE", process.env.TMUX_PANE],
       ];
       process.env.PI_CODING_AGENT_DIR = join(dir, "agent");
       process.env.PI_LUVUS_SHELL_READY_DELAY_MS = "0";
-      process.env.LUVUS_ENV = "1";
-      process.env.LUVUS_BIN_PATH = "in-process";
-      process.env.LUVUS_PANE_ID = "21";
+      process.env.TMUX = "/tmp/tmux-0/default";
+      process.env.TMUX_PANE = "%21";
       const testApi = (subagentsModule as any).__test__;
       const target = makeRecordingPi();
       try {
@@ -4118,7 +3201,7 @@ describe("subagent child status ownership", () => {
         // Stop the replacement supervisor's intervals, watcher and stream.
         target.fire("session_shutdown", undefined, CTX);
         for (const [name, value] of saved) restoreEnvVar(name, value);
-        __setLuvusExecForTests__(null);
+        __setTmuxExecForTests__(null);
       }
     });
   });

@@ -1,19 +1,19 @@
 /**
- * Pi → Luvus turn-end notifications.
+ * Pi → tmux turn-end notifications.
  *
- * A parent pi pane that you are not looking at gets one Luvus notification
- * when a turn ends, so you do not have to visit every pane to learn that it
- * waits for input. A failed turn notifies as an error instead. Subagent
- * children stay quiet: their completion already reaches the parent through
- * the status lease and `luvus_done`.
+ * A parent pi pane that you are not looking at gets one tmux status-line
+ * notification when a turn ends, so you do not have to visit every pane to
+ * learn that it waits for input. A failed turn notifies as an error instead.
+ * Subagent children stay quiet: their completion already reaches the parent
+ * through the exit sidecar and `luvus_done`.
  *
- * The Luvus chain runs after the event handler returns (the handler never
- * awaits it) and swallows every failure, so a slow or broken Luvus call can
- * neither delay the next turn nor raise.
+ * The notification chain runs after the event handler returns (the handler
+ * never awaits it) and swallows every failure, so a slow or broken tmux call
+ * can neither delay the next turn nor raise.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { basename } from "node:path";
-import { isMuxAvailable, isPaneFocusedAsync, pushNotificationAsync } from "./backend.ts";
+import { isTmuxAvailable, isPaneFocusedAsync, pushNotificationAsync } from "./tmux.ts";
 import { isSubagentChild } from "./child-env.ts";
 
 /** What the ended turn should produce. `none` means no notification. */
@@ -53,7 +53,7 @@ export interface TurnNotifierDeps {
 
 const DEFAULT_DEPS: TurnNotifierDeps = {
   isPaneFocused: isPaneFocusedAsync,
-  pushNotification: pushNotificationAsync,
+  pushNotification: async (text) => pushNotificationAsync(text),
 };
 
 export interface TurnNotifier {
@@ -70,8 +70,8 @@ export function createTurnNotifier(
       pi.on("agent_end", (event, ctx) => {
         if (isSubagentChild(env)) return;
         if (!enabled) return;
-        if (!isMuxAvailable(env)) return;
-        const pane = env.LUVUS_PANE_ID as string;
+        if (!isTmuxAvailable(env)) return;
+        const pane = env.TMUX_PANE as string;
         const outcome = turnOutcome(event.messages);
         if (outcome === "none") return;
         const label = turnLabel(ctx.sessionManager.getSessionName(), ctx.cwd);

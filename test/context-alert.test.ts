@@ -10,12 +10,10 @@ import {
   appendHandoffLog,
   handoffLogPath,
   handoffNudgeText,
-  matchLuvusSession,
   parseContextAlertConfig,
   shouldAlert,
   DEFAULT_CONTEXT_ALERT_THRESHOLD_TOKENS,
 } from "../pi-extension/luvus/context-alert.ts";
-import { listLuvusSessionsAsync, __setLuvusExecForTests__ } from "../pi-extension/luvus/luvus.ts";
 import { loadStatusConfig, parseStatusConfig } from "../pi-extension/luvus/status.ts";
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -152,82 +150,6 @@ describe("context-alert trigger", () => {
 });
 
 describe("context-alert handoff log", () => {
-  it("listLuvusSessionsAsync returns the parsed sessions object through the exec seam", async () => {
-    const calls: string[][] = [];
-    __setLuvusExecForTests__((args) => {
-      calls.push(args);
-      return JSON.stringify({
-        result: { sessions: [{ name: "mbv", socket_path: "/tmp/mbv.sock" }] },
-      });
-    });
-    try {
-      assert.deepEqual(await listLuvusSessionsAsync(), {
-        sessions: [{ name: "mbv", socket_path: "/tmp/mbv.sock" }],
-      });
-      assert.deepEqual(calls, [["session", "list", "--json"]]);
-    } finally {
-      __setLuvusExecForTests__(null);
-    }
-  });
-
-  it("listLuvusSessionsAsync returns null on a failed call or outside Luvus", async () => {
-    // A Luvus error envelope, and a thrown call, both resolve to null.
-    __setLuvusExecForTests__(() => JSON.stringify({ error: { message: "no such session" } }));
-    try {
-      assert.equal(await listLuvusSessionsAsync(), null);
-    } finally {
-      __setLuvusExecForTests__(null);
-    }
-    __setLuvusExecForTests__(() => {
-      throw new Error("boom");
-    });
-    try {
-      assert.equal(await listLuvusSessionsAsync(), null);
-    } finally {
-      __setLuvusExecForTests__(null);
-    }
-
-    // With no seam and no LUVUS_BIN_PATH the real path fails cleanly too.
-    const saved = process.env.LUVUS_BIN_PATH;
-    delete process.env.LUVUS_BIN_PATH;
-    try {
-      assert.equal(await listLuvusSessionsAsync(), null);
-    } finally {
-      if (saved === undefined) delete process.env.LUVUS_BIN_PATH;
-      else process.env.LUVUS_BIN_PATH = saved;
-    }
-  });
-
-  it("matchLuvusSession returns the name whose socket_path matches", () => {
-    const list = {
-      sessions: [
-        { name: "other", socket_path: "/a.sock" },
-        { name: "mbv", socket_path: "/b.sock" },
-      ],
-    };
-    assert.equal(matchLuvusSession(list, "/b.sock"), "mbv");
-  });
-
-  it("no match and no list both fall back to the socket path", () => {
-    const cases: unknown[] = [
-      { sessions: [{ name: "x", socket_path: "/a.sock" }] },
-      { sessions: [] },
-      {},
-      null,
-      undefined,
-      "junk",
-    ];
-    for (const list of cases) {
-      assert.equal(matchLuvusSession(list, "/b.sock"), "/b.sock", `list ${JSON.stringify(list)}`);
-    }
-  });
-
-  it("no socket path gives null, even with a matching entry", () => {
-    const list = { sessions: [{ name: "mbv", socket_path: "/b.sock" }] };
-    assert.equal(matchLuvusSession(list, undefined), null);
-    assert.equal(matchLuvusSession(list, ""), null);
-  });
-
   it("appendHandoffLog appends one JSON line per row", () => {
     const dir = mkdtempSync(join(tmpdir(), "pi-handoff-log-"));
     const path = join(dir, "handoffs.jsonl");
@@ -235,7 +157,6 @@ describe("context-alert handoff log", () => {
       const row = {
         at: "2026-10-16T10:00:00.000Z",
         event: "alert" as const,
-        luvusSession: "mbv",
         child: "worker",
         session: "/tmp/s.jsonl",
         tokens: 201000,
@@ -252,7 +173,6 @@ describe("context-alert handoff log", () => {
       assert.deepEqual(JSON.parse(lines[1]), {
         at: "2026-10-16T10:00:00.000Z",
         event: "handoff",
-        luvusSession: "mbv",
         child: "worker",
         session: "/tmp/s.jsonl",
         tokens: null,
@@ -266,7 +186,6 @@ describe("context-alert handoff log", () => {
     const row = {
       at: "2026-10-16T10:00:00.000Z",
       event: "alert" as const,
-      luvusSession: null,
       child: "worker",
       session: "",
       tokens: null,
@@ -632,27 +551,14 @@ describe("context-alert in the child (luvus-done)", () => {
     }
   });
 
-  it("an alert followed by a handoff writes two log rows with the same session", async () => {
+  it("an alert followed by a handoff writes two log rows", async () => {
     const { handlers, tools, sentMessages, sessionFile, mod, restore } = await loadChildExtension(
       {
         PI_LUVUS_NUDGE_DISABLE: "1",
         PI_LUVUS_NAME: "LogChild",
-        LUVUS_BIN_PATH: "in-process",
-        LUVUS_SOCKET_PATH: "/tmp/mbv.sock",
       },
       JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
     );
-    __setLuvusExecForTests__((args) => {
-      assert.deepEqual(args, ["session", "list", "--json"]);
-      return JSON.stringify({
-        result: {
-          sessions: [
-            { name: "other", socket_path: "/tmp/other.sock" },
-            { name: "mbv", socket_path: "/tmp/mbv.sock" },
-          ],
-        },
-      });
-    });
     try {
       fire(handlers, "session_start", undefined, { ui: { setWidget() {} } });
       fire(handlers, "agent_start");
@@ -699,11 +605,10 @@ describe("context-alert in the child (luvus-done)", () => {
       assert.equal(handoffRow.tokens, 700);
       assert.equal(handoffRow.threshold, undefined);
 
-      // Both rows resolved the same server session from the socket path.
-      assert.equal(alertRow.luvusSession, "mbv");
-      assert.equal(handoffRow.luvusSession, "mbv");
+      // The rows carry no server-session field any more.
+      assert.equal("luvusSession" in alertRow, false);
+      assert.equal("luvusSession" in handoffRow, false);
     } finally {
-      __setLuvusExecForTests__(null);
       restore();
     }
   });

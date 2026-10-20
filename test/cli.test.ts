@@ -36,7 +36,7 @@ import {
 } from "../pi-extension/luvus/launch.ts";
 import { runSpec } from "../pi-extension/luvus/run.ts";
 import { main } from "../pi-extension/luvus/cli.ts";
-import { __setLuvusExecForTests__ } from "../pi-extension/luvus/luvus.ts";
+import { __setTmuxExecForTests__ } from "../pi-extension/luvus/tmux.ts";
 import { main as shimMain } from "../skills/pi-luvus/launch.ts";
 
 function withTempDir(run: (dir: string) => void): void {
@@ -114,7 +114,7 @@ async function runStubCase(dir: string, options: RunCase = {}): Promise<RunOutco
   const code = await runSpec(spec, options.prompt, {
     env: {
       PATH: process.env.PATH,
-      LUVUS_PANE_ID: "77",
+      TMUX_PANE: "%77",
       PI_STUB_RECORD: recordPath,
       PI_STUB_EXIT: exitPath,
       ...options.env,
@@ -424,11 +424,11 @@ describe("runSpec", () => {
   it("merges spec env over the wrapper env, with PI_LUVUS_SURFACE from the wrapper's pane", async () => {
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, {
-        env: { LUVUS_PANE_ID: "55", PI_RUN_BASE: "base", PI_RUN_SHARED: "base" },
+        env: { TMUX_PANE: "%55", PI_RUN_BASE: "base", PI_RUN_SHARED: "base" },
         spec: { env: { PI_RUN_SPEC: "spec", PI_RUN_SHARED: "spec" } },
       });
       assert.ok(result.record);
-      assert.equal(result.record.env.PI_LUVUS_SURFACE, "55");
+      assert.equal(result.record.env.PI_LUVUS_SURFACE, "%55");
       assert.equal(result.record.env.PI_RUN_BASE, "base");
       assert.equal(result.record.env.PI_RUN_SPEC, "spec");
       assert.equal(result.record.env.PI_RUN_SHARED, "spec");
@@ -467,7 +467,7 @@ describe("runSpec", () => {
         {
           env: {
             PATH: process.env.PATH,
-            LUVUS_PANE_ID: "77",
+            TMUX_PANE: "%77",
             PI_STUB_RECORD: recordPath,
             PI_STUB_DELAY_MS: "500",
           },
@@ -496,7 +496,7 @@ describe("runSpec close on done", () => {
       });
       assert.equal(result.stdout, "__SUBAGENT_DONE_0__\n");
       assert.deepEqual(result.sleptMs, [5000]);
-      assert.deepEqual(result.closedPanes, ["77"]);
+      assert.deepEqual(result.closedPanes, ["%77"]);
       assert.equal(result.sidecar, DONE);
     });
   });
@@ -508,7 +508,7 @@ describe("runSpec close on done", () => {
         env: { PI_STUB_EXIT_BODY: DONE },
       });
       assert.deepEqual(result.sleptMs, []);
-      assert.deepEqual(result.closedPanes, ["77"]);
+      assert.deepEqual(result.closedPanes, ["%77"]);
       assert.equal(result.sidecar, DONE);
     });
   });
@@ -543,7 +543,7 @@ describe("runSpec close on done", () => {
       });
       assert.equal(result.stdout, "__SUBAGENT_DONE_0__\n");
       assert.deepEqual(result.sleptMs, [5000]);
-      assert.deepEqual(result.closedPanes, ["77"]);
+      assert.deepEqual(result.closedPanes, ["%77"]);
       assert.equal(result.sidecar, HANDOFF);
     });
   });
@@ -584,7 +584,7 @@ const REPO_ROOT = resolve(TEST_DIR, "..");
 const CLI = join(REPO_ROOT, "pi-extension", "luvus", "cli.ts");
 
 let workdir = "";
-const luvusCalls: string[] = [];
+const paneCalls: string[] = [];
 let defaultConfigPath = "";
 
 before(() => {
@@ -593,40 +593,34 @@ before(() => {
   // never see the machine's real one.
   defaultConfigPath = join(workdir, "config.json");
   writeFileSync(defaultConfigPath, JSON.stringify({ status: { enabled: true }, surface: "right" }));
-  // In-process Luvus seam: logs each argv line and returns canned JSON
-  // envelopes. `pane split` yields pane 24; `agent list` places the caller in
-  // tab 7; everything else is ok.
-  __setLuvusExecForTests__((args) => {
-    luvusCalls.push(args.join(" "));
-    if (args[0] === "agent" && args[1] === "list") {
-      return JSON.stringify({ id: "1", result: { agents: [{ pane: "21", tab: "7" }] } });
-    }
-    if (args[0] === "pane" && args[1] === "split") {
-      return JSON.stringify({
-        id: "1",
-        result: { pane: "24", revision: 1, type: "pane", tab: "1", workspace: "2" },
-      });
-    }
-    return JSON.stringify({ id: "1", result: { revision: 1, type: "ok" } });
+  // In-process tmux seam: logs each argv and answers the split with a new
+  // pane id. `display-message` answers the session and window lookups the
+  // tab placement needs; everything else returns empty output.
+  __setTmuxExecForTests__((args) => {
+    paneCalls.push(args.join(" "));
+    if (args[0] === "split-window" || args[0] === "new-window") return "%24";
+    if (args[0] === "list-panes") return "%88 orch\n";
+    if (args[0] === "display-message" && args.includes("#{session_id}")) return "$7";
+    if (args[0] === "display-message" && args.includes("#{window_id}")) return "@4";
+    return "";
   });
 });
 
 after(() => {
-  __setLuvusExecForTests__(null);
+  __setTmuxExecForTests__(null);
   rmSync(workdir, { recursive: true, force: true });
 });
 
 beforeEach(() => {
-  luvusCalls.length = 0;
+  paneCalls.length = 0;
 });
 
-/** Luvus environment for a CLI run, with ambient LUVUS_* keys replaced. */
-function luvusEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+/** tmux environment for a CLI run, with ambient host keys replaced. */
+function tmuxEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
-    LUVUS_ENV: "1",
-    LUVUS_BIN_PATH: "in-process",
-    LUVUS_PANE_ID: "21",
+    TMUX: "/tmp/tmux-0/default",
+    TMUX_PANE: "%21",
     ...extra,
   };
 }
@@ -718,7 +712,7 @@ async function runStartWith(entry: CliEntry, options: StartCase): Promise<Starte
   const brief = join(dir, "brief.md");
   writeFileSync(brief, options.brief ?? "# Task\n\nDo the thing.\n");
   const scratch = options.scratch ?? join(dir, "scratch");
-  const env = options.bare ? { PATH: process.env.PATH } : luvusEnv(options.env);
+  const env = options.bare ? { PATH: process.env.PATH } : tmuxEnv(options.env);
   const argv = [
     "start",
     "--name",
@@ -772,12 +766,12 @@ async function startFailureWith(entry: CliEntry, options: StartCase): Promise<st
 }
 
 describe("cli.ts start", () => {
-  it("fails outside Luvus and creates nothing", async () => {
+  it("fails outside tmux and creates nothing", async () => {
     const dir = mkdtempSync(join(workdir, "outside-"));
     const cwd = mkdtempSync(join(dir, "cwd-"));
     const scratch = join(dir, "scratch");
     const message = await startFailure({ cwd, scratch, bare: true });
-    assert.match(message, /Luvus/);
+    assert.match(message, /tmux/);
     assert.equal(existsSync(scratch), false);
   });
 
@@ -793,22 +787,23 @@ describe("cli.ts start", () => {
 
     // Stdout is exactly one JSON document with pane, session and launch.
     assert.equal(res.code, 0);
-    assert.equal(res.json.pane, "24");
+    assert.equal(res.json.pane, "%24");
     assert.ok(res.json.session.endsWith(".jsonl"));
     assert.ok(existsSync(res.json.launch));
 
-    // Recorded Luvus calls, in order.
-    assert.deepEqual(luvusCalls, [
-      "pane split 21 --right --no-focus",
-      "pane name fix-7 --pane 24",
-      `pane run 24 ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+    // Recorded tmux calls, in order.
+    assert.deepEqual(paneCalls, [
+      "split-window -d -h -t %21 -P -F #{pane_id}",
+      "select-pane -t %24 -T fix-7",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      "send-keys -t %24 Enter",
     ]);
 
     // Footer names the parent and pane, and forbids the wrong channels.
     const promptText = readFileSync(res.promptPath, "utf8");
     assert.ok(promptText.includes("# Task"));
-    assert.ok(promptText.includes("luvus agent send orch"));
-    assert.ok(promptText.includes("pane 21"));
+    assert.ok(promptText.includes("Your last assistant message is the report the parent reads"));
+    assert.ok(promptText.includes("pane %21"));
     assert.ok(promptText.includes("luvus_done"));
 
     // Role prompt holds the role body.
@@ -912,7 +907,7 @@ describe("cli.ts start", () => {
     const message = await startFailure({ cwd, role: "nope" });
     assert.match(message, /unknown role 'nope'/);
     assert.match(message, /\.pi\/agents/);
-    assert.equal(luvusCalls.length, 0);
+    assert.equal(paneCalls.length, 0);
   });
 
   it("fails before splitting when model is empty", async () => {
@@ -920,7 +915,7 @@ describe("cli.ts start", () => {
     writeRole(cwd, "nomodel", "model: \nthinking: low", "No model body.");
     const message = await startFailure({ cwd, role: "nomodel" });
     assert.match(message, /empty model/);
-    assert.equal(luvusCalls.length, 0);
+    assert.equal(paneCalls.length, 0);
   });
 
   it("records no pane split call on role failures", async () => {
@@ -928,7 +923,7 @@ describe("cli.ts start", () => {
     writeRole(cwd, "nomodel2", "model: \nthinking: low", "No model body.");
     assert.match(await startFailure({ cwd, role: "missing-role" }), /unknown role/);
     assert.match(await startFailure({ cwd, role: "nomodel2" }), /empty model/);
-    assert.equal(luvusCalls.filter((call) => call.startsWith("pane split")).length, 0);
+    assert.equal(paneCalls.filter((call) => call.startsWith("split-window")).length, 0);
   });
 
   it("fails before splitting when the scratch path is unsafe", async () => {
@@ -937,7 +932,7 @@ describe("cli.ts start", () => {
     const message = await startFailure({ cwd, role: "doer", scratch: join(workdir, "sc$ratch") });
     assert.match(message, /Unsafe pane command token/);
     assert.match(message, /sc\$ratch/);
-    assert.equal(luvusCalls.length, 0);
+    assert.equal(paneCalls.length, 0);
   });
 
   it("keeps hostile names out of the pane line and delivers them as arguments", async () => {
@@ -955,10 +950,11 @@ describe("cli.ts start", () => {
     // carry no character a shell would expand.
     assert.equal(res.json.launch.includes("$"), false);
     assert.equal(res.promptPath.includes("$"), false);
-    assert.deepEqual(luvusCalls, [
-      "pane split 21 --right --no-focus",
-      "pane name a-b-touch-pwned-q --pane 24",
-      `pane run 24 ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+    assert.deepEqual(paneCalls, [
+      "split-window -d -h -t %21 -P -F #{pane_id}",
+      "select-pane -t %24 -T a;b $(touch pwned) 'q",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      "send-keys -t %24 Enter",
     ]);
 
     // Running the spec the way the pane does delivers the raw name and the
@@ -967,10 +963,10 @@ describe("cli.ts start", () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const code = await main(["run", res.json.launch, res.promptPath], {
-      env: luvusEnv({
+      env: tmuxEnv({
         PI_LUVUS_PI_ENTRY: PI_STUB,
         PI_STUB_RECORD: recordPath,
-        LUVUS_PANE_ID: "99",
+        TMUX_PANE: "%99",
       }),
       stdout: (text) => stdout.push(text),
       stderr: (text) => stderr.push(text),
@@ -990,14 +986,15 @@ describe("cli.ts start", () => {
     const res = await runStart({ cwd, role: "doer", child: "fix-7", surface: "tab" });
 
     assert.equal(res.code, 0);
-    assert.equal(res.json.pane, "24");
-    assert.deepEqual(luvusCalls, [
-      "agent list",
-      "pane split 21 --right --no-focus",
-      "pane name fix-7 --pane 24",
-      "pane move 24 --new-tab",
-      "tab focus 7",
-      `pane run 24 ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+    assert.equal(res.json.pane, "%24");
+    assert.deepEqual(paneCalls, [
+      "display-message -p -t %21 #{session_id}",
+      "new-window -d -t $7 -P -F #{pane_id}",
+      "display-message -p -t %21 #{window_id}",
+      "select-window -t @4",
+      "select-pane -t %24 -T fix-7",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      "send-keys -t %24 Enter",
     ]);
   });
 
@@ -1006,9 +1003,9 @@ describe("cli.ts start", () => {
     writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
     const started = await runStart({ cwd, role: "doer", child: "fix-7", surface: "tab" });
 
-    // Run the launch spec the way the tab's run wrapper does. `LUVUS_PANE_ID`
-    // is the tab pane (24), so close-on-done closes the wrapper's own pane —
-    // and with it the tab — never the caller's pane (21).
+    // Run the launch spec the way the tab's run wrapper does. `TMUX_PANE`
+    // is the tab pane (%24), so close-on-done closes the wrapper's own pane —
+    // and with it the tab — never the caller's pane (%21).
     const closed: string[] = [];
     const code = await runSpec(
       { ...readLaunchSpec(started.json.launch), command: process.execPath, args: [PI_STUB] },
@@ -1016,7 +1013,7 @@ describe("cli.ts start", () => {
       {
         env: {
           PATH: process.env.PATH,
-          LUVUS_PANE_ID: "24",
+          TMUX_PANE: "%24",
           PI_STUB_EXIT: `${started.json.session}.exit`,
           PI_STUB_EXIT_BODY: '{"type":"done"}',
         },
@@ -1027,7 +1024,7 @@ describe("cli.ts start", () => {
       },
     );
     assert.equal(code, 0);
-    assert.deepEqual(closed, ["24"]);
+    assert.deepEqual(closed, ["%24"]);
   });
 
   it("defaults --surface to the config.json value", async () => {
@@ -1038,10 +1035,11 @@ describe("cli.ts start", () => {
 
     const res = await runStart({ cwd, role: "doer", configPath });
     assert.equal(res.code, 0);
-    assert.deepEqual(luvusCalls, [
-      "pane split 21 --down --no-focus",
-      "pane name scout-1 --pane 24",
-      `pane run 24 ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+    assert.deepEqual(paneCalls, [
+      "split-window -d -v -t %21 -P -F #{pane_id}",
+      "select-pane -t %24 -T scout-1",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      "send-keys -t %24 Enter",
     ]);
   });
 
@@ -1070,11 +1068,11 @@ describe("cli.ts start", () => {
         "--surface",
         "sideways",
       ],
-      luvusEnv(),
+      tmuxEnv(),
     );
     assert.equal(res.code, 2);
     assert.match(res.stderr, /invalid --surface value: sideways/);
-    assert.deepEqual(luvusCalls, []);
+    assert.deepEqual(paneCalls, []);
   });
 });
 
@@ -1084,7 +1082,7 @@ describe("cli.ts resume", () => {
     const cwd = mkdtempSync(join(workdir, "resume-cwd-"));
     writeRole(cwd, "doer", "model: m\nthinking: low\nauto-exit: true", "Body.");
     const started = await runStart({ cwd, role: "doer", child: "fix-7", closeGraceMs: 2500 });
-    luvusCalls.length = 0;
+    paneCalls.length = 0;
     return started;
   }
 
@@ -1095,22 +1093,23 @@ describe("cli.ts resume", () => {
 
     const res = await runCli(
       ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
-      luvusEnv(),
+      tmuxEnv(),
     );
     const json = JSON.parse(res.stdout) as { pane: string; launch: string };
     assert.equal(res.code, 0);
-    assert.equal(json.pane, "24");
+    assert.equal(json.pane, "%24");
     assert.equal(json.launch, started.json.launch);
-    assert.deepEqual(luvusCalls, [
-      "pane split 21 --right --no-focus",
-      "pane name fix-7 --pane 24",
-      `pane run 24 ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+    assert.deepEqual(paneCalls, [
+      "split-window -d -h -t %21 -P -F #{pane_id}",
+      "select-pane -t %24 -T fix-7",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+      "send-keys -t %24 Enter",
     ]);
 
     // The resume prompt carries the parent-contact footer, as `start` does.
     const sent = readFileSync(`${followup}.resume.md`, "utf8");
     assert.match(sent, /^Follow-up task\./);
-    assert.match(sent, /luvus agent send /);
+    assert.match(sent, /Your last assistant message is the report the parent reads/);
 
     // The spec is reused unchanged: pi resumes the same session, and the
     // close grace carries over.
@@ -1125,11 +1124,12 @@ describe("cli.ts resume", () => {
     const followup = join(dirname(started.json.launch), "followup.md");
     writeFileSync(followup, "Follow-up.\n");
 
-    await runCli(["resume", "--launch", started.json.launch, "--prompt", followup], luvusEnv());
-    assert.deepEqual(luvusCalls, [
-      "pane split 21 --right --no-focus",
-      "pane name fix-7 --pane 24",
-      `pane run 24 ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+    await runCli(["resume", "--launch", started.json.launch, "--prompt", followup], tmuxEnv());
+    assert.deepEqual(paneCalls, [
+      "split-window -d -h -t %21 -P -F #{pane_id}",
+      "select-pane -t %24 -T fix-7",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+      "send-keys -t %24 Enter",
     ]);
   });
 
@@ -1138,11 +1138,11 @@ describe("cli.ts resume", () => {
     const unsafe = join(dirname(started.json.launch), "pro$mpt.md");
     writeFileSync(unsafe, "Follow-up.\n");
     await assert.rejects(
-      runCli(["resume", "--launch", started.json.launch, "--prompt", unsafe], luvusEnv()),
+      runCli(["resume", "--launch", started.json.launch, "--prompt", unsafe], tmuxEnv()),
       /Unsafe pane command token/,
     );
     assert.equal(
-      luvusCalls.some((call) => call.startsWith("pane split")),
+      paneCalls.some((call) => call.startsWith("split-window")),
       false,
     );
   });
@@ -1154,16 +1154,17 @@ describe("cli.ts resume", () => {
 
     const res = await runCli(
       ["resume", "--launch", started.json.launch, "--prompt", followup, "--surface", "tab"],
-      luvusEnv(),
+      tmuxEnv(),
     );
     assert.equal(res.code, 0);
-    assert.deepEqual(luvusCalls, [
-      "agent list",
-      "pane split 21 --right --no-focus",
-      "pane name fix-7 --pane 24",
-      "pane move 24 --new-tab",
-      "tab focus 7",
-      `pane run 24 ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+    assert.deepEqual(paneCalls, [
+      "display-message -p -t %21 #{session_id}",
+      "new-window -d -t $7 -P -F #{pane_id}",
+      "display-message -p -t %21 #{window_id}",
+      "select-window -t @4",
+      "select-pane -t %24 -T fix-7",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+      "send-keys -t %24 Enter",
     ]);
   });
 });
@@ -1182,7 +1183,7 @@ describe("cli.ts run", () => {
       });
       const res = await runCli(
         ["run", specPath],
-        luvusEnv({ PI_LUVUS_PI_ENTRY: PI_STUB, PI_STUB_CODE: "3" }),
+        tmuxEnv({ PI_LUVUS_PI_ENTRY: PI_STUB, PI_STUB_CODE: "3" }),
       );
       assert.equal(res.code, 3);
       assert.equal(res.stdout, "__SUBAGENT_DONE_3__\n");
@@ -1193,7 +1194,7 @@ describe("cli.ts run", () => {
     await withTempDirAsync(async (dir) => {
       const specPath = join(dir, "bad.json");
       writeFileSync(specPath, "{ not json");
-      await assert.rejects(runCli(["run", specPath], luvusEnv()), /Cannot read launch spec/);
+      await assert.rejects(runCli(["run", specPath], tmuxEnv()), /Cannot read launch spec/);
     });
   });
 
@@ -1204,7 +1205,7 @@ describe("cli.ts run", () => {
         specPath,
         JSON.stringify({ version: LAUNCH_SPEC_VERSION, name: "x", env: {}, args: [] }),
       );
-      await assert.rejects(runCli(["run", specPath], luvusEnv()), (error: Error) => {
+      await assert.rejects(runCli(["run", specPath], tmuxEnv()), (error: Error) => {
         assert.match(error.message, /Cannot read launch spec/);
         assert.ok(error.message.includes(specPath));
         return true;
@@ -1239,7 +1240,7 @@ describe("cli.ts last-message", () => {
           message: { role: "assistant", content: [{ type: "text", text: "final report" }] },
         },
       ]);
-      const res = await runCli(["last-message", "--session", sessionPath], luvusEnv());
+      const res = await runCli(["last-message", "--session", sessionPath], tmuxEnv());
       assert.equal(res.code, 0);
       assert.equal(res.stdout, "final report\n");
     });
@@ -1256,7 +1257,7 @@ describe("cli.ts last-message", () => {
           message: { role: "user", content: [{ type: "text", text: "do it" }] },
         },
       ]);
-      const res = await runCli(["last-message", "--session", sessionPath], luvusEnv());
+      const res = await runCli(["last-message", "--session", sessionPath], tmuxEnv());
       assert.equal(res.stdout, "(no assistant message)\n");
     });
   });
@@ -1294,8 +1295,8 @@ function copyShim(root: string): string {
 
 /**
  * A fake extension root with this checkout's behaviour: a copy of
- * `pi-extension/luvus` whose `luvus.ts` re-exports the checkout's own
- * module, so this process's Luvus seam still sees the pane calls. Returns the
+ * `pi-extension/luvus` whose `tmux.ts` re-exports the checkout's own
+ * module, so this process's tmux seam still sees the pane calls. Returns the
  * resolved root.
  */
 function makeInstall(root: string): string {
@@ -1303,10 +1304,10 @@ function makeInstall(root: string): string {
   cpSync(join(REPO_ROOT, "pi-extension", "luvus"), join(root, "pi-extension", "luvus"), {
     recursive: true,
   });
-  const checkoutLuvus = pathToFileURL(join(REPO_ROOT, "pi-extension", "luvus", "luvus.ts")).href;
+  const checkoutTmux = pathToFileURL(join(REPO_ROOT, "pi-extension", "luvus", "tmux.ts")).href;
   writeFileSync(
-    join(root, "pi-extension", "luvus", "luvus.ts"),
-    `export * from ${JSON.stringify(checkoutLuvus)};\n`,
+    join(root, "pi-extension", "luvus", "tmux.ts"),
+    `export * from ${JSON.stringify(checkoutTmux)};\n`,
   );
   return realpathSync(root);
 }
@@ -1333,10 +1334,11 @@ describe("skills/pi-luvus/launch.ts", () => {
       argValue(started.spec.args, "-e"),
       join(install, "pi-extension", "luvus", "luvus-done.ts"),
     );
-    assert.deepEqual(luvusCalls, [
-      "pane split 21 --right --no-focus",
-      "pane name scout-1 --pane 24",
-      `pane run 24 ${paneCommandLine(join(install, "pi-extension", "luvus", "cli.ts"), started.json.launch, started.promptPath)}`,
+    assert.deepEqual(paneCalls, [
+      "split-window -d -h -t %21 -P -F #{pane_id}",
+      "select-pane -t %24 -T scout-1",
+      `send-keys -t %24 -l ${paneCommandLine(join(install, "pi-extension", "luvus", "cli.ts"), started.json.launch, started.promptPath)}`,
+      "send-keys -t %24 Enter",
     ]);
   });
 
@@ -1347,14 +1349,15 @@ describe("skills/pi-luvus/launch.ts", () => {
       env: { HOME: mkdtempSync(join(caseDir, "home-")) },
     });
     assert.equal(argValue(started.spec.args, "-e"), SHIM_DONE);
-    assert.deepEqual(luvusCalls, [
-      "pane split 21 --right --no-focus",
-      "pane name scout-1 --pane 24",
-      `pane run 24 ${paneCommandLine(SHIM_CLI, started.json.launch, started.promptPath)}`,
+    assert.deepEqual(paneCalls, [
+      "split-window -d -h -t %21 -P -F #{pane_id}",
+      "select-pane -t %24 -T scout-1",
+      `send-keys -t %24 -l ${paneCommandLine(SHIM_CLI, started.json.launch, started.promptPath)}`,
+      "send-keys -t %24 Enter",
     ]);
   });
 
-  it("fails naming pi install and the candidates, and records no Luvus call", async () => {
+  it("fails naming pi install and the candidates, and records no pane call", async () => {
     const caseDir = mkdtempSync(join(workdir, "shim-missing-"));
     const copy = copyShim(caseDir);
     const shim = await importShim(copy);
@@ -1367,7 +1370,7 @@ describe("skills/pi-luvus/launch.ts", () => {
     assert.match(message, /pi install git:github\.com\/slatkin\/pi-luvus/);
     assert.ok(message.includes(caseDir), `expected the checkout candidate in: ${message}`);
     assert.ok(message.includes(gitInstall), `expected the git install candidate in: ${message}`);
-    assert.deepEqual(luvusCalls, []);
+    assert.deepEqual(paneCalls, []);
 
     // The direct entry turns the same failure into a non-zero exit.
     let status = 0;
@@ -1385,7 +1388,7 @@ describe("skills/pi-luvus/launch.ts", () => {
     }
     assert.equal(status, 1);
     assert.match(stderr, /launch\.ts: Cannot find the pi-luvus extension/);
-    assert.deepEqual(luvusCalls, []);
+    assert.deepEqual(paneCalls, []);
   });
 
   it("finds a pi git install under a temp HOME from a copied shim", async () => {
@@ -1395,7 +1398,7 @@ describe("skills/pi-luvus/launch.ts", () => {
     const install = makeInstall(join(home, ".pi", "agent", GIT_INSTALL_RELATIVE));
 
     // Direct entry, the way the skill runs it: `node <copy> help` finds the
-    // install and runs its CLI, with no Luvus call.
+    // install and runs its CLI, with no pane call.
     const help = execFileSync(process.execPath, [copy, "help"], {
       env: { HOME: home, PATH: process.env.PATH },
       encoding: "utf8",
@@ -1414,10 +1417,11 @@ describe("skills/pi-luvus/launch.ts", () => {
       argValue(started.spec.args, "-e"),
       join(install, "pi-extension", "luvus", "luvus-done.ts"),
     );
-    assert.deepEqual(luvusCalls, [
-      "pane split 21 --right --no-focus",
-      "pane name scout-1 --pane 24",
-      `pane run 24 ${paneCommandLine(installCli, started.json.launch, started.promptPath)}`,
+    assert.deepEqual(paneCalls, [
+      "split-window -d -h -t %21 -P -F #{pane_id}",
+      "select-pane -t %24 -T scout-1",
+      `send-keys -t %24 -l ${paneCommandLine(installCli, started.json.launch, started.promptPath)}`,
+      "send-keys -t %24 Enter",
     ]);
   });
 });

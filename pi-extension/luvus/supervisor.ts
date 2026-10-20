@@ -24,11 +24,9 @@ import {
   readScreen,
   runInPane,
   sendEscape,
-  activeHost,
-  type PollResult,
-  type SurfacePlacement,
-} from "./backend.ts";
-import { UhpEventStream } from "./uhp-events.ts";
+} from "./tmux.ts";
+import type { PollResult } from "./exit-sidecar.ts";
+import type { SurfacePlacement } from "./placement.ts";
 import {
   buildSubagentToolAllowlist,
   getAgentConfigDir,
@@ -271,8 +269,6 @@ export interface SupervisorDeps {
     pollForExit: typeof pollForExit;
     agentPrompt: typeof agentPrompt;
   };
-  /** Event stream factory; the supervisor owns the instance it returns. */
-  events: () => UhpEventStream;
   /** Loaded status configuration (widget labels and transition messages). */
   statusConfig: StatusConfig;
 }
@@ -1322,13 +1318,6 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
    */
   const abortController = new AbortController();
 
-  /** One UHP event stream per supervisor; it starts lazily on the first watcher. */
-  let eventStream: UhpEventStream | null = null;
-
-  function events(): UhpEventStream {
-    return (eventStream ??= deps.events());
-  }
-
   /** Record where this process's roster lives (idempotent). */
   function ensureRosterContext(ctx: {
     sessionManager: { getSessionDir(): string; getSessionId(): string };
@@ -1710,36 +1699,27 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     const pollSignal = AbortSignal.any([signal, abortController.signal]);
 
     try {
-      // Watch the pane on the UHP event stream: it starts lazily on the first
-      // watcher and stops once the last one releases. The stream is a Luvus
-      // feature; under tmux there is none, so the pane is polled instead.
-      const releaseEventWatch = activeHost() === "luvus" ? events().watch(surface) : () => {};
-      let result: Awaited<ReturnType<typeof pollForExit>>;
-      try {
-        result = await deps.luvus.pollForExit(surface, pollSignal, {
-          interval: 1000,
-          sessionFile,
-          sentinelFile: running.sentinelFile,
-          eventStream: events(),
-          // The screen read is only the crash fallback; while the child's activity
-          // snapshot is demonstrably fresh, skip the per-second process spawn.
-          // Claude-backed runs have no snapshots, so they keep scanning.
-          maySkipScreenScan: running.activityFile
-            ? () => {
-                const activity = running.activity;
-                return activity != null && Date.now() - activity.updatedAt < 10_000;
-              }
-            : undefined,
-          onTick() {
-            observeRunningSubagent(running);
-            deliverParentMessages(running, send);
-            runIdleWatchdog(running, deps.luvus.agentPrompt);
-          },
-        });
-      } finally {
-        releaseEventWatch();
-      }
-
+      // Watch the pane: the sidecar file is the primary signal, the terminal
+      // sentinel the fallback for a child that died without writing one.
+      const result = await deps.luvus.pollForExit(surface, pollSignal, {
+        interval: 1000,
+        sessionFile,
+        sentinelFile: running.sentinelFile,
+        // The screen read is only the crash fallback; while the child's activity
+        // snapshot is demonstrably fresh, skip the per-second process spawn.
+        // Claude-backed runs have no snapshots, so they keep scanning.
+        maySkipScreenScan: running.activityFile
+          ? () => {
+              const activity = running.activity;
+              return activity != null && Date.now() - activity.updatedAt < 10_000;
+            }
+          : undefined,
+        onTick() {
+          observeRunningSubagent(running);
+          deliverParentMessages(running, send);
+          runIdleWatchdog(running, deps.luvus.agentPrompt);
+        },
+      });
       // A child can write its last message just before exiting; deliver it before
       // the completion result so ordering matches what the child observed.
       drainAndRemoveParentMessages(running, send);
@@ -2058,8 +2038,6 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       }
       runningSubagents.clear();
       rosterContext = null;
-      // The stream child must not outlive the session; do not rely on it exiting.
-      eventStream?.shutdown();
     },
 
     getAbortController(): AbortController {

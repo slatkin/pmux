@@ -12,7 +12,6 @@ import {
 import { buildSpawnEnvParts, resolveDenyTools } from "../pi-extension/luvus/supervisor.ts";
 import subagentsExtension from "../pi-extension/luvus/index.ts";
 import subagentDoneExtension from "../pi-extension/luvus/luvus-done.ts";
-import { __setLuvusExecForTests__ } from "../pi-extension/luvus/luvus.ts";
 
 test("round-trips a full ChildEnv", () => {
   const full: ChildEnv = {
@@ -107,15 +106,13 @@ test("a spawned child env registers as a child with spawning tools denied", asyn
   });
   const testEnv: Record<string, string> = {
     ...spawnEnv,
-    LUVUS_ENV: "1",
-    LUVUS_BIN_PATH: "/bin/luvus",
-    LUVUS_PANE_ID: "7",
+    TMUX: "/tmp/tmux-0/default",
+    TMUX_PANE: "%7",
   };
   const saved = new Map(Object.keys(testEnv).map((key) => [key, process.env[key]]));
   for (const [key, value] of Object.entries(testEnv)) process.env[key] = value;
 
   const { api, registeredTools } = makeMockPi();
-  __setLuvusExecForTests__(async () => JSON.stringify({ result: {} }));
   try {
     subagentDoneExtension(api);
     subagentsExtension(api);
@@ -139,7 +136,6 @@ test("a spawned child env registers as a child with spawning tools denied", asyn
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    __setLuvusExecForTests__(null);
     rmSync(dir, { recursive: true, force: true });
   }
 });

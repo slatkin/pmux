@@ -33,8 +33,7 @@ import {
   writeLaunchRecord,
   type LaunchRecord,
 } from "../pi-extension/luvus/launch-record.ts";
-import type { PollResult } from "../pi-extension/luvus/luvus.ts";
-import type { UhpEventStream } from "../pi-extension/luvus/uhp-events.ts";
+import type { PollResult } from "../pi-extension/luvus/exit-sidecar.ts";
 import {
   classifyStatus,
   createStatusState,
@@ -107,17 +106,6 @@ function createEnv(): TestEnv {
 function writeAgentFile(agentsDir: string, name: string, frontmatter: string, body: string) {
   mkdirSync(agentsDir, { recursive: true });
   writeFileSync(join(agentsDir, `${name}.md`), `---\n${frontmatter}\n---\n\n${body}\n`);
-}
-
-/** Every Luvus dep is a fake; polls stay pending until the test finishes one. */
-function fakeEvents(): UhpEventStream {
-  return {
-    watch: () => () => {},
-    onTrigger: () => () => {},
-    isRunning: () => false,
-    agentListSnapshot: () => null,
-    shutdown() {},
-  } as unknown as UhpEventStream;
 }
 
 function createPollQueue(override?: LuvusPoll) {
@@ -195,7 +183,6 @@ function makeSupervisor(env: TestEnv, options: SupervisorOptions = {}) {
       pollForExit: polls.poll,
       agentPrompt: () => ({ submitted: true }),
     },
-    events: fakeEvents,
     statusConfig: {
       enabled: true,
       lineLimit: DEFAULT_STATUS_LINE_LIMIT,

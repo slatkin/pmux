@@ -76,6 +76,11 @@ export function callerPaneId(env: NodeJS.ProcessEnv = process.env): string {
   return pane;
 }
 
+/** The setup hint for a process that runs in no supported host. */
+export function tmuxSetupHint(): string {
+  return "Start pi inside a tmux pane.";
+}
+
 function tailLines(text: string, lines: number): string {
   const split = text.split("\n");
   if (split.length <= lines) return text;

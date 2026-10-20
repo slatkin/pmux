@@ -5,9 +5,6 @@
  *   optionally with a `handoff` text that writes the `handoff` `.exit` sidecar
  *   instead of `done` (context-alert handoff, D4)
  * - Nudges any agent that forgets to call luvus_done after generating
- * - Publishes a terminal Luvus status (`done`, or `blocked` with the ping
- *   question / error text) before each sidecar write, so an external
- *   orchestrator can wait on the pane instead of scraping the screen
  * - Appends one `handoffs.jsonl` row per context alert and per handoff exit,
  *   fire-and-forget, so the alert and handoff events can be counted later
  * - Respects the child-env denied-tool list for its own tools: a denied tool is not registered,
@@ -26,7 +23,6 @@ import { Type } from "@sinclair/typebox";
 import { writeFileSync } from "node:fs";
 import { createSubagentActivityRecorder } from "./activity.ts";
 import { decodeChildEnv } from "./child-env.ts";
-import { createLuvusStatusReporter } from "./luvus-status.ts";
 import {
   alertText,
   appendHandoffLog,
@@ -34,13 +30,11 @@ import {
   formatThresholdValue,
   handoffLogPath,
   handoffNudgeText,
-  matchLuvusSession,
   shouldAlert,
   type ContextAlertConfig,
   type ContextUsageLike,
   type HandoffLogRow,
 } from "./context-alert.ts";
-import { listLuvusSessionsAsync } from "./luvus.ts";
 import { loadStatusConfig } from "./status.ts";
 
 export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
@@ -145,30 +139,14 @@ const contextAlertConfig = loadContextAlertConfig();
 export const __handoffLogWrites__: Promise<void>[] = [];
 
 /**
- * The server session for log rows, resolved once per process (D6): the parsed
- * `session list --json` payload matched against `LUVUS_SOCKET_PATH`. Outside
- * Luvus (no `LUVUS_BIN_PATH`) nothing is called and the value is null.
- */
-let luvusSessionForLog: Promise<string | null> | null = null;
-
-function resolveLuvusSessionForLog(): Promise<string | null> {
-  luvusSessionForLog ??= (async () => {
-    if (!process.env.LUVUS_BIN_PATH) return null;
-    const list = await listLuvusSessionsAsync();
-    return matchLuvusSession(list, process.env.LUVUS_SOCKET_PATH);
-  })();
-  return luvusSessionForLog;
-}
-
-/**
  * Fire-and-forget handoff log row (D6): never awaited by the caller, and it
  * can never throw here — the append itself and the whole async chain are
  * guarded, so a failed log write cannot prevent the alert, the sidecar write,
  * or shutdown.
  */
-function writeHandoffLogRow(row: Omit<HandoffLogRow, "luvusSession">): void {
+function writeHandoffLogRow(row: HandoffLogRow): void {
   const write = (async () => {
-    appendHandoffLog({ ...row, luvusSession: await resolveLuvusSessionForLog() }, handoffLogPath());
+    appendHandoffLog(row, handoffLogPath());
   })();
   __handoffLogWrites__.push(write);
   void write.catch(() => {});
@@ -194,13 +172,6 @@ export default function (pi: ExtensionAPI) {
     runningChildId: childEnv.id,
     activityFile: childEnv.activityFile,
   });
-
-  // Live sidebar status for this pane. In a subagent child this is the ONLY
-  // reporter: index.ts skips its own registration here (isSubagentChild), so
-  // this instance's listeners and this module's terminal latch are the single
-  // source of truth for the pane's status lease.
-  const statusReporter = createLuvusStatusReporter();
-  statusReporter.register(pi);
 
   // ── Agent completion nudge configuration ──
   /** Delay (ms) before sending a nudge after agent_end. Configurable via env var. */
@@ -399,7 +370,6 @@ export default function (pi: ExtensionAPI) {
     const errorInfo = findLatestAssistantError(messages);
     const sessionFile = childEnv.sessionFile;
     if (errorInfo && sessionFile) {
-      statusReporter.report("blocked", errorInfo.errorMessage);
       try {
         writeFileSync(
           `${sessionFile}.exit`,
@@ -429,7 +399,6 @@ export default function (pi: ExtensionAPI) {
     // branch above already handled provider failures.
     if (autoExit && !userTookOver && shouldAutoExitOnAgentEnd(messages)) {
       recorder.agentEndDone();
-      statusReporter.report("done");
       if (sessionFile) {
         try {
           writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
@@ -532,7 +501,6 @@ export default function (pi: ExtensionAPI) {
         name: childEnv.name ?? "subagent",
         message: params.message,
       };
-      statusReporter.report("blocked", params.message);
       writeFileSync(`${sessionFile}.exit`, JSON.stringify(exitData));
 
       ctx.shutdown();
@@ -577,10 +545,7 @@ export default function (pi: ExtensionAPI) {
       recorder.subagentDone();
       doneCalled = true;
       clearNudgeTimer();
-      // The status is `done` even for a handoff: the child ended cleanly, and
-      // `luvus wait agent-status --status done,blocked` wakes on both. The
-      // orchestrator learns that the task is not complete from the sidecar.
-      statusReporter.report("done");
+      // The orchestrator learns that the task is not complete from the sidecar.
       if (sessionFile) {
         writeFileSync(
           `${sessionFile}.exit`,

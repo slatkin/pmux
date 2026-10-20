@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildPaneTitle, type LaunchSpec } from "./launch.ts";
-import { agentSend, closeSurface } from "./backend.ts";
+import { agentSend, closeSurface } from "./tmux.ts";
 import { readExitSidecar } from "./exit-sidecar.ts";
 
 /**
@@ -26,7 +26,7 @@ const SPAWN_FAILED_CODE = 127;
 
 /** Injected pieces of the wrapper; the defaults are the real process. */
 export interface RunSpecDeps {
-  /** Base environment holding `LUVUS_PANE_ID`; defaults to `process.env`. */
+  /** Base environment holding `TMUX_PANE`; defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
   /** Sentinel and OSC title sink; defaults to `process.stdout.write`. */
   stdout?: (text: string) => void;
@@ -34,9 +34,9 @@ export interface RunSpecDeps {
   stderr?: (text: string) => void;
   /** Close grace timer; defaults to a real `setTimeout`. */
   sleep?: (ms: number) => Promise<void>;
-  /** Pane close; defaults to the Luvus backend. */
+  /** Pane close; defaults to the tmux backend. */
   closePane?: (pane: string) => void;
-  /** Parent wake-up; defaults to the Luvus backend. */
+  /** Parent wake-up; defaults to the tmux backend. */
   sendToParent?: (parent: string, text: string) => void;
 }
 
@@ -101,8 +101,8 @@ export async function runSpec(
   const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
   const sleep = deps.sleep ?? ((ms: number) => delay(ms));
   const closePane = deps.closePane ?? closeSurface;
-  // The pane the wrapper runs in: the Luvus pane id, or the tmux pane id.
-  const pane = base.LUVUS_PANE_ID ?? base.TMUX_PANE;
+  // The pane the wrapper runs in: this process's own tmux pane.
+  const pane = base.TMUX_PANE;
 
   const env: NodeJS.ProcessEnv = { ...base, ...spec.env };
   // The spec is pane-independent: whichever pane runs it becomes the child's

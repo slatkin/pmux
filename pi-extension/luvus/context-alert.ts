@@ -96,37 +96,11 @@ export function handoffLogPath(): string {
 export interface HandoffLogRow {
   at: string;
   event: "alert" | "handoff";
-  /** Server session name, the socket path when it cannot be resolved, or null outside Luvus. */
-  luvusSession: string | null;
   child: string;
   session: string;
   tokens: number | null;
   /** Only on `alert` rows: the threshold as configured. */
   threshold?: number | string;
-}
-
-/**
- * From a parsed `luvus session list --json` payload, return the name whose
- * `socket_path` equals `socketPath`. When nothing matches — or the list is
- * missing or malformed — return the socket path itself. With no socket path
- * (outside Luvus) return null.
- */
-export function matchLuvusSession(list: unknown, socketPath: string | undefined): string | null {
-  if (!socketPath) return null;
-  const sessions = (list as { sessions?: unknown } | null | undefined)?.sessions;
-  if (Array.isArray(sessions)) {
-    for (const session of sessions) {
-      if (
-        session != null &&
-        typeof session === "object" &&
-        (session as { socket_path?: unknown }).socket_path === socketPath
-      ) {
-        const name = (session as { name?: unknown }).name;
-        if (typeof name === "string" && name !== "") return name;
-      }
-    }
-  }
-  return socketPath;
 }
 
 /**

@@ -17,8 +17,8 @@ import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { readdirSync, readFileSync, appendFileSync, existsSync } from "node:fs";
 import {
-  isMuxAvailable,
-  muxSetupHint,
+  isTmuxAvailable,
+  tmuxSetupHint,
   createSurface,
   pollForExit,
   closeSurface,
@@ -28,11 +28,9 @@ import {
   splitPane,
   namePane,
   agentPrompt,
-  parseSurfacePlacement,
-  type SurfacePlacement,
-} from "./backend.ts";
+} from "./tmux.ts";
+import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import { tailerCommandLine } from "./launch.ts";
-import { UhpEventStream } from "./uhp-events.ts";
 import {
   createSupervisor,
   SubagentParams,
@@ -71,7 +69,6 @@ import {
 
 import { decodeChildEnv, isSubagentChild } from "./child-env.ts";
 import { loadStatusConfig, loadSurfaceConfig, writeSurfaceConfig } from "./status.ts";
-import { createLuvusStatusReporter } from "./luvus-status.ts";
 import { createTurnNotifier } from "./turn-notify.ts";
 import { createLiveTitleController } from "./live-title.ts";
 
@@ -290,7 +287,7 @@ export async function handleStreamCommand(args: string, deps: StreamCommandDeps)
 
   const paneId = deps.paneId;
   if (!paneId) {
-    deps.notify("Opening a stream requires a Luvus pane. Start pi inside a Luvus pane.", "warning");
+    deps.notify("Opening a stream requires a tmux pane. Start pi inside a tmux pane.", "warning");
     return;
   }
 
@@ -442,7 +439,6 @@ function createSupervisorInstance(): Supervisor {
       pollForExit,
       agentPrompt,
     },
-    events: () => new UhpEventStream(),
     statusConfig,
   });
   (globalThis as any)[SUPERVISOR_KEY] = supervisor;
@@ -491,7 +487,7 @@ function muxUnavailableResult() {
     content: [
       {
         type: "text" as const,
-        text: `Subagents require Luvus. ${muxSetupHint()}`,
+        text: `Subagents require tmux. ${tmuxSetupHint()}`,
       },
     ],
     details: { error: "mux not available" },
@@ -529,7 +525,7 @@ export const __surfaceTest__ = {
 
 // ── Parent/child messaging (design Decisions 4, 5, 8) ──
 //
-// Children and siblings are addressed through Luvus `agent prompt` (luvus.ts).
+// Children and siblings are addressed through tmux `send-keys` (tmux.ts).
 // `parent` is not: a child appends JSON lines to `<session>.msg`, and the
 // parent's existing poll loop injects them as steering messages.
 
@@ -720,7 +716,7 @@ export function sendSubagentMessage(
     deps.prompt(target.pane!, `${payload.header}\n${payload.message}`);
   } catch (error: any) {
     return {
-      error: `Failed to send to "${target.name}" via Luvus: ${error?.message ?? String(error)}`,
+      error: `Failed to send to "${target.name}" via tmux: ${error?.message ?? String(error)}`,
     };
   }
   return {
@@ -815,11 +811,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   activePi = pi;
 
   // Live sidebar status for this pane. A subagent child does NOT register it:
-  // luvus-done.ts owns the child's reporter (the child marker is decoded in
-  // child-env.ts).
-  if (childEnv.sessionFile === undefined) createLuvusStatusReporter().register(pi);
-
-  // One Luvus notification when a turn ends in an unfocused parent pane.
+  // the child's own completion path owns the pane status there (the child
+  // marker is decoded in child-env.ts).
   createTurnNotifier(process.env, statusConfig.notifyEnabled).register(pi);
 
   // First-prompt OSC title for unnamed non-subagent panes. A subagent child
@@ -884,7 +877,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         }
 
         // Validate prerequisites
-        if (!isMuxAvailable()) {
+        if (!isTmuxAvailable()) {
           return muxUnavailableResult();
         }
 
@@ -1052,7 +1045,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       ): Promise<
         AgentToolResult<{ error?: string; name?: string; pane?: string; relation?: string }>
       > {
-        if (!isMuxAvailable()) return muxUnavailableResult();
+        if (!isTmuxAvailable()) return muxUnavailableResult();
 
         const sessionFile = childEnv.sessionFile ?? null;
         const result = sendSubagentMessage(
@@ -1228,7 +1221,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       },
 
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-        if (!isMuxAvailable()) {
+        if (!isTmuxAvailable()) {
           return muxUnavailableResult();
         }
 
@@ -1306,7 +1299,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       await handleStreamCommand(args, {
         notify: (text, level) => ctx.ui.notify(text, level),
-        paneId: process.env.LUVUS_PANE_ID,
+        paneId: process.env.TMUX_PANE,
         sessionId: ctx?.sessionManager?.getSessionId?.(),
       });
     },

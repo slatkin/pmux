@@ -6,7 +6,7 @@ import {
   DEFAULT_SURFACE_PLACEMENT,
   parseSurfacePlacement,
   type SurfacePlacement,
-} from "./luvus.ts";
+} from "./placement.ts";
 import { parseContextAlertConfig, type ContextAlertConfig } from "./context-alert.ts";
 import type {
   ActivityReadResult,

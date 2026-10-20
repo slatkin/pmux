@@ -34,13 +34,8 @@ import {
   writeLaunchSpec,
   type LaunchSpec,
 } from "./launch.ts";
-import {
-  createSurface,
-  parseSurfacePlacement,
-  runInPane,
-  type SurfacePlacement,
-  callerPaneId,
-} from "./backend.ts";
+import { createSurface, runInPane, callerPaneId } from "./tmux.ts";
+import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
@@ -275,7 +270,6 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
     promptPath,
     `${briefText}\n${parentFooter(parent, callerPaneId(env), hostOf(env))}\n`,
   );
-
   const specEnv = encodeChildEnv({
     name,
     agent: role,
@@ -313,8 +307,8 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
   };
   writeLaunchSpec(specPath, spec);
 
-  const pane = createSurface(name, placement, callerPaneId(env), hostOf(env));
-  runInPane(pane, paneLine, hostOf(env));
+  const pane = createSurface(name, placement, callerPaneId(env));
+  runInPane(pane, paneLine);
 
   write(JSON.stringify({ pane, session: sessionFile, launch: specPath }) + "\n");
   return 0;
@@ -346,8 +340,8 @@ function resumeCommand(values: CliValues, deps: CliDeps, placement: SurfacePlace
   }
   const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);
 
-  const pane = createSurface(values.name ?? spec.name, placement, callerPaneId(env), hostOf(env));
-  runInPane(pane, paneLine, hostOf(env));
+  const pane = createSurface(values.name ?? spec.name, placement, callerPaneId(env));
+  runInPane(pane, paneLine);
 
   write(JSON.stringify({ pane, launch: launchPath }) + "\n");
   return 0;
