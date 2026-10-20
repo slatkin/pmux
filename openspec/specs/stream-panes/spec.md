@@ -41,14 +41,6 @@ Opening two streams from one command SHALL place the first pane to the right of 
 - **WHEN** the thinking stream is attached and the user runs `/stream thinking` again
 - **THEN** no second thinking pane is created and the command reports that it is already attached
 
-### Requirement: Streams require a Luvus pane
-
-The command SHALL refuse to open a stream when the pi process does not know the id of a Luvus pane. It SHALL report that a Luvus pane is required and SHALL leave stream state unchanged.
-
-#### Scenario: pi running outside Luvus
-- **WHEN** the user runs `/stream thinking` in a pi process with no pane id in its environment
-- **THEN** the command reports that a Luvus pane is required and nothing is opened or attached
-
 ### Requirement: Stream content
 
 An attached thinking stream SHALL receive assistant thinking text as it streams. An attached tools stream SHALL receive one line when a tool call starts, its streamed output as it arrives, and one line when it ends, including whether it failed. Content for a stream that is not attached SHALL NOT be sent.
@@ -128,3 +120,11 @@ If the transcript cannot be projected because pi's rendered layout differs from 
 #### Scenario: Layout mismatch
 - **WHEN** a stream is attached and pi's transcript layout does not match what the projection expects
 - **THEN** the transcript renders exactly as it would without a stream attached, one warning is shown, and further attaches do not repeat the warning
+
+### Requirement: Streams require a tmux pane
+
+The command SHALL refuse to open a stream when the pi process does not know the id of a tmux pane. It SHALL report that a tmux pane is required and SHALL leave stream state unchanged.
+
+#### Scenario: pi running outside tmux
+- **WHEN** the user runs `/stream thinking` in a pi process with no pane id in its environment
+- **THEN** the command reports that a tmux pane is required and nothing is opened or attached
