@@ -34,10 +34,10 @@
 
 ## 6. Repository gates
 
-- [ ] 6.1 Run `pnpm run typecheck` and confirm it passes
-- [ ] 6.2 Run `pnpm run lint` and confirm zero errors (the pre-existing `no-explicit-any` warnings are expected)
-- [ ] 6.3 Run `pnpm run format:check` and confirm it passes
-- [ ] 6.4 Run `pnpm test` and confirm the full suite passes
+- [x] 6.1 Run `pnpm run typecheck` and confirm it passes
+- [x] 6.2 Run `pnpm run lint` and confirm zero errors (the pre-existing `no-explicit-any` warnings are expected)
+- [x] 6.3 Run `pnpm run format:check` and confirm it passes
+- [x] 6.4 Run `pnpm test` and confirm the full suite passes
 
 ## Workflow follow-up
 
