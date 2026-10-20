@@ -60,7 +60,7 @@ with user consent).
    procedure) itself.
 2. Start the child:
    ```bash
-   node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--surface right|down|tab]
+   node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--surface pane|tab]
    ```
    `<cwd>` is the child's working directory; `--scratch` (default
    `${TMPDIR:-/tmp}/pmux`) holds the generated prompt, role prompt
@@ -70,9 +70,12 @@ with user consent).
    ```bash
    node <skill-dir>/launch.ts prune [--scratch <dir>] [--max-age-days <n>] [--dry-run]
    ```
-   `--surface` places the new pane: `right` (default) splits
-   yours side by side, `down` stacks it below, `tab` gives it its own
-   window; when omitted, it comes from the
+   `--surface` places the new pane: `pane` (default) places it
+   automatically in your window — it splits your newest living child pane,
+   or your own pane when you have none, side by side when that pane is at
+   least twice as wide as it is tall and stacked below otherwise — and
+   `tab` gives it its own window; the legacy values `right` and `down` are
+   still accepted and mean `pane`; when omitted, it comes from the
    extension's `config.json`. On success it prints JSON on stdout:
    `{"pane":..., "session":..., "launch":...}`. `launch` is the launch-spec
    path a resume needs; `pane` is the child's pane id, which the nudge and
@@ -124,7 +127,7 @@ with user consent).
   runs in a **new** pane: `rm` the child's `.exit`, write the follow-up to
   a prompt file, and run:
   ```bash
-  node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child>] [--surface right|down|tab]
+  node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child>] [--surface pane|tab]
   ```
   `<spec>` is the `launch` field from the start JSON; `--name` defaults to
   the child name stored in the spec. `--surface` places the resumed pane the

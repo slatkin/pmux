@@ -9,5 +9,5 @@
     "enabled": false,
     "threshold": 200000
   },
-  "surface": "right"
+  "surface": "pane"
 }
