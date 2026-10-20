@@ -16,6 +16,7 @@ import { main } from "../pi-extension/pmux/cli.ts";
 import { writeLaunchSpec, LAUNCH_SPEC_VERSION } from "../pi-extension/pmux/launch.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 import { useTmuxPaneFake } from "./tmux-fakes.ts";
+import { tempDirHelpers } from "./temp-dir.ts";
 import {
   createSupervisor,
   type SupervisorContext,
@@ -23,14 +24,7 @@ import {
 } from "../pi-extension/pmux/supervisor.ts";
 import { DEFAULT_STATUS_LINE_LIMIT } from "../pi-extension/pmux/status.ts";
 
-async function withTempDir(run: (dir: string) => void | Promise<void>): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "pmux-status-"));
-  try {
-    await run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+const { withTempDir, withTempDirAsync } = tempDirHelpers("pmux-status-");
 
 describe("status file module", () => {
   it("writes one JSON object and reads it back", () => {
@@ -178,7 +172,7 @@ describe("status writes from the child extension", () => {
   });
 
   it("writes blocked with the question at caller_ping, before the sidecar", async () => {
-    withTempDir(async (dir) => {
+    await withTempDirAsync(async (dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const { tools } = loadChildExtension({ PI_PMUX_SESSION: sessionFile });
       const ping = tools.find((tool) => tool.name === "caller_ping");
@@ -193,7 +187,7 @@ describe("status writes from the child extension", () => {
   });
 
   it("writes done at pmux_done, before the sidecar, and latches", async () => {
-    withTempDir(async (dir) => {
+    await withTempDirAsync(async (dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const { tools, fire } = loadChildExtension({ PI_PMUX_SESSION: sessionFile });
       const done = tools.find((tool) => tool.name === "pmux_done");
@@ -209,7 +203,7 @@ describe("status writes from the child extension", () => {
   });
 
   it("writes done with handoff at pmux_done handoff", async () => {
-    withTempDir(async (dir) => {
+    await withTempDirAsync(async (dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const { tools } = loadChildExtension({ PI_PMUX_SESSION: sessionFile });
       const done = tools.find((tool) => tool.name === "pmux_done");
@@ -323,15 +317,6 @@ describe("runSpec crash status", () => {
     });
   });
 });
-
-async function withTempDirAsync(run: (dir: string) => Promise<void>): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "pmux-status-run-"));
-  try {
-    await run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
 
 // ── Removal at start ──
 

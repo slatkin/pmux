@@ -13,7 +13,12 @@
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, rmSync } from "node:fs";
-import { interpretExitSidecar, readExitSidecar, type PollResult } from "./exit-sidecar.ts";
+import {
+  exitSidecarPath,
+  interpretExitSidecar,
+  readExitSidecar,
+  type PollResult,
+} from "./exit-sidecar.ts";
 import {
   DEFAULT_SURFACE_PLACEMENT,
   type SplitDirection,
@@ -311,7 +316,7 @@ export async function pollForExit(
     if (options.sessionFile) {
       const data = readExitSidecar(options.sessionFile);
       if (data !== null) {
-        rmSync(`${options.sessionFile}.exit`, { force: true });
+        rmSync(exitSidecarPath(options.sessionFile), { force: true });
         return interpretExitSidecar(data);
       }
     }
@@ -341,7 +346,7 @@ export async function pollForExit(
         if (options.sessionFile) {
           const data = readExitSidecar(options.sessionFile);
           if (data !== null) {
-            rmSync(`${options.sessionFile}.exit`, { force: true });
+            rmSync(exitSidecarPath(options.sessionFile), { force: true });
             return interpretExitSidecar(data);
           }
         }

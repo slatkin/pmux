@@ -75,7 +75,7 @@ The GitHub repository is `slatkin/pmux`. The install commands and the launcher's
 ## Tests
 
 - Use `node:test` with `node:assert/strict`. Name files `test/<thing>.test.ts`. `test/test.ts` is one large suite.
-- The `test/*.ts` glob also matches helpers: `host-env.ts`, `stream-fakes.ts` and `stream-harness.ts`. They hold no tests.
+- The `test/*.ts` glob also matches helpers: `host-env.ts`, `stream-fakes.ts`, `stream-harness.ts` and `temp-dir.ts`. They hold no tests.
 - Import `./host-env.ts` first in any test that reaches a backend. It removes `LUVUS_*`, `PI_LUVUS_*`, `PI_PMUX_*`, `TMUX` and `TMUX_PANE` from the process env. Without it, a run inside a pane drives the real host.
 - Fake the host with the test seam: `__setTmuxExecForTests__` in `tmux.ts`. Reset it to `null` afterwards.
 - Tests never need a live tmux server, and never open many panes. The user runs the live checks, so do not ask for live timings or pane counts in a plan.

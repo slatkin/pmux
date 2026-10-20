@@ -25,7 +25,7 @@ import {
   runInPane,
   sendEscape,
 } from "./tmux.ts";
-import type { PollResult } from "./exit-sidecar.ts";
+import { exitSidecarPath, type PollResult } from "./exit-sidecar.ts";
 import { removeChildStatus } from "./status-file.ts";
 import type { SurfacePlacement } from "./placement.ts";
 import {
@@ -808,7 +808,7 @@ function runIdleWatchdog(
           `(${running.activityRead?.reason ?? "missing"}${running.activityRead?.error ? ": " + running.activityRead.error : ""})`;
     try {
       writeFileSync(
-        `${running.sessionFile}.exit`,
+        exitSidecarPath(running.sessionFile),
         JSON.stringify({
           type: "error",
           errorMessage: `Subagent child stopped reporting: ${detail}. Finish with an error instead of polling forever.`,
@@ -839,7 +839,7 @@ function runIdleWatchdog(
     }
   } else if (action === "finish") {
     try {
-      writeFileSync(`${running.sessionFile}.exit`, JSON.stringify({ type: "done" }));
+      writeFileSync(exitSidecarPath(running.sessionFile), JSON.stringify({ type: "done" }));
     } catch {
       // Best effort — the next tick retries.
     }
@@ -1539,9 +1539,8 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
   ): RunningSubagent {
     const { spec, running } = backend.buildLaunch(request);
     writeLaunchSpec(request.run.launchScriptFile, spec);
-    // A resume reuses the session file, so a stale status from an earlier run
-    // must not survive into this one.
-    if (request.run.sessionFile) removeChildStatus(request.run.sessionFile);
+    // A new run must not read the status of an earlier run.
+    removeChildStatus(request.run.sessionFile);
     deps.pmux.runInPane(request.run.surface, paneLine);
 
     runningSubagents.set(running.id, running);

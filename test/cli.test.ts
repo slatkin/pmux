@@ -39,24 +39,9 @@ import { main } from "../pi-extension/pmux/cli.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 import { useTmuxPaneFake } from "./tmux-fakes.ts";
 import { main as shimMain } from "../skills/pmux/launch.ts";
+import { tempDirHelpers } from "./temp-dir.ts";
 
-function withTempDir(run: (dir: string) => void): void {
-  const dir = mkdtempSync(join(tmpdir(), "pi-launch-test-"));
-  try {
-    run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-async function withTempDirAsync(run: (dir: string) => Promise<void>): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "pi-run-test-"));
-  try {
-    await run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+const { withTempDir, withTempDirAsync } = tempDirHelpers("pi-test-");
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const PI_STUB = join(TEST_DIR, "stubs", "pi-stub.ts");

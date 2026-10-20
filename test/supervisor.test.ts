@@ -13,6 +13,7 @@ import {
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { tempDirHelpers } from "./temp-dir.ts";
 
 import {
   createSupervisor,
@@ -265,14 +266,7 @@ const BASE_RECORD: LaunchRecord = {
   interactive: false,
 };
 
-function withTempDir(run: (dir: string) => void): void {
-  const dir = mkdtempSync(join(tmpdir(), "launch-record-test-"));
-  try {
-    run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+const { withTempDir } = tempDirHelpers("launch-record-test-");
 
 describe("launch record", () => {
   it("round trips a record through a temp file and a rename", () => {

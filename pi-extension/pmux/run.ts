@@ -12,8 +12,8 @@ import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildPaneTitle, type LaunchSpec } from "./launch.ts";
 import { agentSend, closeSurface } from "./tmux.ts";
-import { readExitSidecar } from "./exit-sidecar.ts";
-import { readChildStatus, writeChildStatus } from "./status-file.ts";
+import { exitSidecarPath, readExitSidecar } from "./exit-sidecar.ts";
+import { isTerminalChildStatus, readChildStatus, writeChildStatus } from "./status-file.ts";
 
 /**
  * pi wipes a title emitted before it finishes booting (it enters the
@@ -137,9 +137,9 @@ export async function runSpec(
   // A child that died left `working` or `idle` on disk and no sidecar: mark it
   // blocked with the exit code so a status wait ends. A clean completion or a
   // ping (a sidecar, or a terminal status the child wrote itself) is left as is.
-  if (spec.sessionFile && !existsSync(`${spec.sessionFile}.exit`)) {
+  if (spec.sessionFile && !existsSync(exitSidecarPath(spec.sessionFile))) {
     const status = readChildStatus(spec.sessionFile);
-    if (status?.status !== "done" && status?.status !== "blocked") {
+    if (status === null || !isTerminalChildStatus(status.status)) {
       writeChildStatus(spec.sessionFile, "blocked", `child exited with code ${code}`);
     }
   }

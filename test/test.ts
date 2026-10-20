@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { tempDirHelpers } from "./temp-dir.ts";
 import * as subagentsModule from "../pi-extension/pmux/index.ts";
 
 import {
@@ -105,15 +106,9 @@ function createSessionFile(dir: string, entries: object[]): string {
   return file;
 }
 
-async function withTempDir(run: (dir: string) => void | Promise<void>) {
-  const dir = createTestDir();
-  try {
-    await run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
+// The temp-directory helper is shared with the other test files. The body may
+// be synchronous, so the asynchronous variant is the one that fits.
+const { withTempDirAsync: withTempDir } = tempDirHelpers("subagents-test-");
 function createMockExtensionApi() {
   const registeredTools: Array<any> = [];
   const registeredCommands: Array<any> = [];

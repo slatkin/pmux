@@ -51,6 +51,11 @@ export function interpretExitSidecar(data: any): PollResult {
   return { reason: "done", exitCode: 0 };
 }
 
+/** The `.exit` sidecar path next to a session file. */
+export function exitSidecarPath(sessionFile: string): string {
+  return `${sessionFile}.exit`;
+}
+
 /**
  * Read the `.exit` sidecar next to a session file. Returns the parsed JSON, or
  * null when the file is missing or is not valid JSON. Never deletes the file —
@@ -58,7 +63,7 @@ export function interpretExitSidecar(data: any): PollResult {
  */
 export function readExitSidecar(sessionFile: string): any {
   try {
-    return JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8"));
+    return JSON.parse(readFileSync(exitSidecarPath(sessionFile), "utf8"));
   } catch {
     return null;
   }

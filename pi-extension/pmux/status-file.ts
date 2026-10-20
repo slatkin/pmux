@@ -18,6 +18,19 @@ export type ChildStatus = "working" | "idle" | "done" | "blocked";
 /** The status names a child may write; the single source of the vocabulary. */
 export const CHILD_STATUSES: readonly ChildStatus[] = ["working", "idle", "done", "blocked"];
 
+/** The statuses that end a child's life; a later write is skipped. */
+export const TERMINAL_CHILD_STATUSES: readonly ChildStatus[] = ["done", "blocked"];
+
+/** True when the value is one of the known status names. */
+export function isChildStatus(value: unknown): value is ChildStatus {
+  return typeof value === "string" && (CHILD_STATUSES as readonly string[]).includes(value);
+}
+
+/** True when the status ends the child's life. */
+export function isTerminalChildStatus(status: ChildStatus): boolean {
+  return TERMINAL_CHILD_STATUSES.includes(status);
+}
+
 export interface ChildStatusRecord {
   status: ChildStatus;
   /** ISO time of the write. */
@@ -59,7 +72,7 @@ export function writeChildStatus(
   } catch {
     return false;
   }
-  if (status === "done" || status === "blocked") terminalWrites.add(sessionFile);
+  if (isTerminalChildStatus(status)) terminalWrites.add(sessionFile);
   return true;
 }
 
@@ -73,9 +86,7 @@ export function parseChildStatus(raw: string): ChildStatusRecord | null {
     if (
       data === null ||
       typeof data !== "object" ||
-      !(CHILD_STATUSES as readonly string[]).includes(
-        (data as { status?: unknown }).status as string,
-      )
+      !isChildStatus((data as { status?: unknown }).status)
     ) {
       return null;
     }

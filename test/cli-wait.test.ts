@@ -1,10 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../pi-extension/pmux/cli.ts";
 import { statusFilePath, writeChildStatus } from "../pi-extension/pmux/status-file.ts";
+import { tempDirHelpers } from "./temp-dir.ts";
+
+const { withTempDirAsync: withTempDir } = tempDirHelpers("pmux-wait-");
 
 /** One `wait` invocation with captured stdout and stderr. */
 async function runWait(
@@ -19,15 +21,6 @@ async function runWait(
     ...deps,
   });
   return { code, stdout: stdout.join(""), stderr: stderr.join("") };
-}
-
-async function withTempDir(run: (dir: string) => Promise<void>): Promise<void> {
-  const dir = mkdtempSync(join(tmpdir(), "pmux-wait-"));
-  try {
-    await run(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 describe("cli wait", () => {

@@ -36,7 +36,8 @@ import {
   type HandoffLogRow,
 } from "./context-alert.ts";
 import { loadStatusConfig } from "./status.ts";
-import { writeChildStatus } from "./status-file.ts";
+import { writeChildStatus, type ChildStatus } from "./status-file.ts";
+import { exitSidecarPath } from "./exit-sidecar.ts";
 
 export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
   return agentStarted;
@@ -321,7 +322,7 @@ export default function (pi: ExtensionAPI) {
   let agentStarted = false;
 
   /** Best-effort status write; a failed write never blocks a turn or shutdown. */
-  function writeStatus(status: "working" | "idle" | "done" | "blocked", message?: string): void {
+  function writeStatus(status: ChildStatus, message?: string): void {
     if (childEnv.sessionFile) writeChildStatus(childEnv.sessionFile, status, message);
   }
 
@@ -379,7 +380,7 @@ export default function (pi: ExtensionAPI) {
       writeStatus("blocked", errorInfo.errorMessage);
       try {
         writeFileSync(
-          `${sessionFile}.exit`,
+          exitSidecarPath(sessionFile),
           JSON.stringify({
             type: "error",
             errorMessage: errorInfo.errorMessage,
@@ -409,7 +410,7 @@ export default function (pi: ExtensionAPI) {
       if (sessionFile) {
         writeStatus("done");
         try {
-          writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
+          writeFileSync(exitSidecarPath(sessionFile), JSON.stringify({ type: "done" }));
         } catch {
           // Best effort — without the sidecar the watcher falls back to the
           // session file / screen sentinel.
@@ -512,7 +513,7 @@ export default function (pi: ExtensionAPI) {
         message: params.message,
       };
       writeStatus("blocked", params.message);
-      writeFileSync(`${sessionFile}.exit`, JSON.stringify(exitData));
+      writeFileSync(exitSidecarPath(sessionFile), JSON.stringify(exitData));
 
       ctx.shutdown();
       return {
@@ -560,7 +561,7 @@ export default function (pi: ExtensionAPI) {
       if (sessionFile) {
         writeStatus("done");
         writeFileSync(
-          `${sessionFile}.exit`,
+          exitSidecarPath(sessionFile),
           JSON.stringify(
             typeof params.handoff === "string"
               ? { type: "handoff", message: params.handoff }

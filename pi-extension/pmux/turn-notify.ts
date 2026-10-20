@@ -53,7 +53,8 @@ export interface TurnNotifierDeps {
 
 const DEFAULT_DEPS: TurnNotifierDeps = {
   isPaneFocused: isPaneFocusedAsync,
-  pushNotification: async (text) => pushNotificationAsync(text),
+  // tmux has no level, so the default sink drops it.
+  pushNotification: (text) => pushNotificationAsync(text),
 };
 
 export interface TurnNotifier {

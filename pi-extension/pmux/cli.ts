@@ -41,10 +41,13 @@ import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
 import {
   CHILD_STATUSES,
+  isChildStatus,
   parseChildStatus,
   rawChildStatusName,
   removeChildStatus,
   statusFilePath,
+  TERMINAL_CHILD_STATUSES,
+  type ChildStatus,
 } from "./status-file.ts";
 import { slugifyName } from "./slug.ts";
 import { encodeChildEnv, resolveDenyTools } from "./child-env.ts";
@@ -59,7 +62,7 @@ const CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
 const DEFAULT_CLOSE_GRACE_MS = 5000;
 
 /** Defaults for `wait`. */
-const DEFAULT_WAIT_STATUS = "done,blocked";
+const DEFAULT_WAIT_STATUS = TERMINAL_CHILD_STATUSES.join(",");
 const DEFAULT_WAIT_TIMEOUT_S = 600;
 /** Fixed poll interval for the status file. */
 const WAIT_POLL_MS = 500;
@@ -295,8 +298,7 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
   };
   writeLaunchSpec(specPath, spec);
 
-  // A resume reuses the session file, so a stale status from an earlier run
-  // must not survive into this one.
+  // A new run must not read the status of an earlier run.
   removeChildStatus(sessionFile);
 
   const pane = createSurface(name, placement, callerPaneId(env));
@@ -332,8 +334,8 @@ function resumeCommand(values: CliValues, deps: CliDeps, placement: SurfacePlace
   }
   const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);
 
-  // The launch spec carries the session file; a stale status from the earlier
-  // run must not survive into this one.
+  // The launch spec carries the session file; the status of the earlier run
+  // must not survive into this one.
   removeChildStatus(spec.sessionFile);
 
   const pane = createSurface(values.name ?? spec.name, placement, callerPaneId(env));
@@ -421,14 +423,16 @@ function lastMessageCommand(values: CliValues, deps: CliDeps): number {
 }
 
 /** Parse `--status` as a comma-separated list of the accepted names. */
-function waitStatuses(value: string | undefined): string[] {
-  const list = (value ?? DEFAULT_WAIT_STATUS).split(",");
-  for (const name of list) {
-    if (!(CHILD_STATUSES as readonly string[]).includes(name)) {
+function waitStatuses(value: string | undefined): ChildStatus[] {
+  const names = (value ?? DEFAULT_WAIT_STATUS).split(",");
+  const statuses: ChildStatus[] = [];
+  for (const name of names) {
+    if (!isChildStatus(name)) {
       throw new Error(`unknown --status name: ${name} (expected ${CHILD_STATUSES.join(", ")})`);
     }
+    statuses.push(name);
   }
-  return list;
+  return statuses;
 }
 
 /** Parse `--timeout` as a positive number of seconds. */
