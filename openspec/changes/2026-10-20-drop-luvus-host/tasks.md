@@ -2,7 +2,7 @@
 
 ## 0. Prerequisite
 
-- [ ] 0.1 Archive `2026-10-20-tmux-backend` before this change is applied or archived (design: Prerequisite).
+- [x] 0.1 Archive `2026-10-20-tmux-backend` before this change is applied or archived (design: Prerequisite).
 
 ## 1. Remove the Luvus host (D1, D8)
 
