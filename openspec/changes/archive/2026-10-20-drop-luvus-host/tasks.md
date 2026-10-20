@@ -39,8 +39,8 @@
 
 ## 5. Specs
 
-- [ ] 5.1 Archive the change. If the archive leaves `luvus-agent-status` and `luvus-uhp-events` with no requirement, remove the two directories.
-- [ ] 5.2 Edit by hand the `Purpose` lines that still say Luvus: `luvus-backend`, `luvus-surface`, `luvus-agent-titles`, `luvus-completion`, `luvus-messaging`, `external-orchestration`, `portable-launch`, `stream-panes` and `tmux-backend`.
+- [x] 5.1 Archive the change. If the archive leaves `luvus-agent-status` and `luvus-uhp-events` with no requirement, remove the two directories.
+- [x] 5.2 Edit by hand the `Purpose` lines that still say Luvus: `luvus-backend`, `luvus-surface`, `luvus-agent-titles`, `luvus-completion`, `luvus-messaging`, `external-orchestration`, `portable-launch`, `stream-panes` and `tmux-backend`.
 
 ## 6. Checks
 
