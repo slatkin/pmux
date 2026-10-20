@@ -2,20 +2,26 @@
 
 ## Purpose
 
-Defines how the subagents extension opens, drives, observes, interrupts and closes subagent panes through the Luvus CLI. Luvus is the only supported terminal host.
+Defines how the subagents extension opens, drives, observes, interrupts and closes subagent panes through the Luvus CLI. Luvus is one of two supported terminal hosts, next to tmux.
 
 ## Requirements
 
 ### Requirement: Luvus environment is required
-The extension SHALL treat Luvus as available only when the `LUVUS_ENV`, `LUVUS_BIN_PATH` and `LUVUS_PANE_ID` environment variables are all set and non-empty. When any of them is missing, `luvus_spawn` and `luvus_resume` MUST NOT spawn anything. Each MUST instead return an error result telling the user to run pi inside Luvus. No other terminal backend and no headless fallback SHALL exist.
+The extension SHALL treat Luvus as available only when `LUVUS_ENV`, `LUVUS_BIN_PATH` and `LUVUS_PANE_ID` are all set and non-empty. When any of them is missing, `luvus_spawn` and `luvus_resume` MUST NOT spawn anything through the Luvus backend.
+
+The extension SHALL accept a supported host when either Luvus is available or tmux is available. When neither host is available, `luvus_spawn` and `luvus_resume` MUST NOT spawn anything and MUST return an error result that tells the user to run pi inside Luvus or inside a tmux pane. No other terminal backend and no headless fallback SHALL exist.
 
 #### Scenario: Spawn outside Luvus
-- **WHEN** `luvus_spawn` is called and `LUVUS_PANE_ID` is unset
-- **THEN** the tool returns an error result whose text says subagents require running pi inside Luvus, and no pane or process is created
+- **WHEN** `luvus_spawn` is called with `LUVUS_PANE_ID` unset and no tmux pane
+- **THEN** the tool returns an error result whose text names both supported hosts, and no pane or process is created
+
+#### Scenario: Spawn inside a tmux pane
+- **WHEN** `luvus_spawn` is called with `TMUX` and `TMUX_PANE` set and the Luvus keys unset
+- **THEN** the tmux backend opens the pane and the tool reports the new pane id
 
 #### Scenario: Other multiplexer present
 - **WHEN** pi runs inside tmux (the `TMUX` variable is set) but the `LUVUS_*` variables are unset
-- **THEN** `luvus_spawn` returns the same "run pi inside Luvus" error
+- **THEN** `luvus_spawn` opens the pane through the tmux backend instead of failing
 
 ### Requirement: Luvus binary is invoked by exact path
 Every Luvus CLI call SHALL execute the binary at `$LUVUS_BIN_PATH` directly, without a shell and without searching `PATH`.
