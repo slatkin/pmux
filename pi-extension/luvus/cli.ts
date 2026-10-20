@@ -39,7 +39,7 @@ import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
-import { removeChildStatus } from "./status-file.ts";
+import { removeChildStatus, statusFilePath, readChildStatus } from "./status-file.ts";
 import { slugifyName } from "./slug.ts";
 import { encodeChildEnv, resolveDenyTools } from "./child-env.ts";
 
@@ -52,6 +52,15 @@ const CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
 /** Close-on-done grace used when `--close-grace-ms` is omitted. */
 const DEFAULT_CLOSE_GRACE_MS = 5000;
 
+/** Status names `wait` accepts; `--status` is a comma-separated list of these. */
+const WAIT_STATUSES = ["working", "idle", "done", "blocked"] as const;
+
+/** Defaults for `wait`. */
+const DEFAULT_WAIT_STATUS = "done,blocked";
+const DEFAULT_WAIT_TIMEOUT_S = 600;
+/** Fixed poll interval for the status file. */
+const WAIT_POLL_MS = 500;
+
 /** Node version that runs `.ts` without a flag, required by the pane side. */
 const MIN_NODE: readonly [number, number] = [22, 18];
 
@@ -61,6 +70,7 @@ const USAGE = [
   "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>] [--surface right|down|tab]",
   "  node cli.ts run <spec> [<prompt>]",
   "  node cli.ts last-message --session <file>",
+  "  node cli.ts wait --session <file> [--status <list>] [--timeout <seconds>]",
   "  node cli.ts prune [--scratch <dir>] [--max-age-days <n>] [--dry-run]",
 ].join("\n");
 
@@ -76,6 +86,8 @@ const CLI_OPTIONS = {
   launch: { type: "string" },
   prompt: { type: "string" },
   session: { type: "string" },
+  status: { type: "string" },
+  timeout: { type: "string" },
   "max-age-days": { type: "string" },
   "dry-run": { type: "boolean" },
   help: { type: "boolean", short: "h" },
@@ -93,6 +105,8 @@ interface CliValues {
   launch?: string;
   prompt?: string;
   session?: string;
+  status?: string;
+  timeout?: string;
   "max-age-days"?: string;
   "dry-run"?: boolean;
   help?: boolean;
@@ -403,6 +417,90 @@ function lastMessageCommand(values: CliValues, deps: CliDeps): number {
   return 0;
 }
 
+/** Parse `--status` as a comma-separated list of the accepted names. */
+function waitStatuses(value: string | undefined): string[] {
+  const list = (value ?? DEFAULT_WAIT_STATUS).split(",");
+  for (const name of list) {
+    if (!(WAIT_STATUSES as readonly string[]).includes(name)) {
+      throw new Error(`unknown --status name: ${name} (expected ${WAIT_STATUSES.join(", ")})`);
+    }
+  }
+  return list;
+}
+
+/** Parse `--timeout` as a positive number of seconds. */
+function waitTimeoutSeconds(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_WAIT_TIMEOUT_S;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    throw new Error(`--timeout must be a positive number of seconds: ${value}`);
+  }
+  return seconds;
+}
+
+/** The status name inside one raw status-file line, for the timeout message. */
+function rawStatusName(raw: string): string {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const status = (parsed as { status?: unknown }).status;
+    return typeof status === "string" ? status : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * `wait`: poll `<session>.status` until it holds one of the wanted statuses.
+ * A missing file counts as no status yet. Exit 0 prints the status line,
+ * exit 2 is a timeout (it prints the last line seen, or `{"status":null}`),
+ * exit 1 is a usage error. The loop reads a file only; no host is involved.
+ */
+async function waitCommand(values: CliValues, deps: CliDeps): Promise<number> {
+  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  try {
+    const sessionPath = required("--session", values.session);
+    const wanted = new Set(waitStatuses(values.status));
+    const timeoutSeconds = waitTimeoutSeconds(values.timeout);
+
+    const statusPath = statusFilePath(sessionPath);
+    const deadline = Date.now() + timeoutSeconds * 1000;
+    let last: string | null = null;
+    for (;;) {
+      try {
+        last = readFileSync(statusPath, "utf8");
+      } catch {
+        // A missing file is no status yet.
+      }
+      if (last !== null) {
+        const record = readChildStatus(sessionPath);
+        if (record && wanted.has(record.status)) {
+          write(`${last}\n`);
+          return 0;
+        }
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await sleep(Math.min(WAIT_POLL_MS, remaining));
+    }
+
+    write(`${last ?? JSON.stringify({ status: null })}\n`);
+    writeErr(
+      last === null
+        ? `timeout after ${timeoutSeconds}s: no status was seen\n`
+        : `timeout after ${timeoutSeconds}s: last status was ${rawStatusName(last)}\n`,
+    );
+    return 2;
+  } catch (error) {
+    // A usage error must leave stdout empty, so it is caught here instead of
+    // bubbling to the entry wrapper.
+    const message = error instanceof Error ? error.message : String(error);
+    writeErr(`cli.ts: ${message}\n`);
+    return 1;
+  }
+}
+
 /**
  * Run one CLI invocation and return the code the process should exit with.
  * Failures throw; the shim and the direct-entry wrapper turn them into a
@@ -440,6 +538,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   }
   if (command === "run") return runCommand(positionals.slice(1), deps);
   if (command === "last-message") return lastMessageCommand(values as CliValues, deps);
+  if (command === "wait") return await waitCommand(values as CliValues, deps);
   if (command === "prune") return pruneCommand(values as CliValues, deps);
   throw new Error(`unknown subcommand: ${command}\n${USAGE}`);
 }
