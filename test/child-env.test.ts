@@ -34,9 +34,17 @@ test("round-trips a minimal ChildEnv", () => {
   const minimal: ChildEnv = { autoExit: false, denyTools: [] };
   const decoded = decodeChildEnv(encodeChildEnv(minimal));
   assert.equal(decoded.autoExit, false);
+  assert.equal(decoded.externalParent, false);
   assert.deepEqual(decoded.denyTools, []);
   assert.equal(decoded.name, undefined);
   assert.equal(decoded.sessionFile, undefined);
+});
+
+test("round-trips the external-parent marker", () => {
+  const marked: ChildEnv = { externalParent: true, autoExit: false, denyTools: [] };
+  const encoded = encodeChildEnv(marked);
+  assert.equal(encoded.PI_PMUX_EXTERNAL_PARENT, "1");
+  assert.equal(decodeChildEnv(encoded).externalParent, true);
 });
 
 test("encodeChildEnv leaves out an empty deny list and autoExit false", () => {

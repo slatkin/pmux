@@ -341,6 +341,26 @@ describe("runSpec", () => {
     });
   });
 
+  // A skill launch carries the external-parent marker even with `parent` set:
+  // the wrapper contacts nobody, and the wrapper-error sidecar logic is
+  // untouched.
+  it("contacts nobody when the child exits", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "orch" },
+        env: { PI_STUB_CODE: "0" },
+      });
+      assert.equal(result.stdout, "__SUBAGENT_DONE_0__\n");
+      assert.equal(result.stderr, "");
+      assert.deepEqual(result.closedPanes, []);
+      // The wrapper-error sidecar logic is untouched: a child that wrote no
+      // sidecar still gets the wrapper's `error` sidecar.
+      const sidecar = result.sidecar ? JSON.parse(result.sidecar) : null;
+      assert.equal(sidecar?.type, "error");
+      assert.equal(sidecar?.source, "wrapper");
+    });
+  });
+
   // SIGINT is ignored for the wrapper, not sent to a child here: `process.kill`
   // on Windows would terminate the test runner instead.
   it("ignores SIGINT while the child runs", { skip: process.platform === "win32" }, async () => {
@@ -723,6 +743,7 @@ describe("cli.ts start", () => {
     assert.equal(spec.command, "pi");
     assert.equal(spec.sessionFile, res.json.session);
     assert.equal(spec.env.PI_PMUX_NAME, "fix-7");
+    assert.equal(spec.env.PI_PMUX_EXTERNAL_PARENT, "1");
     assert.equal(spec.env.PI_PMUX_AGENT, "doer");
     assert.equal(spec.env.PI_PMUX_SESSION, res.json.session);
     assert.equal(spec.env.PI_PMUX_SURFACE, undefined);
@@ -1023,6 +1044,24 @@ describe("cli.ts resume", () => {
     assert.equal(spec.sessionFile, started.json.session);
     assert.equal(argValue(spec.args, "--session"), started.json.session);
     assert.equal(spec.closeOnDone?.graceMs, 2500);
+  });
+
+  it("keeps the external-parent marker in the spec after a resume", async () => {
+    const cwd = mkdtempSync(join(workdir, "external-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low\nauto-exit: true", "Body.");
+    const started = await runStart({ cwd, role: "doer", child: "fix-7" });
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up task.\n");
+
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 0);
+
+    // `resume` reuses the launch spec unchanged, so the marker survives.
+    const spec = readLaunchSpec(started.json.launch);
+    assert.equal(spec.env.PI_PMUX_EXTERNAL_PARENT, "1");
   });
 
   it("uses the spec name when --name is omitted", async () => {
