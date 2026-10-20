@@ -93,7 +93,7 @@ export function createStreamHarness(options: StreamHarnessOptions = {}): StreamH
       (subagentsModule as any).default(api);
       command = commands.find((entry) => entry.name === "stream");
       handlers = registered;
-      runtimeDir = mkdtempSync(join(tmpdir(), "pi-luvus-stream-test-"));
+      runtimeDir = mkdtempSync(join(tmpdir(), "pmux-stream-test-"));
       setEnv("XDG_RUNTIME_DIR", runtimeDir);
     },
     async reset() {

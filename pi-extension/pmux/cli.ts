@@ -1,6 +1,6 @@
 /**
  * Command-line interface for launching subagents in tmux panes. The packaged
- * skill shim (`skills/pi-luvus/launch.ts`) hands off to `main` here, and
+ * skill shim (`skills/pmux/launch.ts`) hands off to `main` here, and
  * the pi extension's launch sites use the same `run` wrapper.
  *
  * `start` and `resume` run in the orchestrator's session; `run` runs in the
@@ -233,7 +233,7 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
   const graceMs = closeGraceMs(values["close-grace-ms"]);
   const id = randomBytes(4).toString("hex");
   const base = scratchBase(name, id);
-  const scratch = resolve(values.scratch ?? join(tmpdir(), "pi-luvus"));
+  const scratch = resolve(values.scratch ?? defaultScratchDir());
   const specPath = join(scratch, `${base}.json`);
   const promptPath = join(scratch, `${base}.prompt.md`);
   const rolePromptPath = join(scratch, `${base}.role.md`);

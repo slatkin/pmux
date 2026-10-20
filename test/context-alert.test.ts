@@ -202,7 +202,7 @@ describe("context-alert handoff log", () => {
     const saved = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = dir;
     try {
-      assert.equal(handoffLogPath(), join(dir, "extensions", "pi-luvus", "handoffs.jsonl"));
+      assert.equal(handoffLogPath(), join(dir, "extensions", "pmux", "handoffs.jsonl"));
     } finally {
       if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = saved;
@@ -243,7 +243,7 @@ describe("context-alert in the child (pmux-done)", () => {
       PI_CODING_AGENT_DIR: dir,
       PI_PMUX_SESSION: options.sessionFile === false ? env.PI_PMUX_SESSION : sessionFile,
     };
-    const configPath = join(dir, "extensions", "pi-luvus", "config.json");
+    const configPath = join(dir, "extensions", "pmux", "config.json");
     mkdirSync(join(configPath, ".."), { recursive: true });
     writeFileSync(configPath, configJson);
 

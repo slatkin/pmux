@@ -24,11 +24,18 @@ const STATUS_CONFIG_EXAMPLE_PATH = join(PACKAGE_ROOT, "config.json.example");
 // Legacy location: config.json at the package root (e.g. inside pi's git
 // clone). Still honored on read so existing installs keep their settings.
 const LEGACY_STATUS_CONFIG_PATH = join(PACKAGE_ROOT, "config.json");
-const EXTENSION_DIR_NAME = "pi-luvus";
+const EXTENSION_DIR_NAME = "pmux";
+/** Pre-rename extension directory: still honored on read so existing
+ * installs keep their settings. Never written to. */
+const LEGACY_EXTENSION_DIR_NAME = "pi-luvus";
+
+function getLegacyExtensionConfigPath(): string {
+  return join(getAgentConfigDir(), "extensions", LEGACY_EXTENSION_DIR_NAME, "config.json");
+}
 
 /**
  * Canonical per-install config location: the extension's operating area,
- * e.g. ~/.pi/agent/extensions/pi-luvus/config.json. Unlike the
+ * e.g. ~/.pi/agent/extensions/pmux/config.json. Unlike the
  * package root, this survives `pi update` of the git clone.
  */
 export function getDefaultConfigPath(): string {
@@ -236,6 +243,18 @@ export function parseSurfaceConfig(rawConfig: unknown, source = "config.json"): 
 }
 
 /**
+ * Legacy config paths tried in order after the resolved config path: the
+ * pre-rename extensions dir first, then the package root.
+ */
+function legacyConfigPaths(
+  configPath: string | undefined,
+  legacyPath: string | undefined,
+): string[] {
+  if (configPath !== undefined) return legacyPath ? [legacyPath] : [];
+  return [...new Set([getLegacyExtensionConfigPath(), LEGACY_STATUS_CONFIG_PATH])];
+}
+
+/**
  * Load the `surface` placement default from the extension config. Unlike the
  * status config, a missing or unreadable file is not fatal — it just means
  * the default placement.
@@ -249,7 +268,7 @@ export function loadSurfaceConfig(
     const { sourcePath, rawConfig } = readStatusConfigFile(
       configPath ?? getDefaultConfigPath(),
       examplePath,
-      legacyPath ?? (configPath === undefined ? LEGACY_STATUS_CONFIG_PATH : undefined),
+      legacyConfigPaths(configPath, legacyPath),
     );
     return parseSurfaceConfig(JSON.parse(rawConfig), sourcePath);
   } catch {
@@ -259,7 +278,7 @@ export function loadSurfaceConfig(
 
 /**
  * Persist the `surface` placement default to the extension config.json,
- * keeping any other keys. Seeds from the legacy package-root config when the
+ * keeping any other keys. Seeds from the legacy configs when the
  * new file does not exist yet (migration), else from the shipped example.
  * Throws on invalid JSON so callers can report it instead of silently
  * truncating the user's config.
@@ -271,7 +290,6 @@ export function writeSurfaceConfig(
   legacyPath?: string,
 ): void {
   const resolved = configPath ?? getDefaultConfigPath();
-  const legacy = legacyPath ?? (configPath === undefined ? LEGACY_STATUS_CONFIG_PATH : undefined);
   let base: Record<string, unknown> = {};
   try {
     base = JSON.parse(readFileSync(resolved, "utf8")) as Record<string, unknown>;
@@ -281,7 +299,7 @@ export function writeSurfaceConfig(
       // Existing but unreadable/invalid — refuse to overwrite it.
       throw error;
     }
-    for (const seed of [legacy, examplePath]) {
+    for (const seed of [...legacyConfigPaths(configPath, legacyPath), examplePath]) {
       if (!seed || seed === resolved) continue;
       try {
         base = JSON.parse(readFileSync(seed, "utf8")) as Record<string, unknown>;
@@ -301,7 +319,7 @@ export function writeSurfaceConfig(
 function readStatusConfigFile(
   configPath: string,
   examplePath: string,
-  legacyPath?: string,
+  legacyPaths: readonly string[] = [],
 ): { sourcePath: string; rawConfig: string } {
   try {
     return { sourcePath: configPath, rawConfig: readFileSync(configPath, "utf8") };
@@ -310,7 +328,8 @@ function readStatusConfigFile(
     if (errno.code !== "ENOENT") throw error;
   }
 
-  if (legacyPath && legacyPath !== configPath) {
+  for (const legacyPath of legacyPaths) {
+    if (legacyPath === configPath) continue;
     try {
       return { sourcePath: legacyPath, rawConfig: readFileSync(legacyPath, "utf8") };
     } catch (error) {
@@ -324,8 +343,9 @@ function readStatusConfigFile(
   } catch (error) {
     const errno = error as NodeJS.ErrnoException;
     if (errno.code === "ENOENT") {
+      const legacyList = legacyPaths.length > 0 ? `, ${legacyPaths.join(", ")},` : "";
       throw new Error(
-        `Missing subagent status config. Expected ${configPath}${legacyPath ? `, ${legacyPath},` : ""} or ${examplePath}.`,
+        `Missing subagent status config. Expected ${configPath}${legacyList} or ${examplePath}.`,
         { cause: error },
       );
     }
@@ -342,7 +362,7 @@ export function loadStatusConfig(
   const { sourcePath, rawConfig } = readStatusConfigFile(
     resolved,
     examplePath,
-    legacyPath ?? (configPath === undefined ? LEGACY_STATUS_CONFIG_PATH : undefined),
+    legacyConfigPaths(configPath, legacyPath),
   );
 
   let parsed: unknown;

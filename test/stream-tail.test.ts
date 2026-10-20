@@ -77,7 +77,7 @@ describe("stream-tail.mjs", () => {
     await hub.close();
     await tailer.done;
     assert.equal(tailer.code, 0);
-    assert.equal(tailer.stdout, "pi-luvus thinking stream\nLet me check\nthe path");
+    assert.equal(tailer.stdout, "pmux thinking stream\nLet me check\nthe path");
     assert.equal(tailer.stderr, "");
   });
 
@@ -99,7 +99,7 @@ describe("stream-tail.mjs", () => {
     assert.equal(tailer.code, 0);
     assert.equal(
       tailer.stdout,
-      "pi-luvus tools stream\ntool read_file started\ntool read_file failed\n",
+      "pmux tools stream\ntool read_file started\ntool read_file failed\n",
     );
   });
 

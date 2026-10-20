@@ -498,7 +498,7 @@ const statusConfig = loadStatusConfig();
 
 // Subagent surface placement default: "right" (side-by-side split), "down"
 // (stacked split) or "tab" (own workspace tab). Loaded from the extension config
-// (~/.pi/agent/extensions/pi-luvus/config.json), changeable at
+// (~/.pi/agent/extensions/pmux/config.json), changeable at
 // runtime via /pmux-surface, overridable per call via the tool's `surface` param.
 let surfaceDefault: SurfacePlacement = loadSurfaceConfig();
 

@@ -61,7 +61,7 @@ with user consent).
    node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--surface right|down|tab]
    ```
    `<cwd>` is the child's working directory; `--scratch` (default
-   `${TMPDIR:-/tmp}/pi-luvus`) holds the generated prompt, role prompt
+   `${TMPDIR:-/tmp}/pmux`) holds the generated prompt, role prompt
    and launch spec. Each `start` deletes scratch files older than 7 days,
    so the folder stays bounded; recent sessions stay for resume. To clean
    on demand (add `--dry-run` to only list):

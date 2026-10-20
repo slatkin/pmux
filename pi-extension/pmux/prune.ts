@@ -2,7 +2,7 @@
  * Age-based cleanup for the temporary scratch files the launcher writes.
  *
  * `start` writes one launch spec, two prompt files, a session file, an
- * activity file and later sidecars per child under `<tmp>/pi-luvus`. Nothing
+ * activity file and later sidecars per child under `<tmp>/pmux`. Nothing
  * deleted them, so heavy use filled the temporary folder. This module is the
  * single place that decides what is safe to delete: only files with known
  * launcher suffixes and only when their mtime is older than the retention.
@@ -105,9 +105,9 @@ export function pruneSentinels(dir: string, options: PruneOptions): PruneResult 
   return pruneDir(dir, isSentinelFile, options);
 }
 
-/** Default scratch directory: `<tmp>/pi-luvus`. */
+/** Default scratch directory: `<tmp>/pmux`. */
 export function defaultScratchDir(): string {
-  return join(tmpdir(), "pi-luvus");
+  return join(tmpdir(), "pmux");
 }
 
 /**

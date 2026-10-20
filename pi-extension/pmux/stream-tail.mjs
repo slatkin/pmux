@@ -46,7 +46,7 @@ socket.setEncoding("utf8");
 
 socket.on("connect", () => {
   socket.write(`${JSON.stringify({ hello: stream })}\n`);
-  process.stdout.write(`pi-luvus ${stream} stream\n`);
+  process.stdout.write(`pmux ${stream} stream\n`);
 });
 
 let buffer = "";

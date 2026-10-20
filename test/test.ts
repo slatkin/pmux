@@ -655,22 +655,48 @@ describe("status.ts", () => {
 
   it("prefers the extensions-dir config, falling back to the legacy package-root config", () => {
     withTempDir((dir) => {
-      const configPath = join(dir, "extensions", "pi-luvus", "config.json");
+      const configPath = join(dir, "extensions", "pmux", "config.json");
       const legacyPath = join(dir, "config.json");
       const examplePath = join(dir, "config.json.example");
       writeFileSync(legacyPath, JSON.stringify({ surface: "tab" }));
 
       assert.equal(loadSurfaceConfig(configPath, examplePath, legacyPath), "tab");
 
-      mkdirSync(join(dir, "extensions", "pi-luvus"), { recursive: true });
+      mkdirSync(join(dir, "extensions", "pmux"), { recursive: true });
       writeFileSync(configPath, JSON.stringify({ surface: "down" }));
       assert.equal(loadSurfaceConfig(configPath, examplePath, legacyPath), "down");
     });
   });
 
+  it("falls back to the pre-rename extensions dir config when the pmux config is absent", () => {
+    withTempDir((dir) => {
+      const previous = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = dir;
+      try {
+        // A config in the old extensions dir is read when the new one is absent.
+        mkdirSync(join(dir, "extensions", "pi-luvus"), { recursive: true });
+        writeFileSync(
+          join(dir, "extensions", "pi-luvus", "config.json"),
+          JSON.stringify({ surface: "tab" }),
+        );
+        assert.equal(loadSurfaceConfig(), "tab");
+
+        // The new directory wins when both exist.
+        mkdirSync(join(dir, "extensions", "pmux"), { recursive: true });
+        writeFileSync(
+          join(dir, "extensions", "pmux", "config.json"),
+          JSON.stringify({ surface: "down" }),
+        );
+        assert.equal(loadSurfaceConfig(), "down");
+      } finally {
+        restoreEnvVar("PI_CODING_AGENT_DIR", previous);
+      }
+    });
+  });
+
   it("migrates the legacy config to the new location when persisting the surface", () => {
     withTempDir((dir) => {
-      const configPath = join(dir, "extensions", "pi-luvus", "config.json");
+      const configPath = join(dir, "extensions", "pmux", "config.json");
       const legacyPath = join(dir, "config.json");
       const examplePath = join(dir, "config.json.example");
       writeFileSync(legacyPath, JSON.stringify({ status: { enabled: false } }, null, 2) + "\n");
@@ -687,7 +713,7 @@ describe("status.ts", () => {
       const previous = process.env.PI_CODING_AGENT_DIR;
       process.env.PI_CODING_AGENT_DIR = dir;
       try {
-        assert.equal(getDefaultConfigPath(), join(dir, "extensions", "pi-luvus", "config.json"));
+        assert.equal(getDefaultConfigPath(), join(dir, "extensions", "pmux", "config.json"));
       } finally {
         restoreEnvVar("PI_CODING_AGENT_DIR", previous);
       }

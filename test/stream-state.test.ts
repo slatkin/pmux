@@ -196,8 +196,8 @@ describe("StreamHub socket", () => {
   });
 
   test("uses XDG_RUNTIME_DIR and falls back to the temp directory", () => {
-    assert.equal(defaultSocketDir({ XDG_RUNTIME_DIR: "/run/user/1" }), "/run/user/1/pi-luvus");
-    assert.equal(defaultSocketDir({}), join(tmpdir(), "pi-luvus"));
+    assert.equal(defaultSocketDir({ XDG_RUNTIME_DIR: "/run/user/1" }), "/run/user/1/pmux");
+    assert.equal(defaultSocketDir({}), join(tmpdir(), "pmux"));
   });
 });
 

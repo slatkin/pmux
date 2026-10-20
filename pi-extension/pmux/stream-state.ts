@@ -210,7 +210,7 @@ export function isStreamName(value: unknown): value is StreamName {
 /** The private runtime directory used when no explicit one is supplied. */
 export function defaultSocketDir(env: NodeJS.ProcessEnv = process.env): string {
   const base = env.XDG_RUNTIME_DIR || tmpdir();
-  return join(base, "pi-luvus");
+  return join(base, "pmux");
 }
 
 function hashedSocketName(sessionId: string | undefined): string {

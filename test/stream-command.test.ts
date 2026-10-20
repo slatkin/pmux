@@ -200,14 +200,10 @@ describe("stream command", () => {
 
 describe("tailerCommandLine", () => {
   it("builds a bare-node, double-quoted command line", () => {
-    const line = tailerCommandLine(
-      "/run/pi-luvus/stream-abc.sock",
-      "thinking",
-      "/ext/stream-tail.mjs",
-    );
+    const line = tailerCommandLine("/run/pmux/stream-abc.sock", "thinking", "/ext/stream-tail.mjs");
     assert.equal(
       line,
-      `node "/ext/stream-tail.mjs" "--socket" "/run/pi-luvus/stream-abc.sock" "--stream" "thinking"`,
+      `node "/ext/stream-tail.mjs" "--socket" "/run/pmux/stream-abc.sock" "--stream" "thinking"`,
     );
   });
 
