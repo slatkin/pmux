@@ -84,4 +84,4 @@ The GitHub repository is `slatkin/pmux`. The install commands and the launcher's
 ## Commits and releases
 
 - Commit messages use conventional commits with a scope, for example `feat(release): ...` or `docs(readme): ...`.
-- A release is a `v<VERSION>` tag. `.github/workflows/release.yml` runs on the tag, then publishes to npm through trusted publishing. Use the `release` skill.
+- A release is a `v<VERSION>` tag plus a GitHub release with a changelog. The package is not published to a registry. Use the `release` skill.

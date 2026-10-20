@@ -18,9 +18,6 @@ pi install git:github.com/slatkin/pmux
 pi install /path/to/pmux
 ```
 
-There is no npm release. The `pmux` name on npm belongs to an unrelated project,
-so the git and local-checkout installs are the supported paths.
-
 ## External orchestrators (Claude Code)
 
 If the orchestrator is not a pi session (for example Claude Code), drive pi subagents through the packaged `pmux` skill. Install it from GitHub or from a local checkout:

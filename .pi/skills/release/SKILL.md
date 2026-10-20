@@ -57,19 +57,13 @@ Format as markdown. Omit empty sections. Strip the `type(scope):` prefix from ea
 Install:
 
 ```bash
-pi install npm:pi-luvus@<VERSION>
+pi install git:github.com/slatkin/pmux@v<VERSION>
 ```
 
-Or pinned to the git tag:
+Or the latest main:
 
 ```bash
-pi install git:github.com/slatkin/pi-luvus@v<VERSION>
-```
-
-Or latest:
-
-```bash
-pi install npm:pi-luvus
+pi install git:github.com/slatkin/pmux
 ```
 ````
 
@@ -94,7 +88,7 @@ Example output:
 Bump the version in `package.json`:
 
 ```bash
-# Read, update, write back — don't use npm version (it may auto-commit)
+# Read, update, write back — don't use a version-bump command that also commits.
 ```
 
 Use a precise edit to change only the version field.
@@ -108,11 +102,8 @@ git tag v<VERSION>
 git push && git push --tags
 ```
 
-Pushing the tag triggers the GitHub release workflow (`.github/workflows/release.yml`),
-which re-runs the gates, checks that the tag matches `package.json` version, and
-publishes the package to npm via trusted publishing (OIDC; no token secret).
-The npmjs.com package settings must list `slatkin/pi-luvus` + `release.yml` as
-the trusted publisher. Pushing the tag publishes to npm — no manual `npm publish`.
+The tag is a plain git tag. Nothing publishes from it: the GitHub release is
+created in Step 5.
 
 ## Step 5: Create GitHub Release
 
