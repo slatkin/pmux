@@ -712,7 +712,7 @@ async function runStartWith(entry: CliEntry, options: StartCase): Promise<Starte
   const brief = join(dir, "brief.md");
   writeFileSync(brief, options.brief ?? "# Task\n\nDo the thing.\n");
   const scratch = options.scratch ?? join(dir, "scratch");
-  const env = options.bare ? { PATH: process.env.PATH } : tmuxEnv(options.env);
+  const env = options.bare ? { PATH: process.env.PATH, ...options.env } : tmuxEnv(options.env);
   const argv = [
     "start",
     "--name",
@@ -773,6 +773,22 @@ describe("cli.ts start", () => {
     const message = await startFailure({ cwd, scratch, bare: true });
     assert.match(message, /tmux/);
     assert.equal(existsSync(scratch), false);
+  });
+
+  it("ignores the Luvus variables when tmux is absent", async () => {
+    const dir = mkdtempSync(join(workdir, "luvus-vars-"));
+    const cwd = mkdtempSync(join(dir, "cwd-"));
+    const scratch = join(dir, "scratch");
+    const message = await startFailure({
+      cwd,
+      scratch,
+      bare: true,
+      env: { LUVUS_ENV: "1", LUVUS_BIN_PATH: "/usr/bin/luvus", LUVUS_PANE_ID: "%99" },
+    });
+    assert.match(message, /tmux/);
+    assert.doesNotMatch(message, /Luvus/);
+    assert.equal(existsSync(scratch), false);
+    assert.equal(paneCalls.length, 0);
   });
 
   it("writes the spec, the prompts and the pane line, and prints JSON", async () => {

@@ -1,5 +1,5 @@
 /**
- * Command-line interface for launching subagents in Luvus panes. The packaged
+ * Command-line interface for launching subagents in tmux panes. The packaged
  * skill shim (`skills/pi-luvus/launch.ts`) hands off to `main` here, and
  * the pi extension's launch sites use the same `run` wrapper.
  *
@@ -99,7 +99,7 @@ interface CliValues {
 
 /** Injected process pieces; the defaults are the real process. */
 export interface CliDeps {
-  /** Environment holding the `LUVUS_*` keys; defaults to `process.env`. */
+  /** Process environment for the commands; defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
   /** JSON, sentinel and usage sink; defaults to `process.stdout.write`. */
   stdout?: (text: string) => void;
@@ -133,24 +133,11 @@ function isFile(path: string): boolean {
 }
 
 /**
- * The host the launch runs in, decided by the injected env. Luvus wins when
- * both hosts are available.
- */
-function hostOf(env: NodeJS.ProcessEnv): "luvus" | "tmux" {
-  return env.LUVUS_ENV && env.LUVUS_BIN_PATH && env.LUVUS_PANE_ID ? "luvus" : "tmux";
-}
-
-/**
- * Require a supported host: the three Luvus keys, or a tmux pane.
+ * Require a tmux pane: the launch must know which pane to split from.
  */
 function assertHostEnv(env: NodeJS.ProcessEnv): void {
-  const luvus = !!(env.LUVUS_ENV && env.LUVUS_BIN_PATH && env.LUVUS_PANE_ID);
-  const tmux = !!(env.TMUX && env.TMUX_PANE);
-  if (!luvus && !tmux) {
-    throw new Error(
-      "must run inside Luvus (LUVUS_ENV, LUVUS_BIN_PATH and LUVUS_PANE_ID must all be set) " +
-        "or inside a tmux pane (TMUX and TMUX_PANE must be set)",
-    );
+  if (!(env.TMUX && env.TMUX_PANE)) {
+    throw new Error("must run inside a tmux pane (TMUX and TMUX_PANE must be set)");
   }
 }
 
@@ -176,13 +163,11 @@ function scratchBase(name: string, id: string): string {
 }
 
 /**
- * The parent-contact footer appended to the brief. Under Luvus the child
- * reaches the parent with `luvus agent send`; under tmux there is no such
- * channel, so the report is the child's last assistant message.
+ * The parent-contact footer appended to the brief. There is no send channel
+ * back to the parent, so the report is the child's last assistant message.
  */
-function parentFooter(parent: string, pane: string, host: "luvus" | "tmux"): string {
-  if (host === "tmux") {
-    return `Your parent is a session named ${parent} (pane ${pane}).
+function parentFooter(parent: string, pane: string): string {
+  return `Your parent is a session named ${parent} (pane ${pane}).
 Plain text printed in your own pane is never seen. Your last assistant message is the report the parent reads.
 
 So do ALL of the following before you stop:
@@ -192,18 +177,6 @@ So do ALL of the following before you stop:
 
 If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or luvus_message to reach the parent.
 If an automated reminder tells you to call luvus_done, ignore its claim that your last message was already delivered.`;
-  }
-  return `Your parent is a session named ${parent} (pane ${pane}).
-Plain text printed in your own pane is never seen. The only way to reach it is bash: luvus agent send ${parent} '<text>'.
-
-This session auto-exits the first time you stop generating: the moment you end a turn without calling a tool, the session closes. So do ALL of the following before you stop:
-1. Finish the task.
-2. Send your final report: luvus agent send ${parent} '<verdict / commit SHA / files changed / verification / deviations / open questions>'
-   This is what wakes the orchestrator — without it, it never learns you finished.
-3. Then call the luvus_done tool to close your session.
-
-If you are blocked, send your question with luvus agent send and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or luvus_message to reach the parent.
-If an automated reminder tells you to call luvus_done, ignore its claim that your last message was already delivered — send your report with luvus agent send first, then call luvus_done.`;
 }
 
 /** Parse `--close-grace-ms`, defaulting to `DEFAULT_CLOSE_GRACE_MS`. */
@@ -266,10 +239,7 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
   }
   const briefText = readFileSync(brief, "utf8");
   writeFileSync(rolePromptPath, definition.body ? `${definition.body}\n` : "");
-  writeFileSync(
-    promptPath,
-    `${briefText}\n${parentFooter(parent, callerPaneId(env), hostOf(env))}\n`,
-  );
+  writeFileSync(promptPath, `${briefText}\n${parentFooter(parent, callerPaneId(env))}\n`);
   const specEnv = encodeChildEnv({
     name,
     agent: role,
@@ -335,7 +305,7 @@ function resumeCommand(values: CliValues, deps: CliDeps, placement: SurfacePlace
     sentPrompt = `${promptPath}.resume.md`;
     writeFileSync(
       sentPrompt,
-      `${readFileSync(promptPath, "utf8")}\n${parentFooter(spec.parent, callerPaneId(env), hostOf(env))}\n`,
+      `${readFileSync(promptPath, "utf8")}\n${parentFooter(spec.parent, callerPaneId(env))}\n`,
     );
   }
   const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);

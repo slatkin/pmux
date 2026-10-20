@@ -856,7 +856,7 @@ export function requestSubagentInterrupt(
   } catch (error: any) {
     return {
       error:
-        `Failed to send Escape to subagent "${running.name}" via Luvus: ` +
+        `Failed to send Escape to subagent "${running.name}" via tmux: ` +
         `${error?.message ?? String(error)}`,
     };
   }
