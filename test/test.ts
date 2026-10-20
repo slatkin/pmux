@@ -2702,6 +2702,90 @@ describe("subagent messaging", () => {
     assert.match(result.error, /no parent/);
   });
 
+  it("refuses `parent` for a child with an external parent", () => {
+    const result = testApi().resolveMessageTarget({
+      hasParent: true,
+      externalParent: true,
+      ownChildren: [],
+      parentRoster: null,
+      selfId: "b2",
+      to: "parent",
+    });
+    assert.match(result.error, /external orchestrator/);
+    assert.match(result.error, /last assistant message/);
+    assert.match(result.error, /`caller_ping`/);
+  });
+
+  it("omits parent from the reachable list for a child with an external parent", () => {
+    const result = testApi().resolveMessageTarget({
+      hasParent: true,
+      externalParent: true,
+      ownChildren: [{ id: "d4", name: "Scout", surface: "27" }],
+      parentRoster: {
+        parentPane: "%21",
+        parentName: "parent",
+        children: [{ id: "b2", name: "Worker", pane: "25", cli: "pi" }],
+      },
+      selfId: "z9",
+      to: "Finished",
+    });
+    assert.match(result.error, /Reachable: Scout, Worker/);
+    assert.doesNotMatch(result.error, /parent/);
+  });
+
+  it("offers no parent in the empty-target hint for a child with an external parent", () => {
+    const result = testApi().resolveMessageTarget({
+      hasParent: true,
+      externalParent: true,
+      ownChildren: [{ id: "d4", name: "Scout", surface: "27" }],
+      parentRoster: {
+        parentPane: "%21",
+        parentName: "parent",
+        children: [{ id: "b2", name: "Worker", pane: "25", cli: "pi" }],
+      },
+      selfId: "z9",
+      to: "",
+    });
+    assert.match(result.error, /Provide a target: a child or a sibling/);
+    assert.match(result.error, /Reachable: Scout, Worker/);
+    assert.doesNotMatch(result.error, /parent/);
+  });
+
+  it("keeps parent in the empty-target hint for a child with a pi parent", () => {
+    const result = testApi().resolveMessageTarget({
+      hasParent: true,
+      ownChildren: [],
+      parentRoster: null,
+      selfId: "z9",
+      to: "",
+    });
+    assert.match(result.error, /Provide a target: `parent`, a child, or a sibling/);
+  });
+
+  it("appends nothing to the message file from a child with an external parent", () => {
+    const appended: Array<{ file: string; payload: any }> = [];
+    const prompted: string[] = [];
+    const result = testApi().sendSubagentMessage(
+      { to: "parent", message: "Which DB driver?" },
+      {
+        hasParent: true,
+        externalParent: true,
+        ownChildren: [],
+        parentRoster: null,
+        selfId: "a1",
+        senderName: "Worker",
+        parentMessageFile: "/s/worker.jsonl.msg",
+      },
+      {
+        prompt: (pane: string, text: string) => prompted.push(`${pane}:${text}`),
+        append: (file: string, payload: any) => appended.push({ file, payload }),
+      },
+    );
+    assert.match(result.error, /external orchestrator/);
+    assert.equal(appended.length, 0);
+    assert.equal(prompted.length, 0);
+  });
+
   it("builds the sender header for each relation", () => {
     assert.equal(
       testApi().formatMessageHeader({ senderName: "Worker", targetRelation: "parent" }),

@@ -280,37 +280,6 @@ describe("resolvePiCommand", () => {
 });
 
 describe("runSpec", () => {
-  it("wakes the parent when the child exits", async () => {
-    await withTempDirAsync(async (dir) => {
-      const session = join(dir, "session.jsonl");
-      // The wrapper cannot see the child's last assistant message in the
-      // session file, so its contents do not change the wake-up.
-      writeFileSync(session, "agent send boss 'old report'\n");
-      const sent: string[] = [];
-      await runSpec(
-        {
-          version: LAUNCH_SPEC_VERSION,
-          name: "rev",
-          env: {},
-          command: process.execPath,
-          args: [PI_STUB],
-          sessionFile: session,
-          parent: "boss",
-        },
-        undefined,
-        {
-          env: { PATH: process.env.PATH },
-          stdout: () => {},
-          stderr: () => {},
-          sendToParent: (to, text) => sent.push(`${to}:${text}`),
-        },
-      );
-      assert.equal(sent.length, 1);
-      assert.match(sent[0], /^boss:rev exited\. /);
-      assert.match(sent[0], /last-message --session /);
-    });
-  });
-
   it("prints the sentinel and returns the child's code (0)", async () => {
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, { env: { PI_STUB_CODE: "0" } });
@@ -369,6 +338,26 @@ describe("runSpec", () => {
         prompt,
       });
       assert.deepEqual(result.record?.args, ["--session", join(dir, "s.jsonl"), `@${prompt}`]);
+    });
+  });
+
+  // A skill launch carries the external-parent marker even with `parent` set:
+  // the wrapper contacts nobody, and the wrapper-error sidecar logic is
+  // untouched.
+  it("contacts nobody when the child exits", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "orch" },
+        env: { PI_STUB_CODE: "0" },
+      });
+      assert.equal(result.stdout, "__SUBAGENT_DONE_0__\n");
+      assert.equal(result.stderr, "");
+      assert.deepEqual(result.closedPanes, []);
+      // The wrapper-error sidecar logic is untouched: a child that wrote no
+      // sidecar still gets the wrapper's `error` sidecar.
+      const sidecar = result.sidecar ? JSON.parse(result.sidecar) : null;
+      assert.equal(sidecar?.type, "error");
+      assert.equal(sidecar?.source, "wrapper");
     });
   });
 
@@ -754,6 +743,7 @@ describe("cli.ts start", () => {
     assert.equal(spec.command, "pi");
     assert.equal(spec.sessionFile, res.json.session);
     assert.equal(spec.env.PI_PMUX_NAME, "fix-7");
+    assert.equal(spec.env.PI_PMUX_EXTERNAL_PARENT, "1");
     assert.equal(spec.env.PI_PMUX_AGENT, "doer");
     assert.equal(spec.env.PI_PMUX_SESSION, res.json.session);
     assert.equal(spec.env.PI_PMUX_SURFACE, undefined);
@@ -1054,6 +1044,24 @@ describe("cli.ts resume", () => {
     assert.equal(spec.sessionFile, started.json.session);
     assert.equal(argValue(spec.args, "--session"), started.json.session);
     assert.equal(spec.closeOnDone?.graceMs, 2500);
+  });
+
+  it("keeps the external-parent marker in the spec after a resume", async () => {
+    const cwd = mkdtempSync(join(workdir, "external-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low\nauto-exit: true", "Body.");
+    const started = await runStart({ cwd, role: "doer", child: "fix-7" });
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up task.\n");
+
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 0);
+
+    // `resume` reuses the launch spec unchanged, so the marker survives.
+    const spec = readLaunchSpec(started.json.launch);
+    assert.equal(spec.env.PI_PMUX_EXTERNAL_PARENT, "1");
   });
 
   it("uses the spec name when --name is omitted", async () => {

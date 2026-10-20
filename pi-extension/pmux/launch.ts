@@ -37,7 +37,8 @@ export interface LaunchSpec {
   title?: string;
   /** Close the pane this long after a `done` sidecar (skill launches only). */
   closeOnDone?: { graceMs: number };
-  /** Parent pane name; the wrapper wakes it if the child exits without reporting. */
+  /** Parent's name, as the brief footer (and a future `pending --parent`
+   * listing) present it to the child. */
   parent?: string;
 }
 

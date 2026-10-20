@@ -13,7 +13,6 @@ import { tmpdir } from "node:os";
 import {
   __setTmuxExecForTests__,
   agentPrompt,
-  agentSend,
   closeSurface,
   createSurface,
   isTmuxAvailable,
@@ -130,20 +129,6 @@ describe("tmux backend", () => {
     assert.equal(result.submitted, true);
     assert.deepEqual(calls[0], ["send-keys", "-t", "%9", "-l", "please continue"]);
     assert.deepEqual(calls[1], ["send-keys", "-t", "%9", "Enter"]);
-  });
-
-  it("sends to the pane that carries the agent name", () => {
-    const calls = stub((args) => {
-      if (args[0] === "list-panes") return "%1 other\n%9 Scout\n";
-      return "";
-    });
-    agentSend("Scout", "report");
-    assert.deepEqual(calls[1], ["send-keys", "-t", "%9", "-l", "report"]);
-  });
-
-  it("refuses to send to an unknown agent name", () => {
-    stub(() => "%1 other");
-    assert.throws(() => agentSend("Scout", "report"), /No pane named Scout/);
   });
 
   it("returns the done sidecar as the exit result", async () => {

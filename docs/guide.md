@@ -277,13 +277,15 @@ pmux_message({ to: "Reviewer", message: "API is in src/api.ts" });
 
 Reachable targets: exactly these three, nothing else:
 
-- `parent` — the agent that spawned you (subagents only)
+- `parent` — the agent that spawned you (subagents only, and only when that parent is a pi session)
 - the display name or id of one of your own running children
 - the display name or id of a running sibling (another running child of your parent)
 
 Grandchildren, grandparents, finished children, and unrelated agents are not reachable. If you message a finished child, the tool returns an error that lists the reachable targets. Use `pmux_resume` for a finished session. If a name is ambiguous, pass the exact subagent id.
 
-Delivery uses two paths. Messages to children and siblings are typed into the target's tmux pane as literal input (`tmux send-keys -l`), followed by an Enter keypress. They appear in the target pane as input with a sender header (for example `[subagent message from Worker (sibling)]`). tmux cannot tell whether the target is ready for input, so the text is typed as it is: a target on an approval screen receives it as typed input. Messages to `parent` append to the child message file. The parent injects them as a steering message. They never touch a draft that the user types in the parent composer.
+`parent` is reachable only when a pi parent exists. A child that the pmux skill launcher started for an external orchestrator (Claude Code) carries `PI_PMUX_EXTERNAL_PARENT` in its env: no pi parent reads its message file, so `parent` is not in its reachable-target list, and nothing is delivered. Sending to `parent` returns an error that says the parent is an external orchestrator that does not read subagent messages, names the child's last assistant message as the report, and names `caller_ping` as the way to ask a question. A child of a pi parent still reaches `parent` as before.
+
+Delivery uses two paths. Messages to children and siblings are typed into the target's tmux pane as literal input (`tmux send-keys -l`), followed by an Enter keypress. They appear in the target pane as input with a sender header (for example `[subagent message from Worker (sibling)]`). tmux cannot tell whether the target is ready for input, so the text is typed as it is: a target on an approval screen receives it as typed input. Messages to `parent` append to the child message file when a pi parent exists. The parent injects them as a steering message. They never touch a draft that the user types in the parent composer.
 
 Delivery is asynchronous. The tool returns when the message is queued. Any reply arrives later as a separate message. If tmux returns an error, such as an unknown or closed pane, the tool returns an error that names the target and holds the tmux error text. It never retries automatically.
 
