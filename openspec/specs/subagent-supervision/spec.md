@@ -21,7 +21,7 @@ When `pmux_spawn` starts a pi or Claude Code child, the extension SHALL write a 
 The launch record SHALL NOT hold the task prompt, skill prompts, the subagent id, the pane, the activity file, the parent roster file or the Claude Code sentinel file. The extension SHALL create these values again for each run.
 
 #### Scenario: Record after spawn
-- **WHEN** `luvus_spawn` starts a child with task "Fix the login bug"
+- **WHEN** `pmux_spawn` starts a child with task "Fix the login bug"
 - **THEN** the launch record does not contain the task text or the child's subagent id
 
 ### Requirement: Resume restores the role configuration
