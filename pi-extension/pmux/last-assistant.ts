@@ -27,10 +27,10 @@ export function lastAssistantMessage(messages: readonly unknown[]): LastAssistan
     const parts = Array.isArray(message.content)
       ? (message.content as Array<{ type?: unknown; text?: unknown }>)
       : [];
-    const text = parts
-      .filter((part) => part && part.type === "text")
-      .map((part) => (typeof part.text === "string" ? part.text : ""))
-      .join("");
+    let text = "";
+    for (const part of parts) {
+      if (part && part.type === "text" && typeof part.text === "string") text += part.text;
+    }
     return {
       text,
       stopReason: typeof message.stopReason === "string" ? message.stopReason : undefined,

@@ -19,20 +19,8 @@
  */
 import { spawn as nodeSpawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { lastAssistantMessage, stopFailureError, type LastAssistant } from "./last-assistant.ts";
-
-// The last-assistant walk is shared with turn-notify.ts; the names stay
-// reachable from this module's public surface.
-export { lastAssistantMessage, stopFailureError, type LastAssistant };
 
 // ── Binary lookup (design D3) ──
-
-/** The environment values the lookup reads. `HOME` and `PATH` come with it. */
-export interface SidebarLookupEnv {
-  TMUX_AGENT_SIDEBAR_BIN?: string | undefined;
-  HOME?: string | undefined;
-  PATH?: string | undefined;
-}
 
 /**
  * Resolve the sidebar binary, in order: the `TMUX_AGENT_SIDEBAR_BIN` override,
@@ -41,7 +29,7 @@ export interface SidebarLookupEnv {
  * sidebar is not installed and nothing should be published.
  */
 export function resolveSidebarBinary(
-  env: SidebarLookupEnv,
+  env: NodeJS.ProcessEnv,
   exists: (path: string) => boolean,
 ): string | null {
   const override = env.TMUX_AGENT_SIDEBAR_BIN;
@@ -85,6 +73,14 @@ export interface SidebarWorktree {
 }
 
 /**
+ * The window options the sidebar records the worktree and the branch in
+ * (design D7). `display-message` falls through the pane scope to the window
+ * scope, so every pane of that window reads them.
+ */
+export const SIDEBAR_WORKTREE_OPTION = "@agent-sidebar-spawned-worktree";
+export const SIDEBAR_BRANCH_OPTION = "@agent-sidebar-spawned-branch";
+
+/**
  * Worktree fields from the sidebar's window options
  * (`@agent-sidebar-spawned-worktree`, `@agent-sidebar-spawned-branch`).
  * `undefined` when neither option is set: the pane is not in a sidebar
@@ -105,12 +101,11 @@ export function buildSessionStart(params: {
   session: SidebarSession;
   worktree?: SidebarWorktree;
 }): Record<string, unknown> {
-  const payload: Record<string, unknown> = {
+  return {
     ...sessionFields(params.session),
     source: params.source,
+    ...(params.worktree ? { worktree: params.worktree } : {}),
   };
-  if (params.worktree) payload.worktree = params.worktree;
-  return payload;
 }
 
 export function buildUserPromptSubmit(params: {
@@ -125,12 +120,11 @@ export function buildActivityLog(params: {
   toolInput: unknown;
   toolResponse?: unknown;
 }): Record<string, unknown> {
-  const payload: Record<string, unknown> = {
+  return {
     tool_name: params.toolName,
     tool_input: params.toolInput,
+    ...(params.toolResponse !== undefined ? { tool_response: params.toolResponse } : {}),
   };
-  if (params.toolResponse !== undefined) payload.tool_response = params.toolResponse;
-  return payload;
 }
 
 export function buildStop(params: {
@@ -155,21 +149,26 @@ export function buildSessionEnd(params: { endReason: string }): Record<string, u
   return { end_reason: params.endReason };
 }
 
-// ── Agent run captures (design D6) ──
-//
-// `agent_settled` says how a run ended but does not carry the run's messages,
-// so the last assistant message is taken from `agent_end` and kept until the
-// run settles. The walk itself lives in last-assistant.ts, shared with
-// turn-notify.ts, and is re-exported above for this module's public surface.
-
 // ── Publisher (design D2) ──
+
+/**
+ * The protocol's event names (design D6). The publisher takes only these, so
+ * a typo in a call site does not compile.
+ */
+export type SidebarEvent =
+  | "session-start"
+  | "user-prompt-submit"
+  | "activity-log"
+  | "stop"
+  | "stop-failure"
+  | "notification"
+  | "session-end";
 
 /** The part of a spawned child the publisher touches: its stdin. */
 export interface SidebarChild {
   stdin: {
     write(chunk: string): boolean | void;
     end(): void;
-    on?(event: string, listener: () => void): void;
   };
 }
 
@@ -209,12 +208,12 @@ export interface SidebarPublisher {
    * the stdin write are deferred (setImmediate), so serializing a large tool
    * payload never runs inside pi's event handler.
    */
-  publish(event: string, payload: unknown): void;
+  publish(event: SidebarEvent, payload: Record<string, unknown>): void;
   /**
    * The synchronous publish, for an event the session must not lose: it
    * spawns and writes now, without waiting for the deferred queue.
    */
-  publishSync(event: string, payload: unknown): void;
+  publishSync(event: SidebarEvent, payload: Record<string, unknown>): void;
 }
 
 /**
@@ -231,6 +230,9 @@ export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): Sideba
   // starts without the sidebar stays quiet.
   let binary: string | null | undefined;
 
+  // The one place the binary is looked up and the one place it is cached.
+  const findBinary = (): string | null => (binary ??= resolveSidebarBinary(deps.env, deps.exists));
+
   // The guards are cheap and synchronous; the expensive part (stringify the
   // payload, spawn, write) runs off the event handler's path.
   const guardsPass = (): boolean => {
@@ -240,11 +242,11 @@ export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): Sideba
     return Boolean(deps.env.TMUX_PANE);
   };
 
-  const emit = (event: string, payload: unknown): void => {
+  const emit = (event: SidebarEvent, payload: Record<string, unknown>): void => {
     try {
-      binary ??= resolveSidebarBinary(deps.env, deps.exists);
-      if (!binary) return;
-      const child = deps.spawn(binary, ["hook", "pi", event], { env: deps.env });
+      const bin = findBinary();
+      if (!bin) return;
+      const child = deps.spawn(bin, ["hook", "pi", event], { env: deps.env });
       child.stdin.write(JSON.stringify(payload));
       child.stdin.end();
     } catch {
@@ -256,14 +258,13 @@ export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): Sideba
     canPublish(): boolean {
       try {
         if (!guardsPass()) return false;
-        binary ??= resolveSidebarBinary(deps.env, deps.exists);
-        return binary !== null;
+        return findBinary() !== null;
       } catch {
         return false;
       }
     },
 
-    publish(event: string, payload: unknown): void {
+    publish(event: SidebarEvent, payload: Record<string, unknown>): void {
       try {
         if (!guardsPass()) return;
         // setImmediate keeps the relative order: events published in one
@@ -274,7 +275,7 @@ export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): Sideba
       }
     },
 
-    publishSync(event: string, payload: unknown): void {
+    publishSync(event: SidebarEvent, payload: Record<string, unknown>): void {
       if (!guardsPass()) return;
       emit(event, payload);
     },

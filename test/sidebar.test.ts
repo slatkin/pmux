@@ -15,53 +15,28 @@ import {
   buildStopFailure,
   buildUserPromptSubmit,
   createSidebarPublisher,
-  lastAssistantMessage,
   resolveSidebarBinary,
   sidebarSwitchEnabled,
-  stopFailureError,
   worktreeFromOptions,
-  type SidebarChild,
+  type SidebarDeps,
+  type SidebarEvent,
 } from "../pi-extension/pmux/sidebar.ts";
+import { flushSidebarQueue, makeSidebarSpawn } from "./sidebar-fakes.ts";
 
 const existsNever = () => false;
-
-/** A fake spawner that records the command line and the stdin JSON. */
-function makeSpawn() {
-  const calls: Array<{ command: string; args: string[]; stdin: string }> = [];
-  const spawn = (command: string, args: string[]): SidebarChild => {
-    calls.push({ command, args, stdin: "" });
-    return {
-      stdin: {
-        write(chunk: string) {
-          calls[calls.length - 1].stdin += chunk;
-          return true;
-        },
-        end() {},
-      },
-    };
-  };
-  return { spawn, calls };
-}
 
 const ENV = { TMUX: "/tmp/tmux-0/default", TMUX_PANE: "%7", PATH: "/usr/bin" };
 const BIN = "/opt/sidebar/bin/tmux-agent-sidebar";
 const binaryThere = (path: string) => path === BIN;
 
-const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
-
 async function publishWith(
-  deps: Partial<Parameters<typeof createSidebarPublisher>[0]>,
-  event: string,
-  payload: unknown,
+  deps: Partial<SidebarDeps>,
+  event: SidebarEvent,
+  payload: Record<string, unknown>,
 ) {
-  const { spawn, calls } = makeSpawn();
-  createSidebarPublisher({
-    env: ENV,
-    exists: existsNever,
-    spawn,
-    ...deps,
-  } as Parameters<typeof createSidebarPublisher>[0]).publish(event, payload);
-  await flush();
+  const { spawn, calls } = makeSidebarSpawn();
+  createSidebarPublisher({ env: ENV, exists: existsNever, spawn, ...deps }).publish(event, payload);
+  await flushSidebarQueue();
   return calls;
 }
 
@@ -165,37 +140,6 @@ describe("payload builders", () => {
     assert.equal(worktreeFromOptions({ worktree: "", branch: "" }), undefined);
     assert.equal(worktreeFromOptions({}), undefined);
   });
-
-  it("lastAssistantMessage takes the last assistant message's text", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "hmm" },
-          { type: "text", text: "a " },
-          { type: "text", text: "b" },
-        ],
-        stopReason: "stop",
-      },
-      { role: "user", content: [{ type: "text", text: "noise" }] },
-    ];
-    assert.deepEqual(lastAssistantMessage(messages), {
-      text: "a b",
-      stopReason: "stop",
-      errorMessage: undefined,
-    });
-  });
-
-  it("lastAssistantMessage returns null without an assistant message", () => {
-    assert.equal(lastAssistantMessage([{ role: "user", content: [] }]), null);
-    assert.equal(lastAssistantMessage([]), null);
-  });
-
-  it("stopFailureError prefers pi's error message, then the stop reason", () => {
-    assert.equal(stopFailureError({ text: "", stopReason: "error", errorMessage: "boom" }), "boom");
-    assert.equal(stopFailureError({ text: "", stopReason: "error" }), "error");
-    assert.equal(stopFailureError(null), "error");
-  });
 });
 
 describe("sidebarSwitchEnabled", () => {
@@ -228,20 +172,18 @@ describe("publisher", () => {
       { name: "binary missing", deps: { exists: existsNever } },
     ];
     for (const { name, deps } of cases) {
-      const { spawn, calls } = makeSpawn();
-      createSidebarPublisher({
-        env: ENV,
-        exists: existsNever,
-        spawn,
-        ...deps,
-      } as Parameters<typeof createSidebarPublisher>[0]).publish("session-start", { cwd: "/w" });
+      const { spawn, calls } = makeSidebarSpawn();
+      createSidebarPublisher({ env: ENV, exists: existsNever, spawn, ...deps }).publish(
+        "session-start",
+        { cwd: "/w" },
+      );
       assert.deepEqual(calls, [], name);
     }
   });
 
   it("defers the spawn, keeps the event order, and looks the binary up once", async () => {
     let lookups = 0;
-    const { spawn, calls } = makeSpawn();
+    const { spawn, calls } = makeSidebarSpawn();
     const publisher = createSidebarPublisher({
       env: { ...ENV, TMUX_AGENT_SIDEBAR_BIN: BIN },
       exists: (path) => {
@@ -254,7 +196,7 @@ describe("publisher", () => {
     publisher.publish("activity-log", { tool_name: "end" });
     // Nothing spawned inside the caller's turn: the work happens later.
     assert.deepEqual(calls, []);
-    await flush();
+    await flushSidebarQueue();
     assert.deepEqual(
       calls.map((call) => call.stdin),
       ['{"tool_name":"start"}', '{"tool_name":"end"}'],
@@ -300,7 +242,7 @@ describe("publisher", () => {
         },
       }),
     }).publish("stop", { last_assistant_message: "x" });
-    await flush();
+    await flushSidebarQueue();
     assert.deepEqual(writes, []);
     assert.equal(published, false);
   });

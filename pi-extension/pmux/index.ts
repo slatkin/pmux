@@ -62,7 +62,13 @@ import { loadStatusConfig, loadSurfaceConfig, writeSurfaceConfig } from "./statu
 import { createTurnNotifier } from "./turn-notify.ts";
 import { createLiveTitleController } from "./live-title.ts";
 import { createSidebarEvents } from "./sidebar-events.ts";
-import { createSidebarPublisher, worktreeFromOptions, type SidebarWorktree } from "./sidebar.ts";
+import {
+  createSidebarPublisher,
+  worktreeFromOptions,
+  SIDEBAR_BRANCH_OPTION,
+  SIDEBAR_WORKTREE_OPTION,
+  type SidebarWorktree,
+} from "./sidebar.ts";
 
 // Survive /reload: the supervisor owns every timer, poll watcher and event
 // wiring this module load started. /reload re-imports this file, so shutting
@@ -90,12 +96,6 @@ function getSupervisor(): Supervisor | undefined {
 }
 
 // ── Sidebar worktree markers (design D7) ──
-//
-// The sidebar records the worktree and the branch as window options on the
-// window it spawns an agent into. `display-message` falls through pane scope
-// to window scope, so any pane of that window can read them.
-const SIDEBAR_WORKTREE_OPTION = "@agent-sidebar-spawned-worktree";
-const SIDEBAR_BRANCH_OPTION = "@agent-sidebar-spawned-branch";
 
 /** The pane's sidebar worktree, or undefined when the pane has none. */
 function readSidebarWorktree(pane: string | undefined): SidebarWorktree | undefined {

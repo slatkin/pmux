@@ -8,39 +8,16 @@ import "./host-env.ts";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createSidebarEvents } from "../pi-extension/pmux/sidebar-events.ts";
-import {
-  createSidebarPublisher,
-  type SidebarChild,
-  type SidebarWorktree,
-} from "../pi-extension/pmux/sidebar.ts";
+import { createSidebarPublisher, type SidebarWorktree } from "../pi-extension/pmux/sidebar.ts";
+import { flushSidebarQueue, makeSidebarSpawn } from "./sidebar-fakes.ts";
 
 const BIN = "/opt/sidebar/bin/tmux-agent-sidebar";
 const ENV = { TMUX: "/tmp/tmux-0/default", TMUX_PANE: "%7", TMUX_AGENT_SIDEBAR_BIN: BIN };
 const CTX = { cwd: "/work/app", sessionManager: { getSessionId: () => "s1" } };
 
-/** Let the publisher's deferred emit run. */
-const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
-
-function makeSpawn() {
-  const calls: Array<{ command: string; args: string[]; stdin: string }> = [];
-  const spawn = (command: string, args: string[]): SidebarChild => {
-    calls.push({ command, args, stdin: "" });
-    return {
-      stdin: {
-        write(chunk: string) {
-          calls[calls.length - 1].stdin += chunk;
-          return true;
-        },
-        end() {},
-      },
-    };
-  };
-  return { spawn, calls };
-}
-
 function makeHarness(options: { env?: NodeJS.ProcessEnv; worktree?: SidebarWorktree } = {}) {
-  const { spawn, calls } = makeSpawn();
-  const worktreeReads: number[] = [];
+  const { spawn, calls } = makeSidebarSpawn();
+  const worktreeReads = { count: 0 };
   const events = createSidebarEvents({
     publisher: createSidebarPublisher({
       env: options.env ?? ENV,
@@ -48,7 +25,7 @@ function makeHarness(options: { env?: NodeJS.ProcessEnv; worktree?: SidebarWorkt
       spawn,
     }),
     readWorktree: () => {
-      worktreeReads.push(1);
+      worktreeReads.count++;
       return options.worktree;
     },
   });
@@ -68,7 +45,7 @@ describe("the pi-event mapping", () => {
   it("the end of the wait publishes user-prompt-submit with an empty prompt and nothing else", async () => {
     const { calls, fire } = makeHarness();
     fire("ui_prompt_end", { reason: "confirmed" });
-    await flush();
+    await flushSidebarQueue();
     assert.deepEqual(JSON.parse(calls[0].stdin), {
       prompt: "",
       cwd: "/work/app",
@@ -80,7 +57,7 @@ describe("the pi-event mapping", () => {
   it("the wait start publishes notification with the kind of prompt", async () => {
     const { calls, fire } = makeHarness();
     fire("ui_prompt_start", { kind: "confirm" });
-    await flush();
+    await flushSidebarQueue();
     assert.deepEqual(JSON.parse(calls[0].stdin), { notification_type: "confirm" });
     assert.equal(calls[0].args[2], "notification");
   });
@@ -90,20 +67,20 @@ describe("the pi-event mapping", () => {
       worktree: { path: "/repo/.wt/x", branch: "agent/x" },
     });
     fire("session_start", { reason: "startup" });
-    await flush();
+    await flushSidebarQueue();
     assert.deepEqual(JSON.parse(calls[0].stdin), {
       cwd: "/work/app",
       session_id: "s1",
       source: "startup",
       worktree: { path: "/repo/.wt/x", branch: "agent/x" },
     });
-    assert.equal(worktreeReads.length, 1);
+    assert.equal(worktreeReads.count, 1);
   });
 
   it("session-start omits the worktree when the pane has none", async () => {
     const { calls, fire } = makeHarness();
     fire("session_start", { reason: "startup" });
-    await flush();
+    await flushSidebarQueue();
     assert.deepEqual(JSON.parse(calls[0].stdin), {
       cwd: "/work/app",
       session_id: "s1",
@@ -116,8 +93,8 @@ describe("the pi-event mapping", () => {
       env: { ...ENV, TMUX_AGENT_SIDEBAR: "0" },
     });
     fire("session_start", { reason: "startup" });
-    await flush();
-    assert.deepEqual(worktreeReads, []);
+    await flushSidebarQueue();
+    assert.equal(worktreeReads.count, 0);
     assert.deepEqual(calls, []);
   });
 
@@ -133,14 +110,14 @@ describe("the pi-event mapping", () => {
   it("session-end names no reason when the event carries none", async () => {
     const { calls, fire } = makeHarness();
     fire("session_shutdown", undefined);
-    await flush();
+    await flushSidebarQueue();
     assert.deepEqual(JSON.parse(calls[0].stdin), { end_reason: "" });
   });
 
   it("a user prompt is published with its text", async () => {
     const { calls, fire } = makeHarness();
     fire("input", { text: "hi" });
-    await flush();
+    await flushSidebarQueue();
     assert.deepEqual(JSON.parse(calls[0].stdin), {
       prompt: "hi",
       cwd: "/work/app",
@@ -153,7 +130,7 @@ describe("the pi-event mapping", () => {
     const { calls, fire } = makeHarness();
     fire("tool_execution_start", { toolCallId: "t1", toolName: "bash", args: { command: "ls" } });
     fire("tool_execution_end", { toolCallId: "t1", toolName: "bash", result: { content: "ok" } });
-    await flush();
+    await flushSidebarQueue();
     assert.deepEqual(JSON.parse(calls[0].stdin), {
       tool_name: "bash",
       tool_input: { command: "ls" },
@@ -174,7 +151,7 @@ describe("the pi-event mapping", () => {
     });
     fire("agent_before_settle", { outcome: "error" });
     fire("agent_settled", {});
-    await flush();
+    await flushSidebarQueue();
     assert.equal(calls[0].args[2], "stop-failure");
     assert.deepEqual(JSON.parse(calls[0].stdin), {
       error: "error",
@@ -194,7 +171,7 @@ describe("the pi-event mapping", () => {
     });
     fire("agent_before_settle", { outcome: "completed" });
     fire("agent_settled", {});
-    await flush();
+    await flushSidebarQueue();
     assert.equal(calls[0].args[2], "stop");
     assert.deepEqual(JSON.parse(calls[0].stdin), {
       last_assistant_message: "final",
@@ -206,7 +183,7 @@ describe("the pi-event mapping", () => {
   it("a run with no captured outcome settles as completed", async () => {
     const { calls, fire } = makeHarness();
     fire("agent_settled", {});
-    await flush();
+    await flushSidebarQueue();
     assert.equal(calls[0].args[2], "stop");
     assert.deepEqual(JSON.parse(calls[0].stdin), {
       last_assistant_message: "",
