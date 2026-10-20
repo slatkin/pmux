@@ -67,6 +67,18 @@ Set `notify.enabled` to `false` in `config.json` to turn these notifications off
 
 ---
 
+## tmux sidebar (tmux-agent-sidebar)
+
+If the [tmux-agent-sidebar](https://github.com/slatkin/tmux-agent-sidebar) sidebar is installed, the extension publishes the activity of every pi session it runs in to it, so a pi pane is listed with its status, its prompt, its last response and its tool activity — whether pmux started that session or not. A blocking extension prompt (for example a permission dialog) marks the pane as waiting for you.
+
+The publishing is fire and forget: it never delays a turn, raises an error or writes to the session output. It needs the sidebar binary, looked up in this order: the `TMUX_AGENT_SIDEBAR_BIN` environment variable, `~/.tmux/plugins/tmux-agent-sidebar/bin/tmux-agent-sidebar`, `~/.tmux/plugins/tmux-agent-sidebar/target/release/tmux-agent-sidebar`, then `tmux-agent-sidebar` on `PATH`. When none is found, the session publishes nothing and stays quiet.
+
+The pane's worktree comes from the sidebar's own window options, so a pi pane the sidebar spawned into a worktree shows the worktree and its branch.
+
+Set `TMUX_AGENT_SIDEBAR=0` in the environment to turn the publishing off for a session that does have the sidebar.
+
+---
+
 ## External orchestrators (Claude Code)
 
 Install the `pmux` skill first (see the [README](../README.md#external-orchestrators-claude-code)).

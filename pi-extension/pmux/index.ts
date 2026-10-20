@@ -18,6 +18,7 @@ import {
   readScreen,
   runInPane,
   agentPrompt,
+  readWindowOptions,
 } from "./tmux.ts";
 import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import {
@@ -60,6 +61,14 @@ import { decodeChildEnv, isSubagentChild } from "./child-env.ts";
 import { loadStatusConfig, loadSurfaceConfig, writeSurfaceConfig } from "./status.ts";
 import { createTurnNotifier } from "./turn-notify.ts";
 import { createLiveTitleController } from "./live-title.ts";
+import { createSidebarEvents } from "./sidebar-events.ts";
+import {
+  createSidebarPublisher,
+  worktreeFromOptions,
+  SIDEBAR_BRANCH_OPTION,
+  SIDEBAR_WORKTREE_OPTION,
+  type SidebarWorktree,
+} from "./sidebar.ts";
 
 // Survive /reload: the supervisor owns every timer, poll watcher and event
 // wiring this module load started. /reload re-imports this file, so shutting
@@ -84,6 +93,23 @@ function errorText(error: unknown): string {
 
 function getSupervisor(): Supervisor | undefined {
   return (globalThis as any)[SUPERVISOR_KEY] as Supervisor | undefined;
+}
+
+// ── Sidebar worktree markers (design D7) ──
+
+/** The pane's sidebar worktree, or undefined when the pane has none. */
+function readSidebarWorktree(pane: string | undefined): SidebarWorktree | undefined {
+  if (!pane) return undefined;
+  try {
+    const [worktree, branch] = readWindowOptions(pane, [
+      SIDEBAR_WORKTREE_OPTION,
+      SIDEBAR_BRANCH_OPTION,
+    ]);
+    return worktreeFromOptions({ worktree, branch });
+  } catch {
+    // A missing or wedged tmux server must not break the session start.
+    return undefined;
+  }
 }
 
 function createSupervisorInstance(): Supervisor {
@@ -471,6 +497,18 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   // First-prompt OSC title for unnamed non-subagent panes. A subagent child
   // sets PI_PMUX_NAME, so it keeps its `<name> — <task>` title.
   createLiveTitleController().register(pi);
+
+  // ── Sidebar publishing (openspec/changes/2026-10-20-sidebar-events) ──
+  //
+  // Every pi session on this machine loads this extension, so this is where
+  // the tmux sidebar's pi producer lives. The publisher is fire and forget
+  // and swallows every failure; the event mapping and the run-scoped
+  // captures live in sidebar-events.ts; see sidebar.ts.
+  const sidebar = createSidebarPublisher();
+  createSidebarEvents({
+    publisher: sidebar,
+    readWorktree: () => readSidebarWorktree(process.env.TMUX_PANE),
+  }).register(pi);
 
   pi.on("session_start", (_event, ctx) => {
     latestCtx = ctx;
