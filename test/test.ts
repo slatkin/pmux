@@ -1211,6 +1211,7 @@ describe("surface placement resolution", () => {
       subagentsModule.setSurfaceDefault("tab");
       assert.equal(subagentsModule.resolveSurfacePlacement(undefined), "tab");
       assert.equal(subagentsModule.resolveSurfacePlacement("down"), "pane");
+      assert.equal(subagentsModule.resolveSurfacePlacement("right"), "pane");
       assert.equal(subagentsModule.resolveSurfacePlacement("pane"), "pane");
 
       subagentsModule.setSurfaceDefault("pane");
@@ -2142,7 +2143,31 @@ describe("pmux-surface command", () => {
     const { command, notifications, ctx } = loadCommand();
     command.handler("", ctx);
     assert.equal(notifications.length, 1);
-    assert.match(notifications[0].message, /^Subagent surface: (right|down|tab)$/);
+    assert.match(notifications[0].message, /^Subagent surface: (pane|tab)$/);
+  });
+
+  it("reads the legacy down argument as pane and persists pane", () => {
+    withTempDir((dir) => {
+      const configPath = join(dir, "config.json");
+      writeFileSync(configPath, JSON.stringify({ status: { enabled: false } }));
+      (subagentsModule as any).__surfaceTest__.setConfigPath(configPath);
+      const saved = subagentsModule.getSurfaceDefault();
+      try {
+        const { command, notifications, ctx } = loadCommand();
+        command.handler("down", ctx);
+
+        assert.equal(subagentsModule.getSurfaceDefault(), "pane");
+        assert.equal(notifications[0].level, "info");
+        assert.match(notifications[0].message, /set to "pane" \(saved to config\.json\)/);
+        assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+          status: { enabled: false },
+          surface: "pane",
+        });
+      } finally {
+        (subagentsModule as any).__surfaceTest__.setConfigPath(undefined);
+        subagentsModule.setSurfaceDefault(saved);
+      }
+    });
   });
 
   it("sets a valid placement, persists it, and reports the new value", () => {
@@ -2176,7 +2201,7 @@ describe("pmux-surface command", () => {
       command.handler("window", ctx);
       assert.equal(subagentsModule.getSurfaceDefault(), saved);
       assert.equal(notifications[0].level, "warning");
-      assert.match(notifications[0].message, /accepted: right, down, tab/);
+      assert.match(notifications[0].message, /accepted: pane, tab/);
     } finally {
       subagentsModule.setSurfaceDefault(saved);
     }
@@ -2191,9 +2216,12 @@ describe("tool registration", () => {
     for (const toolName of ["pmux_spawn", "pmux_resume"]) {
       const tool = registeredTools.find((t: any) => t.name === toolName);
       assert.ok(tool, `expected ${toolName} to be registered`);
-      assert.ok(tool.parameters.properties.surface, `${toolName} should accept surface`);
-      assert.match(tool.description, /surface parameter/);
-      assert.match(tool.promptSnippet, /surface parameter/);
+      const surface = tool.parameters.properties.surface;
+      assert.ok(surface, `${toolName} should accept surface`);
+      const values = surface.anyOf.map((option: { const?: string }) => option.const);
+      assert.deepEqual(values.sort(), ["pane", "tab"]);
+      assert.doesNotMatch(tool.description, /\bright\b|\bdown\b/);
+      assert.doesNotMatch(tool.promptSnippet, /\bright\b|\bdown\b/);
     }
   });
 

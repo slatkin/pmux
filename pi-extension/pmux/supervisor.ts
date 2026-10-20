@@ -126,13 +126,10 @@ export const SubagentParams = Type.Object({
     }),
   ),
   surface: Type.Optional(
-    Type.Union(
-      [Type.Literal("right"), Type.Literal("down"), Type.Literal("tab"), Type.Literal("pane")],
-      {
-        description:
-          '"right" (default): split side by side. "down": split below. "tab": new workspace tab. "pane" = "right". Overrides the configured default.',
-      },
-    ),
+    Type.Union([Type.Literal("pane"), Type.Literal("tab")], {
+      description:
+        '"pane" (default): place the pane automatically. "tab": open a window. Overrides the configured default.',
+    }),
   ),
 });
 

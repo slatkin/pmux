@@ -503,6 +503,7 @@ const CLI = join(REPO_ROOT, "pi-extension", "pmux", "cli.ts");
 
 let workdir = "";
 let paneCalls: string[] = [];
+let paneFake: ReturnType<typeof useTmuxPaneFake>;
 let defaultConfigPath = "";
 
 before(() => {
@@ -510,10 +511,11 @@ before(() => {
   // Sandbox the surface default: the CLI reads config.json, so a test must
   // never see the machine's real one.
   defaultConfigPath = join(workdir, "config.json");
-  writeFileSync(defaultConfigPath, JSON.stringify({ status: { enabled: true }, surface: "right" }));
+  writeFileSync(defaultConfigPath, JSON.stringify({ status: { enabled: true }, surface: "pane" }));
   // In-process tmux seam: the shared fake logs each argv and answers the
   // split with a new pane id.
-  paneCalls = useTmuxPaneFake().lines;
+  paneFake = useTmuxPaneFake();
+  paneCalls = paneFake.lines;
 });
 
 after(() => {
@@ -958,12 +960,27 @@ describe("cli.ts start", () => {
     const cwd = mkdtempSync(join(workdir, "cfgsurface-cwd-"));
     writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
     const configPath = join(mkdtempSync(join(workdir, "surface-config-")), "config.json");
-    writeFileSync(configPath, JSON.stringify({ surface: "down" }));
+    writeFileSync(configPath, JSON.stringify({ surface: "pane" }));
 
     const res = await runStart({ cwd, role: "doer", configPath });
     assert.equal(res.code, 0);
+    // The axis comes from the target's shape, not from the configured value:
+    // the fake's caller row is 200x50, so the rule splits side by side.
     assert.deepEqual(paneCalls, [
-      "split-window -d -v -t %21 -P -F #{pane_id}",
+      "split-window -d -h -t %21 -P -F #{pane_id}",
+      "select-pane -t %24 -T scout-1",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      "send-keys -t %24 Enter",
+    ]);
+  });
+
+  it("accepts the legacy --surface down and splits by the rule", async () => {
+    const cwd = mkdtempSync(join(workdir, "legacy-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const res = await runStart({ cwd, role: "doer", surface: "down" });
+    assert.equal(res.code, 0);
+    assert.deepEqual(paneCalls, [
+      "split-window -d -h -t %21 -P -F #{pane_id}",
       "select-pane -t %24 -T scout-1",
       `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
       "send-keys -t %24 Enter",
@@ -998,8 +1015,34 @@ describe("cli.ts start", () => {
       tmuxEnv(),
     );
     assert.equal(res.code, 2);
-    assert.match(res.stderr, /invalid --surface value: sideways/);
+    assert.match(res.stderr, /invalid --surface value: sideways \(expected pane or tab\)/);
     assert.deepEqual(paneCalls, []);
+  });
+
+  it("splits the first child's pane on a second start from the same caller", async () => {
+    const cwd = mkdtempSync(join(workdir, "twice-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const first = await runStart({ cwd, role: "doer", child: "fix-7" });
+    assert.equal(first.code, 0);
+    assert.equal(first.json.pane, "%24");
+
+    // The first child's pane is alive and carries the caller's parent marker.
+    paneCalls.length = 0;
+    paneFake.placementRows = "%21 200 50 \n%24 100 50 %21\n";
+    try {
+      const second = await runStart({ cwd, role: "doer", child: "fix-8" });
+      assert.equal(second.code, 0);
+      // The second split targets the first child's pane (%24), not the
+      // caller (%21); 100x50 splits side by side.
+      assert.deepEqual(paneCalls, [
+        "split-window -d -h -t %24 -P -F #{pane_id}",
+        "select-pane -t %24 -T fix-8",
+        `send-keys -t %24 -l ${paneCommandLine(CLI, second.json.launch, second.promptPath)}`,
+        "send-keys -t %24 Enter",
+      ]);
+    } finally {
+      paneFake.placementRows = null;
+    }
   });
 });
 

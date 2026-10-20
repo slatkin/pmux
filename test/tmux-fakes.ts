@@ -17,6 +17,12 @@ import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 export interface TmuxPaneFake {
   /** Every tmux argv, joined with spaces, in call order. */
   lines: string[];
+  /**
+   * Replace the rows the placement listing answers, or `null` for the default
+   * one wide caller row. Row format: `#{pane_id} #{pane_width} #{pane_height}
+   * #{@pmux_parent}` — an unset `@pmux_parent` prints as an empty field.
+   */
+  placementRows: string | null;
 }
 
 /**
@@ -25,6 +31,7 @@ export interface TmuxPaneFake {
  */
 export function useTmuxPaneFake(): TmuxPaneFake {
   const lines: string[] = [];
+  const fake: TmuxPaneFake = { lines, placementRows: null };
   __setTmuxExecForTests__((args) => {
     const joined = args.join(" ");
     // The placement plumbing is answered but not logged, so `lines` stays the
@@ -32,6 +39,7 @@ export function useTmuxPaneFake(): TmuxPaneFake {
     if (args[0] === "list-panes" && joined.includes("#{pane_width}")) {
       const at = args.indexOf("-t");
       const caller = at >= 0 ? (args[at + 1] ?? "%21") : "%21";
+      if (fake.placementRows !== null) return fake.placementRows;
       // One row for the caller: unset `@pmux_parent` prints as an empty
       // fourth field.
       return `${caller} 200 50 \n`;
@@ -44,5 +52,5 @@ export function useTmuxPaneFake(): TmuxPaneFake {
     if (args[0] === "display-message" && args.includes("#{window_id}")) return "@4";
     return "";
   });
-  return { lines };
+  return fake;
 }
