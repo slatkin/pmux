@@ -2,24 +2,30 @@
 
 ## Purpose
 
-The Luvus event stream is removed; the supervisor polls the pane.
+The Luvus event stream is removed. The supervisor polls the sidecar and the pane.
 
 ## REMOVED Requirements
 
-### Requirement: The UHP event stream
+### Requirement: Events come from one long-lived event stream
 
-**Reason**: The stream is a Luvus daemon feature. The supervisor already
-falls back to polling the pane and the sidecar when no stream runs, and that
-is the only path under tmux.
+**Reason**: The stream is a Luvus daemon feature. The supervisor already falls back to polling the pane and the sidecar when no stream runs, and that is the only path under tmux.
 
-**Migration**: A child that finishes is still detected through the `.exit`
-sidecar, and a child that dies is still detected through the terminal
-sentinel in the pane. The difference is the latency of the fallback path: the
-poll interval rather than an event.
+**Migration**: A child that finishes is still detected through the `.exit` sidecar, and a child that dies through the terminal sentinel in the pane. The difference is latency: the poll interval instead of an event.
 
-### Requirement: Event-driven watching
+### Requirement: Stream restart and snapshot
 
-**Reason**: It depends on the removed stream.
+**Reason**: The stream is a Luvus daemon feature. The supervisor already falls back to polling the pane and the sidecar when no stream runs, and that is the only path under tmux.
 
-**Migration**: The supervisor's watch loop polls the sidecar and the pane on
-its fixed interval.
+**Migration**: A child that finishes is still detected through the `.exit` sidecar, and a child that dies through the terminal sentinel in the pane. The difference is latency: the poll interval instead of an event.
+
+### Requirement: Only status and lifecycle events trigger checks
+
+**Reason**: The stream is a Luvus daemon feature. The supervisor already falls back to polling the pane and the sidecar when no stream runs, and that is the only path under tmux.
+
+**Migration**: A child that finishes is still detected through the `.exit` sidecar, and a child that dies through the terminal sentinel in the pane. The difference is latency: the poll interval instead of an event.
+
+### Requirement: Stream shutdown kills the child
+
+**Reason**: The stream is a Luvus daemon feature. The supervisor already falls back to polling the pane and the sidecar when no stream runs, and that is the only path under tmux.
+
+**Migration**: A child that finishes is still detected through the `.exit` sidecar, and a child that dies through the terminal sentinel in the pane. The difference is latency: the poll interval instead of an event.
