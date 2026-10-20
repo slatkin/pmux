@@ -19,6 +19,7 @@ for (const key of Object.keys(process.env)) {
   if (
     key.startsWith("LUVUS_") ||
     key.startsWith("PI_LUVUS_") ||
+    key.startsWith("PI_PMUX_") ||
     key === "TMUX" ||
     key === "TMUX_PANE"
   ) {
@@ -167,7 +168,7 @@ describe("createTurnNotifier", () => {
   it("makes no call in a subagent child", async () => {
     const { deps, pushed, focusChecks } = makeDeps();
     const { pi, fire } = makePi();
-    createTurnNotifier({ ...IN_TMUX, PI_LUVUS_SESSION: "/tmp/s.jsonl" }, true, deps).register(
+    createTurnNotifier({ ...IN_TMUX, PI_PMUX_SESSION: "/tmp/s.jsonl" }, true, deps).register(
       pi as never,
     );
 
@@ -178,10 +179,10 @@ describe("createTurnNotifier", () => {
     assert.deepEqual(pushed, []);
   });
 
-  it("notifies when only PI_LUVUS_NAME is set", async () => {
+  it("notifies when only PI_PMUX_NAME is set", async () => {
     const { deps, pushed } = makeDeps();
     const { pi, fire } = makePi();
-    createTurnNotifier({ ...IN_TMUX, PI_LUVUS_NAME: "worker" }, true, deps).register(pi as never);
+    createTurnNotifier({ ...IN_TMUX, PI_PMUX_NAME: "worker" }, true, deps).register(pi as never);
 
     fire("agent_end", ending("stop"));
     await flush();

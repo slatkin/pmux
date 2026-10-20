@@ -158,7 +158,7 @@ describe("status writes from the child extension", () => {
   it("writes working at a turn start and idle at a turn end", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
-      const { fire } = loadChildExtension({ PI_LUVUS_SESSION: sessionFile });
+      const { fire } = loadChildExtension({ PI_PMUX_SESSION: sessionFile });
       fire("turn_start", { turnIndex: 0 });
       assert.equal(readChildStatus(sessionFile)?.status, "working");
       fire("turn_end", { turnIndex: 0 }, { shutdown() {} });
@@ -166,10 +166,10 @@ describe("status writes from the child extension", () => {
     });
   });
 
-  it("writes nothing without PI_LUVUS_SESSION", () => {
+  it("writes nothing without PI_PMUX_SESSION", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
-      const { fire } = loadChildExtension({ PI_LUVUS_SESSION: undefined });
+      const { fire } = loadChildExtension({ PI_PMUX_SESSION: undefined });
       fire("turn_start", { turnIndex: 0 });
       fire("turn_end", { turnIndex: 0 }, { shutdown() {} });
       assert.equal(existsSync(statusFilePath(sessionFile)), false);
@@ -179,7 +179,7 @@ describe("status writes from the child extension", () => {
   it("writes blocked with the question at caller_ping, before the sidecar", async () => {
     withTempDir(async (dir) => {
       const sessionFile = join(dir, "child.jsonl");
-      const { tools } = loadChildExtension({ PI_LUVUS_SESSION: sessionFile });
+      const { tools } = loadChildExtension({ PI_PMUX_SESSION: sessionFile });
       const ping = tools.find((tool) => tool.name === "caller_ping");
       assert.ok(ping);
       await ping.execute("call-1", { message: "which schema?" }, undefined, undefined, {
@@ -191,11 +191,11 @@ describe("status writes from the child extension", () => {
     });
   });
 
-  it("writes done at luvus_done, before the sidecar, and latches", async () => {
+  it("writes done at pmux_done, before the sidecar, and latches", async () => {
     withTempDir(async (dir) => {
       const sessionFile = join(dir, "child.jsonl");
-      const { tools, fire } = loadChildExtension({ PI_LUVUS_SESSION: sessionFile });
-      const done = tools.find((tool) => tool.name === "luvus_done");
+      const { tools, fire } = loadChildExtension({ PI_PMUX_SESSION: sessionFile });
+      const done = tools.find((tool) => tool.name === "pmux_done");
       assert.ok(done);
       await done.execute("call-1", {}, undefined, undefined, { shutdown() {} });
       assert.equal(readChildStatus(sessionFile)?.status, "done");
@@ -207,11 +207,11 @@ describe("status writes from the child extension", () => {
     });
   });
 
-  it("writes done with handoff at luvus_done handoff", async () => {
+  it("writes done with handoff at pmux_done handoff", async () => {
     withTempDir(async (dir) => {
       const sessionFile = join(dir, "child.jsonl");
-      const { tools } = loadChildExtension({ PI_LUVUS_SESSION: sessionFile });
-      const done = tools.find((tool) => tool.name === "luvus_done");
+      const { tools } = loadChildExtension({ PI_PMUX_SESSION: sessionFile });
+      const done = tools.find((tool) => tool.name === "pmux_done");
       await done.execute("call-1", { handoff: "take over" }, undefined, undefined, {
         shutdown() {},
       });
@@ -222,7 +222,7 @@ describe("status writes from the child extension", () => {
   it("writes blocked with the error text on a provider-error agent_end", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
-      const { fire } = loadChildExtension({ PI_LUVUS_SESSION: sessionFile });
+      const { fire } = loadChildExtension({ PI_PMUX_SESSION: sessionFile });
       fire("agent_start");
       fire(
         "agent_end",
@@ -239,8 +239,8 @@ describe("status writes from the child extension", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const { fire } = loadChildExtension({
-        PI_LUVUS_SESSION: sessionFile,
-        PI_LUVUS_AUTO_EXIT: "1",
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_AUTO_EXIT: "1",
       });
       fire("agent_start");
       fire(
@@ -468,13 +468,13 @@ interface SupervisorTestEnv {
 function createSupervisorEnv(): SupervisorTestEnv {
   const dir = mkdtempSync(join(tmpdir(), "pmux-status-sup-"));
   const saved = new Map(
-    ["PI_CODING_AGENT_DIR", "PI_LUVUS_SHELL_READY_DELAY_MS", "PI_LUVUS_NAME", "LUVUS_PANE_ID"].map(
+    ["PI_CODING_AGENT_DIR", "PI_PMUX_SHELL_READY_DELAY_MS", "PI_PMUX_NAME", "LUVUS_PANE_ID"].map(
       (key) => [key, process.env[key]],
     ),
   );
   process.env.PI_CODING_AGENT_DIR = join(dir, "agent");
-  process.env.PI_LUVUS_SHELL_READY_DELAY_MS = "0";
-  process.env.PI_LUVUS_NAME = "parent";
+  process.env.PI_PMUX_SHELL_READY_DELAY_MS = "0";
+  process.env.PI_PMUX_NAME = "parent";
   process.env.LUVUS_PANE_ID = "21";
   return {
     dir,

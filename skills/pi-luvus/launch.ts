@@ -4,7 +4,7 @@
  * stays self-contained (Node builtins only) and loads the CLI from the
  * package root it finds at run time.
  *
- * Lookup order: `PI_LUVUS_DIR`, then the checkout holding this
+ * Lookup order: `PI_PMUX_DIR`, then the checkout holding this
  * file's resolved real path, then pi's git install under the agent config
  * directory (`PI_CODING_AGENT_DIR`, or `~/.pi/agent`).
  */
@@ -47,7 +47,7 @@ function agentConfigDir(env: NodeJS.ProcessEnv): string {
 /** Package roots to try for a shim at `shimPath`, in lookup order. */
 export function packageRootCandidates(shimPath: string, env: NodeJS.ProcessEnv): string[] {
   const candidates: string[] = [];
-  if (env.PI_LUVUS_DIR) candidates.push(env.PI_LUVUS_DIR);
+  if (env.PI_PMUX_DIR) candidates.push(env.PI_PMUX_DIR);
   // This file lives at <root>/skills/pi-luvus/launch.ts.
   candidates.push(resolve(dirname(resolved(shimPath)), "..", ".."));
   candidates.push(join(agentConfigDir(env), "git", "github.com", "slatkin", "pi-luvus"));

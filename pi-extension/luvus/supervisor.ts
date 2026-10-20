@@ -94,8 +94,7 @@ export const SubagentParams = Type.Object({
   task: Type.String({ description: "Task prompt for the subagent." }),
   agent: Type.Optional(
     Type.String({
-      description:
-        "Agent definition that supplies defaults (model, tools, skills). See luvus_list.",
+      description: "Agent definition that supplies defaults (model, tools, skills). See pmux_list.",
     }),
   ),
   systemPrompt: Type.Optional(
@@ -164,7 +163,7 @@ export interface SupervisorContext {
   cwd: string;
 }
 
-/** Parameters of the `luvus_resume` tool. */
+/** Parameters of the `pmux_resume` tool. */
 export interface ResumeParams {
   sessionPath: string;
   surface?: string;
@@ -172,7 +171,7 @@ export interface ResumeParams {
   autoExit?: boolean;
 }
 
-/** Tool-result shape `supervisor.resume` returns to the `luvus_resume` handler. */
+/** Tool-result shape `supervisor.resume` returns to the `pmux_resume` handler. */
 export interface ResumeToolResult {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
@@ -282,7 +281,7 @@ export interface Supervisor {
     ctx: SupervisorContext,
     options?: { surface?: string; placement?: SurfacePlacement },
   ): Promise<RunningSubagent>;
-  /** Resume a session (today's inline `luvus_resume` launch path). */
+  /** Resume a session (today's inline `pmux_resume` launch path). */
   resume(
     params: ResumeParams,
     ctx: SupervisorContext,
@@ -293,7 +292,7 @@ export interface Supervisor {
     params: { id?: string; name?: string },
     sendEscapeKey?: (surface: string) => void,
   ): { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> };
-  /** The running children, for the widget and `luvus_message`. */
+  /** The running children, for the widget and `pmux_message`. */
   running(): readonly RunningSubagent[];
   /** Stop every watcher, both refresh intervals and the event stream. Final. */
   shutdown(): void;
@@ -396,7 +395,7 @@ export function resolveLaunchBehavior(
  *      driven by the user in their own pane (a forked child) and
  *      stall pings are noise.
  *
- * When no agent defs exist at all (bare `luvus_spawn({ name, task })` call,
+ * When no agent defs exist at all (bare `pmux_spawn({ name, task })` call,
  * typical for a bare forked spawn), `autoExit` is undefined and the
  * subagent is treated as interactive.
  */
@@ -424,7 +423,7 @@ export function formatElapsed(seconds: number): string {
  * dropped commands. Keep the historical default at 500ms.
  */
 export function getShellReadyDelayMs(): number {
-  const raw = process.env.PI_LUVUS_SHELL_READY_DELAY_MS?.trim();
+  const raw = process.env.PI_PMUX_SHELL_READY_DELAY_MS?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 500;
 }
@@ -480,8 +479,8 @@ export function buildSpawnEnvParts(params: {
 /** Task hint shown to the child: auto-exit agents are now told to exit explicitly too. */
 export function resolveModeHint(autoExit?: boolean): string {
   return autoExit
-    ? "Complete your task autonomously. Call luvus_done when finished."
-    : "Complete your task. When finished, call the luvus_done tool. The user can interact with you at any time.";
+    ? "Complete your task autonomously. Call pmux_done when finished."
+    : "Complete your task. When finished, call the pmux_done tool. The user can interact with you at any time.";
 }
 
 export function buildSubagentTaskPrompt(params: {
@@ -501,7 +500,7 @@ export function buildSubagentTaskPrompt(params: {
 export function buildLaunchMessagingHint(siblingNames: string[]): string {
   const names = [...new Set(["parent", ...siblingNames])];
   const list = names.map((name) => `\`${name}\``).join(", ");
-  return `You can message ${list} with luvus_message; it does not end your session.`;
+  return `You can message ${list} with pmux_message; it does not end your session.`;
 }
 
 /**
@@ -578,7 +577,7 @@ export function deliverParentMessages(running: RunningSubagent, send: SendFn): v
   for (const message of messages) {
     send(
       {
-        customType: "luvus_message",
+        customType: "pmux_message",
         content: `${message.header}\n${message.message}`,
         display: true,
         details: { from: running.name, id: running.id },
@@ -707,7 +706,7 @@ export function resolveResultPresentation(
   name: string,
 ): string {
   const sessionRef = result.sessionFile
-    ? `\n\nSession: ${result.sessionFile}\nResume: luvus_resume ${result.sessionFile}`
+    ? `\n\nSession: ${result.sessionFile}\nResume: pmux_resume ${result.sessionFile}`
     : "";
   const summary = capSummary(result.summary, result.sessionFile);
 
@@ -721,7 +720,7 @@ export function resolveResultPresentation(
       `(provider/agent error — auto-retry exhausted).\n\n` +
       `Error: ${result.errorMessage}\n\n` +
       `The subagent did not produce a result. You can retry by spawning a new ` +
-      `subagent or resume the session with luvus_resume.${sessionRef}`
+      `subagent or resume the session with pmux_resume.${sessionRef}`
     );
   }
 
@@ -775,7 +774,7 @@ function copyClaudeSession(sentinelFile: string): string | null {
 
 /**
  * Remind, then finish, a non-interactive child that ended its turn but never
- * exited. Finishing writes the same `done` sidecar `luvus_done` would, so
+ * exited. Finishing writes the same `done` sidecar `pmux_done` would, so
  * pollForExit completes the normal way (summary from the session, pane closed).
  *
  * A child that stopped reporting entirely (killed mid-turn, or reloaded — its
@@ -876,7 +875,7 @@ export interface BackendLaunchRequest {
   /** The target cwd's `.pi/agent` directory, when it has one. */
   localAgentDir: string | null;
   artifactDir: string;
-  /** Names the child can reach with `luvus_message` at spawn time. */
+  /** Names the child can reach with `pmux_message` at spawn time. */
   siblingNames: string[];
   parentRosterFile?: string;
   /** Set when the run continues an existing session (design D5). */
@@ -1043,7 +1042,7 @@ function buildPiLaunch(request: BackendLaunchRequest): BackendLaunch {
       modeHint: resolveModeHint(record.autoExit),
       summaryInstruction: record.autoExit
         ? "Your FINAL assistant message should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one."
-        : "Your FINAL assistant message (before calling luvus_done or before the user exits) should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one.",
+        : "Your FINAL assistant message (before calling pmux_done or before the user exits) should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one.",
       messagingHint: buildLaunchMessagingHint(request.siblingNames),
       inheritsConversationContext: launchBehavior.inheritsConversationContext,
     });
@@ -1220,7 +1219,7 @@ function extractClaudeResult(
   }
 
   // The child has no pi-style session file; the record sits beside the path a
-  // later `luvus_resume` uses, so that path is the session reference.
+  // later `pmux_resume` uses, so that path is the session reference.
   return { summary, sessionFile: running.sessionFile };
 }
 
@@ -1240,7 +1239,7 @@ function copyClaudeTranscript(running: RunningSubagent): Pick<SubagentResult, "c
   if (!sessionId) return {};
 
   // Store the id beside the role values, keeping every other record field so a
-  // later `luvus_resume` finds the same role configuration.
+  // later `pmux_resume` finds the same role configuration.
   const recordFile = getLaunchRecordFile(running.sessionFile);
   const record = readLaunchRecord(recordFile);
   if (record) writeLaunchRecord(recordFile, { ...record, claudeSessionId: sessionId });
@@ -1363,12 +1362,12 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     if (!ctx?.hasUI) return;
 
     if (runningSubagents.size === 0) {
-      ctx.ui.setWidget("luvus-status", undefined);
+      ctx.ui.setWidget("pmux-status", undefined);
       return;
     }
 
     ctx.ui.setWidget(
-      "luvus-status",
+      "pmux-status",
       (_tui, _theme) => {
         return {
           invalidate() {},
@@ -1454,7 +1453,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
         const capped = capStatusLines(transitionLines, deps.statusConfig.lineLimit);
         deps.send(
           {
-            customType: "luvus_status",
+            customType: "pmux_status",
             content: formatStatusAggregate(transitionLines, deps.statusConfig.lineLimit),
             display: true,
             details: { lines: capped.visibleLines, overflow: capped.overflow },
@@ -1785,11 +1784,11 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
   ): void {
     updateWidget(); // reflect removal from the Map immediately
 
-    const sessionRef = `\n\nSession: ${result.sessionFile}\nResume: luvus_resume ${result.sessionFile}`;
+    const sessionRef = `\n\nSession: ${result.sessionFile}\nResume: pmux_resume ${result.sessionFile}`;
     if (result.ping) {
       send(
         {
-          customType: "luvus_ping",
+          customType: "pmux_ping",
           content: `Sub-agent "${result.ping.name}" needs help (${formatElapsed(result.elapsed)}):\n\n${result.ping.message}${sessionRef}`,
           display: true,
           details: {
@@ -1806,12 +1805,12 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     }
 
     if (result.handoff) {
-      // No `sessionRef` here: its `Resume: luvus_resume` line tells the parent
+      // No `sessionRef` here: its `Resume: pmux_resume` line tells the parent
       // to do the opposite of what a handoff needs. The session file still goes
       // in the content, and the instruction line says to start a new subagent.
       send(
         {
-          customType: "luvus_handoff",
+          customType: "pmux_handoff",
           content:
             `Sub-agent "${running.name}" handed off at the context alert (${formatElapsed(result.elapsed)}). The task is not complete.\n\n` +
             `${result.handoff.message}\n\n` +
@@ -1833,7 +1832,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
 
     send(
       {
-        customType: "luvus_result",
+        customType: "pmux_result",
         content: resolveResultPresentation(result, running.name),
         display: true,
         details: {
@@ -1857,7 +1856,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     updateWidget();
     send(
       {
-        customType: "luvus_result",
+        customType: "pmux_result",
         content: `Sub-agent "${running.name}" error: ${message ?? String(err)}`,
         display: true,
         details: {

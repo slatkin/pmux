@@ -23,7 +23,7 @@ export const IDLE_GONE_MS = 180_000;
 
 export const IDLE_NUDGE_TEXT =
   "[Automated reminder] Your last turn ended but this session is still open.\n" +
-  "If your task is complete, call the luvus_done tool now, with no other text. " +
+  "If your task is complete, call the pmux_done tool now, with no other text. " +
   "Your last message was already delivered as your report — do not repeat or summarise it.\n" +
   "If you are blocked and need input from the caller, call caller_ping with your question.\n" +
   "Otherwise, continue working.";

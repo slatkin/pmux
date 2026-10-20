@@ -106,4 +106,4 @@ Only include sections that have substance. Skip empty ones.
 
 ## Talking to other agents
 
-Use `luvus_message` to talk to `parent`, a running child, or a running sibling without ending your session. `caller_ping` and `luvus_done` end it.
+Use `pmux_message` to talk to `parent`, a running child, or a running sibling without ending your session. `caller_ping` and `pmux_done` end it.

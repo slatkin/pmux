@@ -188,10 +188,10 @@ Plain text printed in your own pane is never seen. Your last assistant message i
 So do ALL of the following before you stop:
 1. Finish the task.
 2. Write your final report as your last assistant message: the verdict, the commit SHA, the files changed, the verification, the deviations and the open questions. Put the verdict first.
-3. Then call the luvus_done tool to close your session.
+3. Then call the pmux_done tool to close your session.
 
-If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or luvus_message to reach the parent.
-If an automated reminder tells you to call luvus_done, ignore its claim that your last message was already delivered.`;
+If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.
+If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.`;
 }
 
 /** Parse `--close-grace-ms`, defaulting to `DEFAULT_CLOSE_GRACE_MS`. */
@@ -368,7 +368,7 @@ async function runCommand(positionals: string[], deps: CliDeps): Promise<number>
 
 /** Sentinel root, overridable for tests so they never touch the real tmp folder. */
 function sentinelDir(env: NodeJS.ProcessEnv): string {
-  return env.PI_LUVUS_SENTINEL_DIR ?? tmpdir();
+  return env.PI_PMUX_SENTINEL_DIR ?? tmpdir();
 }
 
 /** Parse `--max-age-days`, defaulting to `DEFAULT_PRUNE_MAX_AGE_DAYS`. */

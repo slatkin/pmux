@@ -19,16 +19,16 @@ export interface ChildEnv {
 /** Encode the child env. Writes only fields that are set. */
 export function encodeChildEnv(env: ChildEnv): Record<string, string> {
   const out: Record<string, string> = {};
-  if (env.name !== undefined) out.PI_LUVUS_NAME = env.name;
-  if (env.agent !== undefined) out.PI_LUVUS_AGENT = env.agent;
-  if (env.sessionFile !== undefined) out.PI_LUVUS_SESSION = env.sessionFile;
-  if (env.id !== undefined) out.PI_LUVUS_ID = env.id;
-  if (env.activityFile !== undefined) out.PI_LUVUS_ACTIVITY_FILE = env.activityFile;
-  if (env.surface !== undefined) out.PI_LUVUS_SURFACE = env.surface;
+  if (env.name !== undefined) out.PI_PMUX_NAME = env.name;
+  if (env.agent !== undefined) out.PI_PMUX_AGENT = env.agent;
+  if (env.sessionFile !== undefined) out.PI_PMUX_SESSION = env.sessionFile;
+  if (env.id !== undefined) out.PI_PMUX_ID = env.id;
+  if (env.activityFile !== undefined) out.PI_PMUX_ACTIVITY_FILE = env.activityFile;
+  if (env.surface !== undefined) out.PI_PMUX_SURFACE = env.surface;
   if (env.parentRosterFile !== undefined) {
-    out.PI_LUVUS_PARENT_ROSTER = env.parentRosterFile;
+    out.PI_PMUX_PARENT_ROSTER = env.parentRosterFile;
   }
-  if (env.autoExit) out.PI_LUVUS_AUTO_EXIT = "1";
+  if (env.autoExit) out.PI_PMUX_AUTO_EXIT = "1";
   if (env.denyTools.length > 0) out.PI_DENY_TOOLS = env.denyTools.join(",");
   return out;
 }
@@ -49,14 +49,14 @@ export function decodeChildEnv(env: NodeJS.ProcessEnv): ChildEnv {
   };
 
   return {
-    name: value("PI_LUVUS_NAME"),
-    agent: value("PI_LUVUS_AGENT"),
-    sessionFile: value("PI_LUVUS_SESSION"),
-    id: value("PI_LUVUS_ID"),
-    activityFile: value("PI_LUVUS_ACTIVITY_FILE"),
-    surface: value("PI_LUVUS_SURFACE"),
-    parentRosterFile: value("PI_LUVUS_PARENT_ROSTER"),
-    autoExit: env.PI_LUVUS_AUTO_EXIT === "1",
+    name: value("PI_PMUX_NAME"),
+    agent: value("PI_PMUX_AGENT"),
+    sessionFile: value("PI_PMUX_SESSION"),
+    id: value("PI_PMUX_ID"),
+    activityFile: value("PI_PMUX_ACTIVITY_FILE"),
+    surface: value("PI_PMUX_SURFACE"),
+    parentRosterFile: value("PI_PMUX_PARENT_ROSTER"),
+    autoExit: env.PI_PMUX_AUTO_EXIT === "1",
     denyTools: parseToolList(env.PI_DENY_TOOLS),
   };
 }
@@ -67,7 +67,7 @@ export function isSubagentChild(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /** Tools that are gated by `spawning: false`. */
-const SPAWNING_TOOLS = new Set(["luvus_spawn", "luvus_interrupt", "luvus_list", "luvus_resume"]);
+const SPAWNING_TOOLS = new Set(["pmux_spawn", "pmux_interrupt", "pmux_list", "pmux_resume"]);
 
 /**
  * Resolve the effective set of denied tool names from agent defaults.

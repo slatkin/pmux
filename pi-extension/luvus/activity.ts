@@ -28,7 +28,7 @@ export type SubagentActivityEvent =
   | "tool_result"
   | "tool_execution_end"
   | "caller_ping"
-  | "luvus_done"
+  | "pmux_done"
   | "session_shutdown";
 
 export interface SubagentActivityState {
@@ -109,7 +109,7 @@ const KNOWN_EVENTS = new Set<SubagentActivityEvent>([
   "tool_result",
   "tool_execution_end",
   "caller_ping",
-  "luvus_done",
+  "pmux_done",
   "session_shutdown",
 ]);
 const MAX_ACTIVITY_STRING_LENGTH = 200;
@@ -605,7 +605,7 @@ export function createSubagentActivityRecorder(params: {
       markDone("caller_ping");
     },
     subagentDone() {
-      markDone("luvus_done");
+      markDone("pmux_done");
     },
     sessionShutdown(reason) {
       if (reason === "quit") markDone("session_shutdown");

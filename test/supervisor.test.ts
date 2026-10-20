@@ -74,13 +74,13 @@ interface TestEnv {
 function createEnv(): TestEnv {
   const dir = mkdtempSync(join(tmpdir(), "supervisor-test-"));
   const saved = new Map(
-    ["PI_CODING_AGENT_DIR", "PI_LUVUS_SHELL_READY_DELAY_MS", "PI_LUVUS_NAME", "LUVUS_PANE_ID"].map(
+    ["PI_CODING_AGENT_DIR", "PI_PMUX_SHELL_READY_DELAY_MS", "PI_PMUX_NAME", "LUVUS_PANE_ID"].map(
       (key) => [key, process.env[key]],
     ),
   );
   process.env.PI_CODING_AGENT_DIR = join(dir, "agent");
-  process.env.PI_LUVUS_SHELL_READY_DELAY_MS = "0";
-  process.env.PI_LUVUS_NAME = "parent";
+  process.env.PI_PMUX_SHELL_READY_DELAY_MS = "0";
+  process.env.PI_PMUX_NAME = "parent";
   process.env.LUVUS_PANE_ID = "21";
   const ctx: SupervisorContext = {
     cwd: dir,
@@ -260,7 +260,7 @@ const BASE_RECORD: LaunchRecord = {
   version: LAUNCH_RECORD_VERSION,
   backend: "pi",
   name: "Worker",
-  denyTools: ["luvus_spawn"],
+  denyTools: ["pmux_spawn"],
   autoExit: true,
   interactive: false,
 };
@@ -368,13 +368,13 @@ describe("supervisor launch", () => {
       assert.equal(spec.closeOnDone, undefined);
       assert.equal(spec.cwd, undefined);
       assert.equal(spec.title, "Scout — Fix the login bug");
-      assert.equal(spec.env.PI_LUVUS_NAME, "Scout");
-      assert.equal(spec.env.PI_LUVUS_SESSION, running.sessionFile);
-      assert.equal(spec.env.PI_LUVUS_SURFACE, "24");
+      assert.equal(spec.env.PI_PMUX_NAME, "Scout");
+      assert.equal(spec.env.PI_PMUX_SESSION, running.sessionFile);
+      assert.equal(spec.env.PI_PMUX_SURFACE, "24");
       assert.equal(flagValue(spec.args, "--model"), "test-model");
       assert.equal(
         flagValue(spec.args, "--tools"),
-        "read,bash,edit,write,grep,find,ls,caller_ping,luvus_done,luvus_message",
+        "read,bash,edit,write,grep,find,ls,caller_ping,pmux_done,pmux_message",
       );
 
       // The spec is written where the old shell script went, and it is no script.
@@ -419,10 +419,10 @@ describe("supervisor launch", () => {
         assert.equal(record.rolePrompt, "You are a scout.");
         assert.equal(record.systemPromptMode, "append");
         assert.deepEqual([...record.denyTools].sort(), [
-          "luvus_interrupt",
-          "luvus_list",
-          "luvus_resume",
-          "luvus_spawn",
+          "pmux_interrupt",
+          "pmux_list",
+          "pmux_resume",
+          "pmux_spawn",
         ]);
         assert.equal(record.autoExit, false);
         assert.equal(record.interactive, true);
@@ -457,23 +457,23 @@ describe("supervisor launch", () => {
           "--append-system-prompt",
           syspromptPath,
           "--tools",
-          "read,bash,caller_ping,luvus_done,luvus_message",
+          "read,bash,caller_ping,pmux_done,pmux_message",
           taskArg,
         ]);
         assert.deepEqual(spec.env, {
           PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
-          PI_DENY_TOOLS: "luvus_spawn,luvus_interrupt,luvus_list,luvus_resume",
-          PI_LUVUS_NAME: "Scout",
-          PI_LUVUS_AGENT: "scout",
-          PI_LUVUS_SESSION: running.sessionFile,
-          PI_LUVUS_ID: running.id,
-          PI_LUVUS_ACTIVITY_FILE: running.activityFile,
-          PI_LUVUS_SURFACE: running.surface,
-          PI_LUVUS_PARENT_ROSTER: getRosterFile(
+          PI_DENY_TOOLS: "pmux_spawn,pmux_interrupt,pmux_list,pmux_resume",
+          PI_PMUX_NAME: "Scout",
+          PI_PMUX_AGENT: "scout",
+          PI_PMUX_SESSION: running.sessionFile,
+          PI_PMUX_ID: running.id,
+          PI_PMUX_ACTIVITY_FILE: running.activityFile,
+          PI_PMUX_SURFACE: running.surface,
+          PI_PMUX_PARENT_ROSTER: getRosterFile(
             getArtifactDir(join(env.dir, "sessions"), "sess-001"),
           ),
         });
-        assert.equal("PI_LUVUS_AUTO_EXIT" in spec.env, false);
+        assert.equal("PI_PMUX_AUTO_EXIT" in spec.env, false);
 
         // The record is on disk by the time the pane line runs.
         assert.deepEqual(recordExistedAtPaneRun, [true]);
@@ -558,7 +558,7 @@ function writeRecord(sessionPath: string, overrides: Partial<LaunchRecord> = {})
     tools: "read,bash",
     rolePrompt: "You are a worker.",
     systemPromptMode: "append",
-    denyTools: ["luvus_spawn"],
+    denyTools: ["pmux_spawn"],
     autoExit: true,
     interactive: false,
     ...overrides,
@@ -595,16 +595,13 @@ describe("supervisor resume", () => {
       assert.equal(spec.title, "Worker — Continue the work");
 
       // Denied tools and the agent come from the record.
-      assert.equal(spec.env.PI_DENY_TOOLS, "luvus_spawn");
-      assert.equal(spec.env.PI_LUVUS_AGENT, "worker");
-      assert.equal(spec.env.PI_LUVUS_NAME, "Worker");
-      assert.equal(spec.env.PI_LUVUS_SESSION, sessionPath);
-      assert.equal(spec.env.PI_LUVUS_AUTO_EXIT, "1");
+      assert.equal(spec.env.PI_DENY_TOOLS, "pmux_spawn");
+      assert.equal(spec.env.PI_PMUX_AGENT, "worker");
+      assert.equal(spec.env.PI_PMUX_NAME, "Worker");
+      assert.equal(spec.env.PI_PMUX_SESSION, sessionPath);
+      assert.equal(spec.env.PI_PMUX_AUTO_EXIT, "1");
       assert.equal(flagValue(spec.args, "--model"), "test-model");
-      assert.equal(
-        flagValue(spec.args, "--tools"),
-        "read,bash,caller_ping,luvus_done,luvus_message",
-      );
+      assert.equal(flagValue(spec.args, "--tools"), "read,bash,caller_ping,pmux_done,pmux_message");
 
       // The role prompt goes back in as a file, as the record's mode selects.
       const syspromptPath = flagValue(spec.args, "--append-system-prompt");
@@ -616,7 +613,7 @@ describe("supervisor resume", () => {
       const promptArg = spec.args.at(-1) ?? "";
       assert.match(promptArg, /^@.*luvus-resume.*\.md$/);
       const prompt = readFileSync(promptArg.slice(1), "utf8");
-      assert.match(prompt, /You can message `parent` with luvus_message/);
+      assert.match(prompt, /You can message `parent` with pmux_message/);
       assert.ok(prompt.indexOf("You can message") < prompt.indexOf("Continue the work"));
 
       assert.equal(h.supervisor.running()[0].interactive, false);
@@ -653,7 +650,7 @@ describe("supervisor resume", () => {
       const result = await h.supervisor.resume({ sessionPath }, env.ctx);
       const spec = readLaunchSpec(result.details.launchScriptFile as string);
 
-      assert.equal("PI_LUVUS_AUTO_EXIT" in spec.env, false);
+      assert.equal("PI_PMUX_AUTO_EXIT" in spec.env, false);
       assert.equal(h.supervisor.running()[0].interactive, true);
     });
   });
@@ -667,7 +664,7 @@ describe("supervisor resume", () => {
       const result = await h.supervisor.resume({ sessionPath, autoExit: false }, env.ctx);
       const spec = readLaunchSpec(result.details.launchScriptFile as string);
 
-      assert.equal("PI_LUVUS_AUTO_EXIT" in spec.env, false);
+      assert.equal("PI_PMUX_AUTO_EXIT" in spec.env, false);
       assert.equal(h.supervisor.running()[0].interactive, true);
     });
   });
@@ -686,7 +683,7 @@ describe("supervisor resume", () => {
       const spec = readLaunchSpec(result.details.launchScriptFile as string);
       const prompt = readFileSync((spec.args.at(-1) ?? "").slice(1), "utf8");
 
-      assert.match(prompt, /You can message `parent`, `Reviewer` with luvus_message/);
+      assert.match(prompt, /You can message `parent`, `Reviewer` with pmux_message/);
       assert.ok(prompt.indexOf("`Reviewer`") < prompt.indexOf("Address the review findings"));
     });
   });
@@ -707,9 +704,9 @@ describe("supervisor resume", () => {
       assert.match(result.content[0].text, /role configuration was not restored/);
 
       const spec = readLaunchSpec(result.details.launchScriptFile as string);
-      assert.equal("PI_LUVUS_AGENT" in spec.env, false);
+      assert.equal("PI_PMUX_AGENT" in spec.env, false);
       assert.equal("PI_DENY_TOOLS" in spec.env, false);
-      assert.equal(spec.env.PI_LUVUS_AUTO_EXIT, "1");
+      assert.equal(spec.env.PI_PMUX_AUTO_EXIT, "1");
     });
   });
 
@@ -726,7 +723,7 @@ describe("supervisor resume", () => {
       assert.match(result.content[0].text, /role configuration was not restored/);
 
       const spec = readLaunchSpec(result.details.launchScriptFile as string);
-      assert.equal("PI_LUVUS_AUTO_EXIT" in spec.env, false);
+      assert.equal("PI_PMUX_AUTO_EXIT" in spec.env, false);
       assert.equal(h.supervisor.running()[0].interactive, true);
     });
   });
@@ -808,9 +805,9 @@ describe("supervisor watcher", () => {
         await waitFor(() => h.sent.length === 1, "the result steer");
 
         assert.deepEqual(h.closed, [running.surface]);
-        assert.equal(h.sent[0].message.customType, "luvus_result");
+        assert.equal(h.sent[0].message.customType, "pmux_result");
         assert.match(h.sent[0].message.content, /Here is my plan\.\.\./);
-        assert.match(h.sent[0].message.content, /Resume: luvus_resume/);
+        assert.match(h.sent[0].message.content, /Resume: pmux_resume/);
         assert.doesNotMatch(h.sent[0].message.content, /pi --session/);
         assert.doesNotMatch(h.sent[0].message.content, /Subagent cancelled/);
         assert.deepEqual(h.supervisor.running(), []);
@@ -838,7 +835,7 @@ describe("supervisor watcher", () => {
         await waitFor(() => h.sent.length === 1, "the result steer");
 
         assert.deepEqual(h.closed, [running.surface]);
-        assert.equal(h.sent[0].message.customType, "luvus_result");
+        assert.equal(h.sent[0].message.customType, "pmux_result");
         assert.match(h.sent[0].message.content, /All checks pass\./);
         assert.equal(h.supervisor.running().length, 0);
       },
@@ -889,12 +886,12 @@ describe("supervisor watcher", () => {
           true,
         );
 
-        // The result names the record-adjacent session path for luvus_resume.
+        // The result names the record-adjacent session path for pmux_resume.
         const { message } = h.sent[0];
         assert.equal(message.details?.sessionFile, running.sessionFile);
         assert.equal(message.details?.claudeSessionId, sessionId);
         assert.ok(message.content.includes(`Session: ${running.sessionFile}`));
-        assert.ok(message.content.includes(`Resume: luvus_resume ${running.sessionFile}`));
+        assert.ok(message.content.includes(`Resume: pmux_resume ${running.sessionFile}`));
       } finally {
         if (previousHome === undefined) delete process.env.HOME;
         else process.env.HOME = previousHome;
@@ -902,7 +899,7 @@ describe("supervisor watcher", () => {
     });
   });
 
-  it("sends one luvus_handoff steer for a handoff result", async () => {
+  it("sends one pmux_handoff steer for a handoff result", async () => {
     await withHarness(async (h, env) => {
       const realNow = Date.now;
       let nowMs = 1_000;
@@ -929,7 +926,7 @@ describe("supervisor watcher", () => {
 
         assert.equal(h.sent.length, 1);
         const { message, options } = h.sent[0];
-        assert.equal(message.customType, "luvus_handoff");
+        assert.equal(message.customType, "pmux_handoff");
         assert.deepEqual(options, { triggerTurn: true, deliverAs: "steer" });
         assert.match(
           message.content,
@@ -980,7 +977,7 @@ describe("supervisor watcher", () => {
       h.polls.finish({ reason: "done", exitCode: 0 });
       await waitFor(() => h.sent.length === 1, "the resumed result steer");
 
-      assert.equal(h.sent[0].message.customType, "luvus_result");
+      assert.equal(h.sent[0].message.customType, "pmux_result");
       assert.match(h.sent[0].message.content, /The follow-up result\./);
       assert.doesNotMatch(h.sent[0].message.content, /Here is my plan/);
     });
@@ -1001,7 +998,7 @@ describe("supervisor watcher", () => {
       await waitFor(() => h.sent.length === 1, "the resumed ping steer");
 
       const { message } = h.sent[0];
-      assert.equal(message.customType, "luvus_ping");
+      assert.equal(message.customType, "pmux_ping");
       assert.equal(message.details?.name, "Worker");
       assert.equal(message.details?.task, "Continue the work");
       assert.equal(message.details?.agent, "worker");
@@ -1027,13 +1024,13 @@ describe("supervisor watcher", () => {
         await waitFor(() => h.sent.length === 1, "the error steer");
 
         const { message } = h.sent[0];
-        assert.equal(message.customType, "luvus_result");
+        assert.equal(message.customType, "pmux_result");
         assert.match(message.content, /Sub-agent "Worker" error: send failed/);
         assert.equal(message.details?.name, "Worker");
         assert.equal(message.details?.task, "implement rows 4.x");
         assert.equal(message.details?.agent, "worker");
       },
-      { failSendOnce: (message) => message.customType === "luvus_result" },
+      { failSendOnce: (message) => message.customType === "pmux_result" },
     );
   });
 });

@@ -206,13 +206,13 @@ function syncStreamProjection(): void {
 }
 
 /**
- * Capture the live TUI through the zero-height "luvus-streams" widget: the
+ * Capture the live TUI through the zero-height "pmux-streams" widget: the
  * widget renders nothing, and its factory is the public seam that hands the
  * projection the `tui` it needs to find and swap the chat container.
  */
 function captureStreamTui(ctx: ExtensionContext): void {
   try {
-    ctx.ui.setWidget("luvus-streams", (tui) => {
+    ctx.ui.setWidget("pmux-streams", (tui) => {
       streamRuntime.tui = tui;
       return {
         render: () => [],
@@ -499,7 +499,7 @@ const statusConfig = loadStatusConfig();
 // Subagent surface placement default: "right" (side-by-side split), "down"
 // (stacked split) or "tab" (own workspace tab). Loaded from the extension config
 // (~/.pi/agent/extensions/pi-luvus/config.json), changeable at
-// runtime via /luvus-surface, overridable per call via the tool's `surface` param.
+// runtime via /pmux-surface, overridable per call via the tool's `surface` param.
 let surfaceDefault: SurfacePlacement = loadSurfaceConfig();
 
 export function getSurfaceDefault(): SurfacePlacement {
@@ -656,7 +656,7 @@ const SubagentMessageParams = Type.Object({
 });
 
 /**
- * Validate, resolve and deliver one `luvus_message` call. Exported for unit
+ * Validate, resolve and deliver one `pmux_message` call. Exported for unit
  * testing: `deps` lets a test observe whether Luvus was used at all.
  */
 export function sendSubagentMessage(
@@ -798,7 +798,7 @@ export { isSubagentChild };
 
 export default function subagentsExtension(pi: ExtensionAPI) {
   // Decode the child env once: a pi process does not change its own
-  // PI_LUVUS_* values. Every reader below uses this value.
+  // PI_PMUX_* values. Every reader below uses this value.
   const childEnv = decodeChildEnv(process.env);
 
   // A fresh supervisor for this registration: stop the supervisor that a
@@ -816,7 +816,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   createTurnNotifier(process.env, statusConfig.notifyEnabled).register(pi);
 
   // First-prompt OSC title for unnamed non-subagent panes. A subagent child
-  // sets PI_LUVUS_NAME, so it keeps its `<name> — <task>` title.
+  // sets PI_PMUX_NAME, so it keeps its `<name> — <task>` title.
   createLiveTitleController().register(pi);
 
   // Capture the UI context for widget updates
@@ -851,9 +851,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   const shouldRegister = (name: string) => !deniedTools.has(name);
 
   // ── subagent tool ──
-  if (shouldRegister("luvus_spawn"))
+  if (shouldRegister("pmux_spawn"))
     pi.registerTool({
-      name: "luvus_spawn",
+      name: "pmux_spawn",
       label: "Subagent",
       description:
         "Start a subagent in a new Luvus pane. The tool is fire-and-forget: it returns only an acknowledgement. When the subagent finishes, its result arrives automatically as a steer message that starts a new turn. Do not poll, sleep, read logs, or call other tools to check status. Do not fabricate or guess the result. After the call, end your turn or do other independent work, for example start more subagents. Set placement with the surface parameter.",
@@ -979,10 +979,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       },
     });
 
-  // ── luvus_interrupt tool ──
-  if (shouldRegister("luvus_interrupt"))
+  // ── pmux_interrupt tool ──
+  if (shouldRegister("pmux_interrupt"))
     pi.registerTool({
-      name: "luvus_interrupt",
+      name: "pmux_interrupt",
       label: "Interrupt Subagent",
       description:
         "Send Escape to the current turn of a running pi subagent. The pane and session stay alive. The tool returns an acknowledgement only; it does not cause a subagent result.",
@@ -1029,13 +1029,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       },
     });
 
-  // ── luvus_message tool ──
-  if (shouldRegister("luvus_message"))
+  // ── pmux_message tool ──
+  if (shouldRegister("pmux_message"))
     pi.registerTool({
-      name: "luvus_message",
+      name: "pmux_message",
       label: "Message Subagent",
       description:
-        "Send a short message to `parent`, one of your running children, or a running sibling. Your session continues. A reply, if any, arrives later as a separate message. caller_ping and luvus_done END your session; this tool does not.",
+        "Send a short message to `parent`, one of your running children, or a running sibling. Your session continues. A reply, if any, arrives later as a separate message. caller_ping and pmux_done END your session; this tool does not.",
       promptSnippet: "Message `parent`, a child, or a sibling without ending your session.",
       parameters: SubagentMessageParams,
 
@@ -1105,10 +1105,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       },
     });
 
-  // ── luvus_list tool ──
-  if (shouldRegister("luvus_list"))
+  // ── pmux_list tool ──
+  if (shouldRegister("pmux_list"))
     pi.registerTool({
-      name: "luvus_list",
+      name: "pmux_list",
       label: "List Subagents",
       description:
         "List agent definitions for the subagent `agent` parameter. Project .pi/agents/ overrides global ~/.pi/agent/agents/ for the same name.",
@@ -1154,10 +1154,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       },
     });
 
-  // ── luvus_resume tool ──
-  if (shouldRegister("luvus_resume"))
+  // ── pmux_resume tool ──
+  if (shouldRegister("pmux_resume"))
     pi.registerTool({
-      name: "luvus_resume",
+      name: "pmux_resume",
       label: "Resume Subagent",
       description:
         "Resume an earlier subagent session in a new Luvus pane, to continue a cancelled run or give follow-up work. Delivery is the same as subagent: fire-and-forget, the result arrives as a steer message, do not poll or fabricate it. Set placement with the surface parameter.",
@@ -1235,13 +1235,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       },
     });
 
-  // /luvus-spawn command — spawn a subagent by name
-  pi.registerCommand("luvus-spawn", {
-    description: "Spawn a subagent: /luvus-spawn <agent> <task>",
+  // /pmux-spawn command — spawn a subagent by name
+  pi.registerCommand("pmux-spawn", {
+    description: "Spawn a subagent: /pmux-spawn <agent> <task>",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       if (!trimmed) {
-        ctx.ui.notify("Usage: /luvus-spawn <agent> [task]", "warning");
+        ctx.ui.notify("Usage: /pmux-spawn <agent> [task]", "warning");
         return;
       }
 
@@ -1260,14 +1260,14 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
       const taskText = task || `You are the ${agentName} agent. Wait for instructions.`;
       const displayName = agentName[0].toUpperCase() + agentName.slice(1);
-      const toolCall = `Use luvus_spawn with agent: "${agentName}", name: "${displayName}", task: ${JSON.stringify(taskText)}`;
+      const toolCall = `Use pmux_spawn with agent: "${agentName}", name: "${displayName}", task: ${JSON.stringify(taskText)}`;
       pi.sendUserMessage(toolCall);
     },
   });
 
-  // /luvus-surface command — show or set the default surface placement
-  pi.registerCommand("luvus-surface", {
-    description: "Show or set the default subagent surface: /luvus-surface [right|down|tab]",
+  // /pmux-surface command — show or set the default surface placement
+  pi.registerCommand("pmux-surface", {
+    description: "Show or set the default subagent surface: /pmux-surface [right|down|tab]",
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
       const placement = parseSurfacePlacement(arg);
@@ -1305,8 +1305,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     },
   });
 
-  // ── luvus_result message renderer ──
-  pi.registerMessageRenderer("luvus_result", (message, options, theme) => {
+  // ── pmux_result message renderer ──
+  pi.registerMessageRenderer("pmux_result", (message, options, theme) => {
     const details = message.details as any;
     if (!details) return undefined;
 
@@ -1357,7 +1357,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           if (details.sessionFile) {
             contentLines.push("");
             contentLines.push(theme.fg("dim", `Session: ${details.sessionFile}`));
-            contentLines.push(theme.fg("dim", `Resume:  luvus_resume ${details.sessionFile}`));
+            contentLines.push(theme.fg("dim", `Resume:  pmux_resume ${details.sessionFile}`));
           }
         } else {
           // Collapsed: preview + expand hint
@@ -1382,8 +1382,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     };
   });
 
-  // ── luvus_status message renderer ──
-  pi.registerMessageRenderer("luvus_status", (message, options, theme) => {
+  // ── pmux_status message renderer ──
+  pi.registerMessageRenderer("pmux_status", (message, options, theme) => {
     const details = message.details as any;
     const lines = Array.isArray(details?.lines) ? details.lines : [];
     const overflow = typeof details?.overflow === "number" ? details.overflow : 0;
@@ -1412,8 +1412,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     };
   });
 
-  // ── luvus_handoff message renderer ──
-  pi.registerMessageRenderer("luvus_handoff", (message, options, theme) => {
+  // ── pmux_handoff message renderer ──
+  pi.registerMessageRenderer("pmux_handoff", (message, options, theme) => {
     const details = message.details as any;
     if (!details) return undefined;
 
@@ -1449,8 +1449,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     };
   });
 
-  // ── luvus_ping message renderer ──
-  pi.registerMessageRenderer("luvus_ping", (message, options, theme) => {
+  // ── pmux_ping message renderer ──
+  pi.registerMessageRenderer("pmux_ping", (message, options, theme) => {
     const details = message.details as any;
     if (!details) return undefined;
 

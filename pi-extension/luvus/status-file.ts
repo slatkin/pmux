@@ -1,7 +1,7 @@
 /**
  * The `<session file>.status` file — host independent, like `exit-sidecar.ts`.
  *
- * A child that runs this extension (a session with `PI_LUVUS_SESSION` set)
+ * A child that runs this extension (a session with `PI_PMUX_SESSION` set)
  * writes its live status next to its session file: one JSON object with
  * `status` (`working`, `idle`, `done`, `blocked`), `at` and an optional
  * `message`. Each write replaces the whole file (a temp file renamed over

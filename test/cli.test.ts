@@ -144,7 +144,7 @@ async function runStubCase(dir: string, options: RunCase = {}): Promise<RunOutco
 const SPEC: LaunchSpec = {
   version: LAUNCH_SPEC_VERSION,
   name: "scout-1",
-  env: { PI_LUVUS_SESSION: "/tmp/session.jsonl" },
+  env: { PI_PMUX_SESSION: "/tmp/session.jsonl" },
   command: "pi",
   args: ["--session", "/tmp/session.jsonl"],
   closeOnDone: { graceMs: 0 },
@@ -240,11 +240,11 @@ describe("buildPaneTitle", () => {
 });
 
 describe("resolvePiCommand", () => {
-  it("prefers PI_LUVUS_PI_ENTRY and runs it with the current node", () => {
+  it("prefers PI_PMUX_PI_ENTRY and runs it with the current node", () => {
     assert.deepEqual(
       resolvePiCommand({
         platform: "linux",
-        env: { PI_LUVUS_PI_ENTRY: "/opt/pi/entry.js" },
+        env: { PI_PMUX_PI_ENTRY: "/opt/pi/entry.js" },
         execPath: "/usr/bin/node",
       }),
       ["/usr/bin/node", "/opt/pi/entry.js"],
@@ -421,14 +421,14 @@ describe("runSpec", () => {
     });
   });
 
-  it("merges spec env over the wrapper env, with PI_LUVUS_SURFACE from the wrapper's pane", async () => {
+  it("merges spec env over the wrapper env, with PI_PMUX_SURFACE from the wrapper's pane", async () => {
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, {
         env: { TMUX_PANE: "%55", PI_RUN_BASE: "base", PI_RUN_SHARED: "base" },
         spec: { env: { PI_RUN_SPEC: "spec", PI_RUN_SHARED: "spec" } },
       });
       assert.ok(result.record);
-      assert.equal(result.record.env.PI_LUVUS_SURFACE, "%55");
+      assert.equal(result.record.env.PI_PMUX_SURFACE, "%55");
       assert.equal(result.record.env.PI_RUN_BASE, "base");
       assert.equal(result.record.env.PI_RUN_SPEC, "spec");
       assert.equal(result.record.env.PI_RUN_SHARED, "spec");
@@ -820,7 +820,7 @@ describe("cli.ts start", () => {
     assert.ok(promptText.includes("# Task"));
     assert.ok(promptText.includes("Your last assistant message is the report the parent reads"));
     assert.ok(promptText.includes("pane %21"));
-    assert.ok(promptText.includes("luvus_done"));
+    assert.ok(promptText.includes("pmux_done"));
 
     // Role prompt holds the role body.
     assert.ok(readFileSync(res.rolePromptPath, "utf8").includes("Doer role body."));
@@ -832,13 +832,13 @@ describe("cli.ts start", () => {
     assert.equal(spec.cwd, cwd);
     assert.equal(spec.command, "pi");
     assert.equal(spec.sessionFile, res.json.session);
-    assert.equal(spec.env.PI_LUVUS_NAME, "fix-7");
-    assert.equal(spec.env.PI_LUVUS_AGENT, "doer");
-    assert.equal(spec.env.PI_LUVUS_SESSION, res.json.session);
-    assert.equal(spec.env.PI_LUVUS_SURFACE, undefined);
-    assert.equal(spec.env.PI_LUVUS_AUTO_EXIT, "1");
-    assert.match(String(spec.env.PI_LUVUS_ID), /^[0-9a-f]{8}$/);
-    assert.ok(String(spec.env.PI_LUVUS_ACTIVITY_FILE).endsWith(".activity.json"));
+    assert.equal(spec.env.PI_PMUX_NAME, "fix-7");
+    assert.equal(spec.env.PI_PMUX_AGENT, "doer");
+    assert.equal(spec.env.PI_PMUX_SESSION, res.json.session);
+    assert.equal(spec.env.PI_PMUX_SURFACE, undefined);
+    assert.equal(spec.env.PI_PMUX_AUTO_EXIT, "1");
+    assert.match(String(spec.env.PI_PMUX_ID), /^[0-9a-f]{8}$/);
+    assert.ok(String(spec.env.PI_PMUX_ACTIVITY_FILE).endsWith(".activity.json"));
     assert.equal(argValue(spec.args, "--session"), res.json.session);
     assert.equal(
       argValue(spec.args, "-e"),
@@ -846,21 +846,21 @@ describe("cli.ts start", () => {
     );
     assert.equal(argValue(spec.args, "--model"), "test-model:high");
     assert.equal(argValue(spec.args, "--append-system-prompt"), res.rolePromptPath);
-    assert.equal(argValue(spec.args, "--tools"), "read,caller_ping,luvus_done,luvus_message");
+    assert.equal(argValue(spec.args, "--tools"), "read,caller_ping,pmux_done,pmux_message");
     assert.equal(argValue(spec.args, "--name"), "fix-7");
     assert.equal(spec.closeOnDone?.graceMs, 5000);
     assert.equal(spec.title, "fix-7 — # Task");
   });
 
-  it("sets PI_LUVUS_AUTO_EXIT=1 only for auto-exit roles", async () => {
+  it("sets PI_PMUX_AUTO_EXIT=1 only for auto-exit roles", async () => {
     const fastCwd = mkdtempSync(join(workdir, "fast-"));
     writeRole(fastCwd, "fast", "model: m\nthinking: low\nauto-exit: true", "Fast body.");
-    assert.equal((await runStart({ cwd: fastCwd, role: "fast" })).spec.env.PI_LUVUS_AUTO_EXIT, "1");
+    assert.equal((await runStart({ cwd: fastCwd, role: "fast" })).spec.env.PI_PMUX_AUTO_EXIT, "1");
 
     const slowCwd = mkdtempSync(join(workdir, "slow-"));
     writeRole(slowCwd, "slow", "model: m\nthinking: low", "Slow body.");
     assert.equal(
-      (await runStart({ cwd: slowCwd, role: "slow" })).spec.env.PI_LUVUS_AUTO_EXIT,
+      (await runStart({ cwd: slowCwd, role: "slow" })).spec.env.PI_PMUX_AUTO_EXIT,
       undefined,
     );
   });
@@ -869,7 +869,7 @@ describe("cli.ts start", () => {
     const cwd = mkdtempSync(join(workdir, "nospawn-"));
     writeRole(cwd, "nospawn", "model: m\nthinking: low\nspawning: false", "No spawn body.");
     const res = await runStart({ cwd, role: "nospawn" });
-    assert.equal(res.spec.env.PI_DENY_TOOLS, "luvus_spawn,luvus_interrupt,luvus_list,luvus_resume");
+    assert.equal(res.spec.env.PI_DENY_TOOLS, "pmux_spawn,pmux_interrupt,pmux_list,pmux_resume");
   });
 
   it("denies the explicit deny-tools list", async () => {
@@ -897,7 +897,7 @@ describe("cli.ts start", () => {
     const res = await runStart({ cwd, role: "thin" });
     assert.equal(
       argValue(res.spec.args, "--tools"),
-      "read,bash,caller_ping,luvus_done,luvus_message",
+      "read,bash,caller_ping,pmux_done,pmux_message",
     );
   });
 
@@ -907,7 +907,7 @@ describe("cli.ts start", () => {
     const res = await runStart({ cwd, role: "plain" });
     assert.equal(
       argValue(res.spec.args, "--tools"),
-      "read,bash,edit,write,grep,find,ls,caller_ping,luvus_done,luvus_message",
+      "read,bash,edit,write,grep,find,ls,caller_ping,pmux_done,pmux_message",
     );
   });
 
@@ -980,7 +980,7 @@ describe("cli.ts start", () => {
     const stderr: string[] = [];
     const code = await main(["run", res.json.launch, res.promptPath], {
       env: tmuxEnv({
-        PI_LUVUS_PI_ENTRY: PI_STUB,
+        PI_PMUX_PI_ENTRY: PI_STUB,
         PI_STUB_RECORD: recordPath,
         TMUX_PANE: "%99",
       }),
@@ -1186,7 +1186,7 @@ describe("cli.ts resume", () => {
 });
 
 describe("cli.ts run", () => {
-  it("resolves pi from PI_LUVUS_PI_ENTRY and returns the child's code", async () => {
+  it("resolves pi from PI_PMUX_PI_ENTRY and returns the child's code", async () => {
     await withTempDirAsync(async (dir) => {
       const specPath = join(dir, "spec.json");
       writeLaunchSpec(specPath, {
@@ -1199,7 +1199,7 @@ describe("cli.ts run", () => {
       });
       const res = await runCli(
         ["run", specPath],
-        tmuxEnv({ PI_LUVUS_PI_ENTRY: PI_STUB, PI_STUB_CODE: "3" }),
+        tmuxEnv({ PI_PMUX_PI_ENTRY: PI_STUB, PI_STUB_CODE: "3" }),
       );
       assert.equal(res.code, 3);
       assert.equal(res.stdout, "__SUBAGENT_DONE_3__\n");
@@ -1336,13 +1336,13 @@ function startCwd(caseDir: string): string {
 }
 
 describe("skills/pi-luvus/launch.ts", () => {
-  it("prefers PI_LUVUS_DIR over the checkout", async () => {
+  it("prefers PI_PMUX_DIR over the checkout", async () => {
     const caseDir = mkdtempSync(join(workdir, "shim-override-"));
     const home = mkdtempSync(join(caseDir, "home-"));
     const install = makeInstall(join(caseDir, "dev-override"));
     const started = await runStartWith(shimMain, {
       cwd: startCwd(caseDir),
-      env: { HOME: home, PI_LUVUS_DIR: install },
+      env: { HOME: home, PI_PMUX_DIR: install },
     });
     // The override root wins over this checkout, so its own CLI wrote the
     // spec and its sentinel is on -e.

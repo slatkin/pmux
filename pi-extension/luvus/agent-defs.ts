@@ -40,7 +40,7 @@ export interface AgentDefinition extends AgentDefaults {
 export const DEFAULT_SUBAGENT_TOOLS = "read,bash,edit,write,grep,find,ls";
 
 /** Tools every child keeps, so it can always reach its parent and finish. */
-const SUBAGENT_CONTROL_TOOLS = ["caller_ping", "luvus_done", "luvus_message"] as const;
+const SUBAGENT_CONTROL_TOOLS = ["caller_ping", "pmux_done", "pmux_message"] as const;
 
 /** Resolve the global agent config directory, respecting PI_CODING_AGENT_DIR. */
 export function getAgentConfigDir(): string {
@@ -131,7 +131,7 @@ export function loadAgentDefaults(agentName: string, cwd = process.cwd()): Agent
  * Pi 0.70+ applies --tools to built-in, extension, and custom tools. If a
  * subagent definition restricts tools to e.g. "read,bash,write", the child
  * control tools from luvus-done.ts would otherwise be hidden, leaving a
- * manually resumed or user-touched subagent unable to call luvus_done.
+ * manually resumed or user-touched subagent unable to call pmux_done.
  * A role without a `tools` line falls back to DEFAULT_SUBAGENT_TOOLS.
  */
 export function buildSubagentToolAllowlist(effectiveTools?: string): string {

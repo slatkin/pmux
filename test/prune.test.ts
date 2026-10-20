@@ -97,7 +97,7 @@ describe("cli.ts prune", () => {
     const sentinels = mkdtempSync(join(workdir, "cli-sent-"));
     const stdout: string[] = [];
     const code = await main(["prune", "--scratch", scratch, "--max-age-days", "7"], {
-      env: { PATH: process.env.PATH, PI_LUVUS_SENTINEL_DIR: sentinels },
+      env: { PATH: process.env.PATH, PI_PMUX_SENTINEL_DIR: sentinels },
       stdout: (text) => stdout.push(text),
       stderr: () => {},
       sleep: async () => {},
@@ -112,7 +112,7 @@ describe("cli.ts prune", () => {
     const sentinels = mkdtempSync(join(workdir, "cli-miss-sent-"));
     const stdout: string[] = [];
     const code = await main(["prune", "--scratch", join(workdir, "no-such-dir")], {
-      env: { PATH: process.env.PATH, PI_LUVUS_SENTINEL_DIR: sentinels },
+      env: { PATH: process.env.PATH, PI_PMUX_SENTINEL_DIR: sentinels },
       stdout: (text) => stdout.push(text),
       stderr: () => {},
       sleep: async () => {},
@@ -126,7 +126,7 @@ describe("cli.ts prune", () => {
     let message = "";
     try {
       await main(["prune", "--max-age-days", "-1"], {
-        env: { PATH: process.env.PATH, PI_LUVUS_SENTINEL_DIR: sentinels },
+        env: { PATH: process.env.PATH, PI_PMUX_SENTINEL_DIR: sentinels },
         stdout: () => {},
         stderr: () => {},
         sleep: async () => {},

@@ -108,7 +108,7 @@ export async function runSpec(
   const env: NodeJS.ProcessEnv = { ...base, ...spec.env };
   // The spec is pane-independent: whichever pane runs it becomes the child's
   // surface.
-  if (pane) env.PI_LUVUS_SURFACE = pane;
+  if (pane) env.PI_PMUX_SURFACE = pane;
 
   const reportsBefore = spec.parent ? countReports(spec.sessionFile, spec.parent) : 0;
   const args = prompt ? [...spec.args, `@${prompt}`] : [...spec.args];

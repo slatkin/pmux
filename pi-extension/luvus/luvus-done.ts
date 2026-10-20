@@ -1,18 +1,18 @@
 /**
  * Extension loaded into sub-agents.
  * - Shows agent identity + available tools as a styled widget above the editor (toggle with Ctrl+H)
- * - Provides a `luvus_done` tool for autonomous agents to self-terminate,
+ * - Provides a `pmux_done` tool for autonomous agents to self-terminate,
  *   optionally with a `handoff` text that writes the `handoff` `.exit` sidecar
  *   instead of `done` (context-alert handoff, D4)
- * - Nudges any agent that forgets to call luvus_done after generating
+ * - Nudges any agent that forgets to call pmux_done after generating
  * - Appends one `handoffs.jsonl` row per context alert and per handoff exit,
  *   fire-and-forget, so the alert and handoff events can be counted later
  * - Respects the child-env denied-tool list for its own tools: a denied tool is not registered,
- *   `caller_ping` included; `luvus_done` is never denied.
+ *   `caller_ping` included; `pmux_done` is never denied.
  *
- * Auto-exit: with PI_LUVUS_AUTO_EXIT=1, a normal `agent_end` (no user takeover,
+ * Auto-exit: with PI_PMUX_AUTO_EXIT=1, a normal `agent_end` (no user takeover,
  * not aborted) writes the `done` `.exit` sidecar and shuts the session down.
- * Otherwise the only success-path exits are the explicit `luvus_done` /
+ * Otherwise the only success-path exits are the explicit `pmux_done` /
  * `caller_ping` tools, and an agent that finishes without calling either is
  * nudged. Provider-error turns write the error `.exit` sidecar so the parent
  * learns about failures promptly.
@@ -155,7 +155,7 @@ function writeHandoffLogRow(row: HandoffLogRow): void {
 
 export default function (pi: ExtensionAPI) {
   // Decode the child env once: a pi process does not change its own
-  // PI_LUVUS_* values. Every child-env reader below uses this value; the
+  // PI_PMUX_* values. Every child-env reader below uses this value; the
   // nudge settings stay direct process settings.
   const childEnv = decodeChildEnv(process.env);
 
@@ -178,13 +178,13 @@ export default function (pi: ExtensionAPI) {
   /** Delay (ms) before sending a nudge after agent_end. Configurable via env var. */
   const NUDGE_DELAY_MS = Math.max(
     1000,
-    parseInt(process.env.PI_LUVUS_NUDGE_DELAY_MS ?? "5000", 10) || 5000,
+    parseInt(process.env.PI_PMUX_NUDGE_DELAY_MS ?? "5000", 10) || 5000,
   );
   /** Set to "1" to disable the nudge entirely. */
-  const NUDGE_DISABLED = process.env.PI_LUVUS_NUDGE_DISABLE === "1";
+  const NUDGE_DISABLED = process.env.PI_PMUX_NUDGE_DISABLE === "1";
   const NUDGE_TEXT =
     "[Automated reminder] Your last turn ended but this session is still open.\n" +
-    "If your task is complete, call the luvus_done tool now, with no other text. " +
+    "If your task is complete, call the pmux_done tool now, with no other text. " +
     "Your last message was already delivered as your report — do not repeat or summarise it.\n" +
     "If you are blocked and need input from the caller, call caller_ping with your question.\n" +
     "Otherwise, continue working.";
@@ -204,7 +204,7 @@ export default function (pi: ExtensionAPI) {
 
   /**
    * After a subagent stops normally, schedule a nudge reminding it to call
-   * luvus_done if it hasn't already. Error and aborted runs are excluded.
+   * pmux_done if it hasn't already. Error and aborted runs are excluded.
    *
    * Each call replaces any pending nudge, so repeated agent_end events
    * automatically reset the timer. The nudge only fires if no new agent
@@ -268,7 +268,7 @@ export default function (pi: ExtensionAPI) {
 
   function renderWidget(ctx: Pick<ExtensionContext, "ui">, _theme: any) {
     ctx.ui.setWidget(
-      "luvus-tools",
+      "pmux-tools",
       (_tui: any, theme: any) => {
         const box = new Box(1, 0, (text: string) => theme.bg("toolSuccessBg", text));
 
@@ -397,7 +397,7 @@ export default function (pi: ExtensionAPI) {
 
     recorder.agentEndWaiting();
     // Only input arriving after this point counts as a takeover; input that
-    // landed mid-run (e.g. luvus_message) must not silence the nudge.
+    // landed mid-run (e.g. pmux_message) must not silence the nudge.
     userInputAfterAgentEnd = false;
 
     // Restored auto-exit: an auto-exit agent whose turn ended normally exits
@@ -420,7 +420,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     // A normal stop leaves the session open and nudges the agent to call
-    // luvus_done if it forgot.
+    // pmux_done if it forgot.
     if (shouldScheduleAgentEndNudge(messages)) {
       scheduleAgentEndNudge(pi);
     } else {
@@ -490,7 +490,7 @@ export default function (pi: ExtensionAPI) {
     label: "Caller Ping",
     description:
       "Ask the parent for help, then END your session. The parent gets your message and can resume you with a reply. " +
-      "Use it when you are blocked or need a decision. To keep working, use luvus_message.",
+      "Use it when you are blocked or need a decision. To keep working, use pmux_message.",
     parameters: Type.Object({
       message: Type.String({ description: "What you need help with." }),
     }),
@@ -499,7 +499,7 @@ export default function (pi: ExtensionAPI) {
       if (!sessionFile) {
         throw new Error(
           "caller_ping is only available in subagent contexts. " +
-            "PI_LUVUS_SESSION environment variable is not set.",
+            "PI_PMUX_SESSION environment variable is not set.",
         );
       }
 
@@ -525,12 +525,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: "luvus_done",
+    name: "pmux_done",
     label: "Subagent Done",
     description:
       "Call this when your task is complete. It ENDS your session. " +
       "Your last assistant message before this call is the summary that goes to the caller. " +
-      "To send a message and keep working, use luvus_message. " +
+      "To send a message and keep working, use pmux_message. " +
       "Pass `handoff` only after a context alert: it ends the session with a handoff " +
       "sidecar carrying that text for a fresh agent, and the task is reported as not complete.",
     parameters: Type.Object({
@@ -549,7 +549,7 @@ export default function (pi: ExtensionAPI) {
         (typeof params.handoff !== "string" || params.handoff.trim() === "")
       ) {
         throw new Error(
-          "luvus_done handoff must be a non-empty string: the handoff text a fresh agent needs to continue the task.",
+          "pmux_done handoff must be a non-empty string: the handoff text a fresh agent needs to continue the task.",
         );
       }
       const sessionFile = childEnv.sessionFile;

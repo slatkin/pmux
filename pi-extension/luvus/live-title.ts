@@ -103,7 +103,7 @@ export function __resetLiveTitleForTests__(): void {
 
 /**
  * Build the live-title controller. `env` is the process environment; the
- * subagent-child check uses `isSubagentChild` (`PI_LUVUS_SESSION`), like the
+ * subagent-child check uses `isSubagentChild` (`PI_PMUX_SESSION`), like the
  * rest of the extension.
  */
 export function createLiveTitleController(

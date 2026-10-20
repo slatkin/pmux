@@ -128,22 +128,22 @@ describe("context-alert trigger", () => {
     assert.equal(shouldAlert(usage(500_000, null), percent), false);
   });
 
-  it("the alert text holds the token count, the threshold, and luvus_done with handoff", () => {
+  it("the alert text holds the token count, the threshold, and pmux_done with handoff", () => {
     const text = alertText(201_000, { kind: "tokens", value: 200_000 });
     assert.match(text, /201000/);
     assert.match(text, /200000/);
-    assert.match(text, /luvus_done/);
+    assert.match(text, /pmux_done/);
     assert.match(text, /handoff/);
 
     const percentText = alertText(160_000, { kind: "percent", value: 80 });
     assert.match(percentText, /160000/);
     assert.match(percentText, /80%/);
-    assert.match(percentText, /luvus_done/);
+    assert.match(percentText, /pmux_done/);
   });
 
   it("the handoff nudge names handoff and does not say already delivered", () => {
     const text = handoffNudgeText();
-    assert.match(text, /luvus_done/);
+    assert.match(text, /pmux_done/);
     assert.match(text, /handoff/);
     assert.doesNotMatch(text, /already delivered/);
   });
@@ -241,7 +241,7 @@ describe("context-alert in the child (luvus-done)", () => {
     const fullEnv = {
       ...env,
       PI_CODING_AGENT_DIR: dir,
-      PI_LUVUS_SESSION: options.sessionFile === false ? env.PI_LUVUS_SESSION : sessionFile,
+      PI_PMUX_SESSION: options.sessionFile === false ? env.PI_PMUX_SESSION : sessionFile,
     };
     const configPath = join(dir, "extensions", "pi-luvus", "config.json");
     mkdirSync(join(configPath, ".."), { recursive: true });
@@ -326,7 +326,7 @@ describe("context-alert in the child (luvus-done)", () => {
 
   it("steers once over the threshold and not again on later turns", async () => {
     const { handlers, sentMessages, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
     );
     try {
@@ -342,7 +342,7 @@ describe("context-alert in the child (luvus-done)", () => {
       assert.equal(sentMessages.length, 1);
       assert.deepEqual(sentMessages[0].opts, { deliverAs: "steer" });
       assert.match(sentMessages[0].message, /\b100\b/);
-      assert.match(sentMessages[0].message, /luvus_done/);
+      assert.match(sentMessages[0].message, /pmux_done/);
       assert.match(sentMessages[0].message, /handoff/);
 
       // A later turn above the threshold: no second alert.
@@ -355,7 +355,7 @@ describe("context-alert in the child (luvus-done)", () => {
 
   it("unknown usage does nothing and a later turn can still fire", async () => {
     const { handlers, sentMessages, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
     );
     try {
@@ -387,7 +387,7 @@ describe("context-alert in the child (luvus-done)", () => {
         config: JSON.stringify({ contextAlert: { enabled: false, threshold: 100 } }),
       },
       {
-        name: "no PI_LUVUS_SESSION",
+        name: "no PI_PMUX_SESSION",
         withSession: false,
         config: JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
       },
@@ -407,7 +407,7 @@ describe("context-alert in the child (luvus-done)", () => {
 
     for (const testCase of cases) {
       const { handlers, sentMessages, restore } = await loadChildExtension(
-        { PI_LUVUS_NUDGE_DISABLE: "1", PI_LUVUS_SESSION: testCase.withSession ? "set" : undefined },
+        { PI_PMUX_NUDGE_DISABLE: "1", PI_PMUX_SESSION: testCase.withSession ? "set" : undefined },
         testCase.config,
         { sessionFile: testCase.withSession },
       );
@@ -422,14 +422,14 @@ describe("context-alert in the child (luvus-done)", () => {
     }
   });
 
-  it("an invalid config still registers luvus_done and leaves the alert off", async () => {
+  it("an invalid config still registers pmux_done and leaves the alert off", async () => {
     const { handlers, tools, sentMessages, configPath, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({ contextAlert: { enabled: true, threshold: "abc%" } }),
     );
     try {
-      const doneTool = tools.find((tool) => tool.name === "luvus_done");
-      assert.ok(doneTool, "expected luvus_done to be registered despite the bad config");
+      const doneTool = tools.find((tool) => tool.name === "pmux_done");
+      assert.ok(doneTool, "expected pmux_done to be registered despite the bad config");
 
       // The bad block turned the alert off instead of stopping the load (D2).
       fire(handlers, "session_start", undefined, { ui: { setWidget() {} } });
@@ -452,8 +452,8 @@ describe("context-alert in the child (luvus-done)", () => {
   it("an auto-exit child after the alert writes no sidecar and gets the handoff nudge", async () => {
     const { handlers, sentMessages, sessionFile, restore } = await loadChildExtension(
       {
-        PI_LUVUS_AUTO_EXIT: "1",
-        PI_LUVUS_NUDGE_DELAY_MS: "1000",
+        PI_PMUX_AUTO_EXIT: "1",
+        PI_PMUX_NUDGE_DELAY_MS: "1000",
       },
       JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
     );
@@ -478,7 +478,7 @@ describe("context-alert in the child (luvus-done)", () => {
       assert.equal(shutdownCalled, false);
       assert.equal(existsSync(`${sessionFile}.exit`), false);
 
-      // The completion nudge asks for luvus_done + handoff, not the generic text.
+      // The completion nudge asks for pmux_done + handoff, not the generic text.
       mock.timers.tick(1000);
       assert.equal(sentMessages.length, 2);
       assert.equal(sentMessages[1].message, handoffNudgeText());
@@ -490,13 +490,13 @@ describe("context-alert in the child (luvus-done)", () => {
     }
   });
 
-  /** Run the registered `luvus_done` tool with a fake ctx, capturing shutdown. */
+  /** Run the registered `pmux_done` tool with a fake ctx, capturing shutdown. */
   async function callDone(
     tools: Array<any>,
     params: unknown,
   ): Promise<{ result: any; shutdown: boolean }> {
-    const doneTool = tools.find((tool) => tool.name === "luvus_done");
-    assert.ok(doneTool, "expected luvus_done to be registered");
+    const doneTool = tools.find((tool) => tool.name === "pmux_done");
+    assert.ok(doneTool, "expected pmux_done to be registered");
     let shutdown = false;
     const result = await doneTool.execute("tool-id", params, undefined, undefined, {
       shutdown: () => {
@@ -506,9 +506,9 @@ describe("context-alert in the child (luvus-done)", () => {
     return { result, shutdown };
   }
 
-  it("luvus_done with handoff text writes the handoff sidecar and shuts down", async () => {
+  it("pmux_done with handoff text writes the handoff sidecar and shuts down", async () => {
     const { tools, sessionFile, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({}),
     );
     try {
@@ -523,9 +523,9 @@ describe("context-alert in the child (luvus-done)", () => {
     }
   });
 
-  it("luvus_done without handoff keeps the done sidecar", async () => {
+  it("pmux_done without handoff keeps the done sidecar", async () => {
     const { tools, sessionFile, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({}),
     );
     try {
@@ -537,9 +537,9 @@ describe("context-alert in the child (luvus-done)", () => {
     }
   });
 
-  it("luvus_done with a whitespace-only handoff throws with no state change", async () => {
+  it("pmux_done with a whitespace-only handoff throws with no state change", async () => {
     const { tools, sessionFile, restore } = await loadChildExtension(
-      { PI_LUVUS_NUDGE_DISABLE: "1" },
+      { PI_PMUX_NUDGE_DISABLE: "1" },
       JSON.stringify({}),
     );
     try {
@@ -554,8 +554,8 @@ describe("context-alert in the child (luvus-done)", () => {
   it("an alert followed by a handoff writes two log rows", async () => {
     const { handlers, tools, sentMessages, sessionFile, mod, restore } = await loadChildExtension(
       {
-        PI_LUVUS_NUDGE_DISABLE: "1",
-        PI_LUVUS_NAME: "LogChild",
+        PI_PMUX_NUDGE_DISABLE: "1",
+        PI_PMUX_NAME: "LogChild",
       },
       JSON.stringify({ contextAlert: { enabled: true, threshold: 100 } }),
     );
@@ -568,8 +568,8 @@ describe("context-alert in the child (luvus-done)", () => {
       assert.equal(sentMessages.length, 1);
 
       // The handoff exit starts its own row, also without waiting.
-      const doneTool = tools.find((tool) => tool.name === "luvus_done");
-      assert.ok(doneTool, "expected luvus_done to be registered");
+      const doneTool = tools.find((tool) => tool.name === "pmux_done");
+      assert.ok(doneTool, "expected pmux_done to be registered");
       let shutdown = false;
       await doneTool.execute(
         "tool-id",

@@ -5,7 +5,7 @@
  * notification when a turn ends, so you do not have to visit every pane to
  * learn that it waits for input. A failed turn notifies as an error instead.
  * Subagent children stay quiet: their completion already reaches the parent
- * through the exit sidecar and `luvus_done`.
+ * through the exit sidecar and `pmux_done`.
  *
  * The notification chain runs after the event handler returns (the handler
  * never awaits it) and swallows every failure, so a slow or broken tmux call

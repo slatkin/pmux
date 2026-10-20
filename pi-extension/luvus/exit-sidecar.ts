@@ -22,7 +22,7 @@ export interface PollResult {
 }
 
 /**
- * Interpret an `.exit` sidecar payload (written by luvus_done / caller_ping /
+ * Interpret an `.exit` sidecar payload (written by pmux_done / caller_ping /
  * the error path in luvus-done.ts). Centralized so both the fast and slow
  * paths in pollForExit decode the payload the same way.
  */

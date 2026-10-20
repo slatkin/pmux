@@ -217,7 +217,7 @@ export function resolvePiCommand(deps: ResolvePiDeps = {}): string[] {
   const fileExists = deps.existsSync ?? existsSync;
   const readText = deps.readFileSync ?? ((path: string) => readFileSync(path, "utf8"));
 
-  const entry = env.PI_LUVUS_PI_ENTRY;
+  const entry = env.PI_PMUX_PI_ENTRY;
   if (entry) return [execPath, entry];
 
   if (platform === "win32") {

@@ -11,12 +11,12 @@ tool) for these roles. Requires a tmux session (`TMUX` and `TMUX_PANE` set);
 outside tmux this skill does not apply. If the user wants the orchestrator to
 do the work itself rather than launching a separate agent — a direct review
 with no agent requested — do it directly instead. The child runs pi with the
-`luvus-done` extension, which gives it the `luvus_done` tool plus auto-exit:
+`luvus-done` extension, which gives it the `pmux_done` tool plus auto-exit:
 an `auto-exit: true` child whose turn ends normally closes itself (writing the
 `.exit` sidecar); any other child that ends a turn without calling
-`luvus_done` gets a 5-second completion nudge reminding it until it does.
+`pmux_done` gets a 5-second completion nudge reminding it until it does.
 (A pi orchestrator with the parent extension loaded should use its
-`luvus_spawn` tool instead of this skill.)
+`pmux_spawn` tool instead of this skill.)
 
 All launching goes through `launch.ts`, which lives next to this file. Run it
 with `node <skill-dir>/launch.ts <command>`. It finds the child extension,
@@ -31,7 +31,7 @@ you; plain text printed in its pane is never seen, and it cannot message you:
   The footer the launcher appends to the brief tells the child this. You read
   it with `last-message --session <file>` after the wait.
 - **The completion signal** = the `<session>.exit` sidecar file, written by
-  `luvus_done` when the child ends: `{"type":"done"}`,
+  `pmux_done` when the child ends: `{"type":"done"}`,
   `{"type":"handoff","message":...}`, `{"type":"ping",...}` or
   `{"type":"error",...}`. You read it after every wait. The pane-side
   wrapper prints `__SUBAGENT_DONE_<exit code>__` when the child exits, and
@@ -132,7 +132,7 @@ with user consent).
   child's pane and press Enter, using the pane id from the `pane` field of
   the start JSON:
   ```bash
-  tmux send-keys -t <pane> -l "status? Write your report as your last assistant message, then call luvus_done"
+  tmux send-keys -t <pane> -l "status? Write your report as your last assistant message, then call pmux_done"
   tmux send-keys -t <pane> Enter
   ```
   The child extension's own 5-second nudge handles the common
