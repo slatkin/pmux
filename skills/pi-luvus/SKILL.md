@@ -1,22 +1,22 @@
 ---
 name: pi-luvus
-description: Delegated subagents for build, review, recon, or doc work across the rust-worker, reviewer, scout, worker, and advisor roles, each running as a pi process in its own Luvus pane and reporting back via luvus agent send. Relevant to requests phrased as launching, spinning up, spawning, starting, or delegating to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, review-fix loops repeating until pass, or mbv-orchestrator campaign work.
+description: Delegated subagents for build, review, recon, or doc work across the rust-worker, reviewer, scout, worker, and advisor roles, each running as a pi process in its own tmux pane and reporting back through its session file. Relevant to requests phrased as launching, spinning up, spawning, starting, or delegating to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, review-fix loops repeating until pass, or mbv-orchestrator campaign work.
 ---
 
-# pi subagents via Luvus
+# pi subagents via tmux
 
-You orchestrate; every subagent is a **pi** process in its own
-Luvus pane. Don't use your harness's built-in subagent tool (e.g. Claude
-Code's Agent tool) for these roles. Requires a Luvus session
-(`LUVUS_ENV=1` with `$LUVUS_BIN_PATH` and `$LUVUS_PANE_ID` set); outside Luvus
-this skill does not apply. If the user wants the orchestrator to do the work
-itself rather than launching a separate agent — a direct review with no agent
-requested — do it directly instead. The child runs pi with the
-`luvus-done` extension, which gives it the `luvus_done` tool plus
-auto-exit: an `auto-exit: true` child whose turn ends
-normally closes itself (writing the `.exit` sidecar); any other child that ends
-a turn without calling `luvus_done` gets a 5-second completion nudge reminding
-it until it does.
+You orchestrate; every subagent is a **pi** process in its own tmux pane.
+Don't use your harness's built-in subagent tool (e.g. Claude Code's Agent
+tool) for these roles. Requires a tmux session (`TMUX` and `TMUX_PANE` set);
+outside tmux this skill does not apply. If the user wants the orchestrator to
+do the work itself rather than launching a separate agent — a direct review
+with no agent requested — do it directly instead. The child runs pi with the
+`luvus-done` extension, which gives it the `luvus_done` tool plus auto-exit:
+an `auto-exit: true` child whose turn ends normally closes itself (writing the
+`.exit` sidecar); any other child that ends a turn without calling
+`luvus_done` gets a 5-second completion nudge reminding it until it does.
+(A pi orchestrator with the parent extension loaded should use its
+`luvus_spawn` tool instead of this skill.)
 
 All launching goes through `launch.ts`, which lives next to this file. Run it
 with `node <skill-dir>/launch.ts <command>`. It finds the child extension,
@@ -24,20 +24,19 @@ resolves the role, appends the parent-contact footer to your brief, splits and
 names the pane, and writes a JSON launch spec that the pane-side run wrapper
 executes. Never retype its steps by hand — invoke the script.
 
-Two channels with different jobs — do not confuse them:
+How you and a child communicate — there is no channel from the child back to
+you; plain text printed in its pane is never seen, and it cannot message you:
 
-- **Wake-up / report** = `luvus agent send <me> '<text>'`, run by the child.
-  This delivers a message into your pane and starts a new turn. It is the
-  ONLY way you learn anything, because you cannot poll after ending your
-  turn. (A pi orchestrator with the pi-luvus parent extension
-  loaded polls `.exit` itself — it should use its `luvus_spawn` tool, not this
-  skill. Every other orchestrator has no such loop.)
-- **Lifecycle** = the `<session>.exit` sidecar file, written by
-  `luvus_done` (`{"type":"done"}`). The pane-side wrapper prints
-  `__SUBAGENT_DONE_<exit code>__` when the child exits, and closes its own pane
-  only on a `done` sidecar, after a grace period (5000 ms by default, set per
-  launch with `--close-grace-ms`). Check `.exit` only while you are already
-  awake in a turn: to confirm shutdown, or to detect a silent crash.
+- **The report** = the child's last assistant message in its session file.
+  The footer the launcher appends to the brief tells the child this. You read
+  it with `last-message --session <file>` after the wait.
+- **The completion signal** = the `<session>.exit` sidecar file, written by
+  `luvus_done` when the child ends: `{"type":"done"}`,
+  `{"type":"handoff","message":...}`, `{"type":"ping",...}` or
+  `{"type":"error",...}`. You read it after every wait. The pane-side
+  wrapper prints `__SUBAGENT_DONE_<exit code>__` when the child exits, and
+  closes its own pane only on a `done` or `handoff` sidecar, after a grace
+  period (5000 ms by default, set per launch with `--close-grace-ms`).
 
 Role definitions resolve in this order: the project's `.pi/agents/`, then
 the global `~/.pi/agent/agents/`, then the package's own `agents/`.
@@ -47,8 +46,13 @@ with user consent).
 
 ## Launch
 
-0. Name your own pane once so children can reach you:
-   `luvus agent name <me>` (e.g. `qop-orchestrator`).
+0. Pick a name for yourself — it becomes the `--parent` value — and title
+   your own pane so the user can find you:
+   ```bash
+   tmux select-pane -t $TMUX_PANE -T '<name>-orchestrator'
+   ```
+   The launcher takes the pane id from `$TMUX_PANE` itself; you never pass
+   one.
 1. Write the brief to a file — the task, nothing else. The launcher
    appends the parent-contact footer (your name and pane, the report
    procedure) itself.
@@ -66,52 +70,50 @@ with user consent).
    ```
    `--surface` places the new pane: `right` (default) splits
    yours side by side, `down` stacks it below, `tab` gives it its own
-   workspace tab; when omitted, it comes from the
+   window; when omitted, it comes from the
    extension's `config.json`. On success it prints JSON on stdout:
    `{"pane":..., "session":..., "launch":...}`. `launch` is the launch-spec
-   path a resume needs; a `done` child closes its own pane after the close
-   grace, so the pane id matters only while the child is alive.
-3. End the turn. The report arrives as a new message in your prompt — that
-   is the child running `luvus agent send`. Do NOT sit in a polling loop on
-   `<session>.exit` instead of ending your turn; the wake-up is the message,
-   not the file. While you are awake anyway, check:
-   - `<session>.exit` holding `{"type":"done"}` → clean finish. The pane
-     has closed itself after the close grace. `rm` the `.exit` after reading.
-   - `<session>.exit` holding `{"type":"error",...}` → provider failure —
-     auto-retry exhausted, no report was sent. The pane stays open showing
+   path a resume needs; `pane` is the child's pane id, which the nudge and
+   the close commands below need; a `done` child closes its own pane after
+   the close grace, so the pane id matters only while the child is alive.
+3. Wait for the child. The wait command blocks until the child's status
+   file holds one of the wanted statuses:
+   ```bash
+   node <skill-dir>/launch.ts wait --session <file> --status done,blocked --timeout <seconds>
+   ```
+   Exit 0 means the status was reached (the matched status line is
+   printed), exit 2 means the timeout passed (a child may simply still be
+   working — wait again or nudge it), exit 1 is a usage error. When the
+   wait ends, read `<session>.exit`:
+   - `{"type":"done"}` → clean finish. The pane has closed itself after
+     the close grace. `rm` the `.exit` after reading.
+   - `{"type":"handoff","message":...}` → the child ended cleanly but the
+     task is NOT complete — the handoff text a fresh agent needs is in the
+     sidecar. The pane closes itself after the close grace, like a `done`
+     pane. `rm` the `.exit` after reading, then start a NEW child with
+     `start` and put the handoff text in its brief. Do NOT resume that
+     session.
+   - `{"type":"error",...}` → provider failure — auto-retry exhausted, no
+     report was sent. The pane stays open showing
      `__SUBAGENT_DONE_<n>__`; read the last assistant message from the
-     session file per step 4, then retry or resume. `rm` the `.exit` after
-     reading, and close the pane once you are done with it.
-   - `.exit` absent + `__SUBAGENT_DONE_<n>__` at the tail of
-     `luvus agent read <child>` → the process died without phoning home
-     (crash). The pane stays open. Read the last assistant message from the
-     session file (step 4) and decide whether to relaunch, then close the
-     pane once you are done with it.
-4. Cross-check the report against the child's last assistant message in
-   the session file from the start JSON:
+     session file per step 4, `rm` the `.exit`, then retry or resume, and
+     close the pane once you are done with it.
+   - `{"type":"ping",...}` → the child ignored the footer and used
+     `caller_ping`; the question is in the file. `rm` it, write your
+     answer to a prompt file, and run `resume` with that prompt. The
+     pane stays open until you close it.
+   - `.exit` absent + `__SUBAGENT_DONE_<n>__` at the tail of the child's
+     pane → the process died without phoning home (crash). The pane stays
+     open. Read the last assistant message from the session file (step 4)
+     and decide whether to relaunch, then close the pane once you are done
+     with it.
+4. Read the report — the child's last assistant message in the session
+   file from the start JSON:
    ```bash
    node <skill-dir>/launch.ts last-message --session <file>
    ```
    It prints the text of the session's last assistant message, or
    `(no assistant message)`.
-
-### Waiting for a child
-
-`luvus wait agent-status <pane> --status done,blocked --timeout <seconds>`
-blocks until the child publishes a terminal status. Treat the result as a hint
-and confirm it against `<session>.exit`:
-
-- Exit 0: read `<session>.exit`. `{"type":"done"}` means the child finished
-  cleanly; `{"type":"handoff","message":...}` means it ended cleanly but the
-  task is NOT complete — the handoff text a fresh agent needs is in the
-  sidecar (see below); `{"type":"error",...}` means a provider failure.
-- Exit 2 ("pane not found") after the close grace: the wrapper has already
-  closed a done or handoff pane. Read `<session>.exit` — `done` means
-  finished, `handoff` means the task is not complete (see below), absent
-  means a crash whose pane was closed by hand.
-- Exit 0 at once on a pane that has not registered a status lease yet is a
-  false positive (Luvus's command fallback reads `done` on an empty pane).
-  Never treat `wait` alone as completion.
 
 ## While it runs / after
 
@@ -126,24 +128,19 @@ and confirm it against `<session>.exit`:
   same way as `start`. The same session resumes with full
   context and the child re-reports the same way. The old pane is not needed.
   A fresh role or a correction lane → new child via `start`.
-- Idle child (you expected a report long ago): `luvus agent send <child>`
-  a nudge — "status? send your report with luvus agent send, then call
-  luvus_done". The child extension's own 5-second nudge handles the
-  common forgot-to-exit case; this one handles a silent stall.
-- If you find `{"type":"ping",...}` in `.exit` (the child ignored the footer
-  and used `caller_ping`): the question is in the file. `rm` it, write your
-  answer to a prompt file, and run `resume` with that prompt. The
-  pane stays open until you close it.
-- If you find `{"type":"handoff","message":...}` in `.exit` (the child ended
-  cleanly at its context alert, but the task is not complete): the handoff
-  text a fresh agent needs is in the sidecar. The pane closes itself after
-  the close grace, like a `done` pane — there is nothing to close. Do NOT
-  resume that session: start a NEW child with `node <skill-dir>/launch.ts
-  start` and put the handoff text in its brief.
-- `luvus pane read <id>` positional arg is unreliable — use `agent read`.
+- Idle child (you expected a report long ago): type a nudge into the
+  child's pane and press Enter, using the pane id from the `pane` field of
+  the start JSON:
+  ```bash
+  tmux send-keys -t <pane> -l "status? Write your report as your last assistant message, then call luvus_done"
+  tmux send-keys -t <pane> Enter
+  ```
+  The child extension's own 5-second nudge handles the common
+  forgot-to-exit case; this one handles a silent stall.
 - Close the pane only for `error`, `ping` and crash panes once you are done
-  with them: `luvus pane close <P>`. A `done` pane closes itself after the
-  close grace — there is nothing to close. Never close panes you didn't create.
+  with them: `tmux kill-pane -t <pane>`. A `done` or `handoff` pane closes
+  itself after the close grace — there is nothing to close. Never close
+  panes you didn't create.
 - One writer per worktree at a time; read-only roles may run in parallel.
 
 ## Review-fix loop

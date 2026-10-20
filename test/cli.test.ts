@@ -1403,7 +1403,7 @@ describe("skills/pi-luvus/launch.ts", () => {
       stderr = String(failure.stderr ?? "");
     }
     assert.equal(status, 1);
-    assert.match(stderr, /launch\.ts: Cannot find the pi-luvus extension/);
+    assert.match(stderr, /launch\.ts: Cannot find the pmux extension/);
     assert.deepEqual(paneCalls, []);
   });
 

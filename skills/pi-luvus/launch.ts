@@ -1,5 +1,5 @@
 /**
- * Skill shim: find the pi-luvus package and hand the argv to its
+ * Skill shim: find the pmux package and hand the argv to its
  * CLI. `npx skills add` copies this file into the skill directory, so it
  * stays self-contained (Node builtins only) and loads the CLI from the
  * package root it finds at run time.
@@ -63,7 +63,7 @@ export function findPackageRoot(shimPath: string, env: NodeJS.ProcessEnv): strin
     }
   }
   throw new Error(
-    `Cannot find the pi-luvus extension (no ${CLI_RELATIVE} and ${DONE_RELATIVE} in: ` +
+    `Cannot find the pmux extension (no ${CLI_RELATIVE} and ${DONE_RELATIVE} in: ` +
       `${candidates.join(", ")}). Install it with: ${INSTALL_COMMAND}`,
   );
 }
@@ -71,7 +71,7 @@ export function findPackageRoot(shimPath: string, env: NodeJS.ProcessEnv): strin
 /**
  * Run one CLI invocation from the skill dir: find the package root, load its
  * CLI, and run it. Throws when no root holds the extension, before the CLI —
- * and therefore any Luvus call — runs.
+ * and therefore any pane command — runs.
  */
 export async function main(argv: string[], deps: ShimDeps = {}): Promise<number> {
   const env = deps.env ?? process.env;
