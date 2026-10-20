@@ -39,7 +39,7 @@ import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
-import { removeChildStatus, statusFilePath, readChildStatus } from "./status-file.ts";
+import { removeChildStatus, statusFilePath, type ChildStatusRecord } from "./status-file.ts";
 import { slugifyName } from "./slug.ts";
 import { encodeChildEnv, resolveDenyTools } from "./child-env.ts";
 
@@ -449,6 +449,25 @@ function rawStatusName(raw: string): string {
   }
 }
 
+/** Parse one raw status-file line, or null when it holds no known status. */
+function parseStatusLine(raw: string): ChildStatusRecord | null {
+  try {
+    const data: unknown = JSON.parse(raw);
+    if (
+      data === null ||
+      typeof data !== "object" ||
+      !(WAIT_STATUSES as readonly string[]).includes(
+        (data as { status?: unknown }).status as string,
+      )
+    ) {
+      return null;
+    }
+    return data as ChildStatusRecord;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * `wait`: poll `<session>.status` until it holds one of the wanted statuses.
  * A missing file counts as no status yet. Exit 0 prints the status line,
@@ -474,7 +493,10 @@ async function waitCommand(values: CliValues, deps: CliDeps): Promise<number> {
         // A missing file is no status yet.
       }
       if (last !== null) {
-        const record = readChildStatus(sessionPath);
+        // Parse the buffer that was read, not a second read of the file: the
+        // child can flip the status between two reads, and the printed line
+        // must be the one that matched.
+        const record = parseStatusLine(last);
         if (record && wanted.has(record.status)) {
           write(`${last}\n`);
           return 0;
