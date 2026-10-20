@@ -23,9 +23,9 @@
 
 ## 3. External orchestration (D2, D3, D4)
 
-- [ ] 3.1 Rewrite the skill's completion wait to use `launch.ts wait` and a read of `<session>.exit` after it.
-- [ ] 3.2 Rewrite the skill's report reading to use `last-message --session <file>`.
-- [ ] 3.3 Replace the Luvus agent commands and the Luvus text in the skill and the launcher shim. Keep `launch.ts` self-contained (Node built-ins only).
+- [x] 3.1 Rewrite the skill's completion wait to use `launch.ts wait` and a read of `<session>.exit` after it.
+- [x] 3.2 Rewrite the skill's report reading to use `last-message --session <file>`.
+- [x] 3.3 Replace the Luvus agent commands and the Luvus text in the skill and the launcher shim. Keep `launch.ts` self-contained (Node built-ins only).
 
 ## 4. Rename (D6)
 
