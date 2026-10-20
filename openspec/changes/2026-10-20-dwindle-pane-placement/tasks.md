@@ -25,8 +25,8 @@
 ## 5. Docs and integration
 
 - [x] 5.1 Update `README.md`: the placement mention becomes automatic dwindle placement in the caller's window, or a tab. Check by hand that the text matches the specs.
-- [ ] 5.2 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`, in that order. All four must pass (`no-explicit-any` warnings are expected).
-- [ ] 5.3 Run `openspec validate 2026-10-20-dwindle-pane-placement --strict` and verify that it passes.
+- [x] 5.2 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`, in that order. All four must pass (`no-explicit-any` warnings are expected).
+- [x] 5.3 Run `openspec validate 2026-10-20-dwindle-pane-placement --strict` and verify that it passes.
 
 ## Workflow follow-up
 
