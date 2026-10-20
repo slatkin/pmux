@@ -16,9 +16,9 @@
 
 ## 3. Documentation and spec bookkeeping
 
-- [ ] 3.1 Remove the "Stream panes" section from `docs/guide.md` and verify `rg -n -i "stream" docs/guide.md` shows only the `streaming` activity word in the status section
-- [ ] 3.2 Update `AGENTS.md`: drop the "Stream panes" section, drop the stream runtime from the `/reload` globalThis sentence, and drop `stream-fakes.ts` and `stream-harness.ts` from the test-helper list; verify `rg -n -i "stream" AGENTS.md` returns no hit
-- [ ] 3.3 Run `pnpm run format:check` and `pnpm run lint` and verify both pass with the stream code gone
+- [x] 3.1 Remove the "Stream panes" section from `docs/guide.md` and verify `rg -n -i "stream" docs/guide.md` shows only the `streaming` activity word in the status section
+- [x] 3.2 Update `AGENTS.md`: drop the "Stream panes" section, drop the stream runtime from the `/reload` globalThis sentence, and drop `stream-fakes.ts` and `stream-harness.ts` from the test-helper list; verify `rg -n -i "stream" AGENTS.md` returns no hit
+- [x] 3.3 Run `pnpm run format:check` and `pnpm run lint` and verify both pass with the stream code gone
 
 ## Workflow follow-up
 
