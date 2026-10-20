@@ -35,6 +35,7 @@ import {
   type LaunchSpec,
 } from "./launch.ts";
 import { createSurface, runInPane, callerPaneId } from "./tmux.ts";
+import { removeExitSidecar } from "./exit-sidecar.ts";
 import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
@@ -298,8 +299,9 @@ function startCommand(values: CliValues, deps: CliDeps, placement: SurfacePlacem
   };
   writeLaunchSpec(specPath, spec);
 
-  // A new run must not read the status of an earlier run.
+  // A new run must not read the status of an earlier run, nor its exit.
   removeChildStatus(sessionFile);
+  removeExitSidecar(sessionFile);
 
   const pane = createSurface(name, placement, callerPaneId(env));
   runInPane(pane, paneLine);
@@ -335,8 +337,9 @@ function resumeCommand(values: CliValues, deps: CliDeps, placement: SurfacePlace
   const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);
 
   // The launch spec carries the session file; the status of the earlier run
-  // must not survive into this one.
+  // must not survive into this one, nor its exit.
   removeChildStatus(spec.sessionFile);
+  removeExitSidecar(spec.sessionFile);
 
   const pane = createSurface(values.name ?? spec.name, placement, callerPaneId(env));
   runInPane(pane, paneLine);

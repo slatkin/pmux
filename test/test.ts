@@ -2549,6 +2549,28 @@ describe("subagent interruption", () => {
     assert.match(presentation, /Resume: pmux_resume/);
     assert.doesNotMatch(presentation, /ignored when errorMessage is present/);
   });
+
+  it("names a crash as a crash, not as a provider error", () => {
+    // The wrapper marks the sidecar it writes, so the parent can tell a
+    // crashed child from a provider failure.
+    const testApi = (subagentsModule as any).__test__;
+    const presentation = testApi.resolveResultPresentation(
+      {
+        exitCode: 1,
+        elapsed: 2,
+        summary: "ignored when errorMessage is present",
+        sessionFile: "/tmp/subagent.jsonl",
+        errorMessage: "child exited with code 137",
+        errorSource: "wrapper",
+      },
+      "Worker",
+    );
+
+    assert.match(presentation, /Sub-agent "Worker" failed/);
+    assert.match(presentation, /the child crashed/);
+    assert.doesNotMatch(presentation, /auto-retry exhausted/);
+    assert.match(presentation, /Error: child exited with code 137/);
+  });
 });
 
 describe("subagent messaging", () => {

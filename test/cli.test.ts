@@ -455,7 +455,11 @@ describe("runSpec close on done", () => {
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, { spec: { closeOnDone: { graceMs: 5000 } } });
       assert.deepEqual(result.closedPanes, []);
-      assert.equal(result.sidecar, null);
+      // The wrapper writes the error sidecar itself, so the parent ends the
+      // run at once instead of waiting for the idle watchdog.
+      const sidecar = result.sidecar ? JSON.parse(result.sidecar) : null;
+      assert.equal(sidecar?.type, "error");
+      assert.equal(sidecar?.source, "wrapper");
     });
   });
 

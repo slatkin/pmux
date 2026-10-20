@@ -109,7 +109,7 @@ After the child exits, the skill-path run wrapper SHALL print `__SUBAGENT_DONE_<
 
 #### Scenario: Crash
 - **WHEN** pi exits without writing an `.exit` file
-- **THEN** the pane stays open showing `__SUBAGENT_DONE_<code>__`
+- **THEN** the wrapper writes an `error` `.exit` sidecar that marks its source as the wrapper, and the pane stays open showing `__SUBAGENT_DONE_<code>__`
 
 #### Scenario: Malformed sidecar
 - **WHEN** `<session>.exit` holds text that is not JSON, or JSON whose `type` is not `done` or `handoff`

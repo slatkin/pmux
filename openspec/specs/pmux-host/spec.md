@@ -89,26 +89,38 @@ shutdown. A session without `PI_PMUX_SESSION` SHALL write no status.
 
 `pmux_spawn`, `pmux_resume`, `start` and `resume` SHALL remove
 `<session file>.status` before the child starts, so that the status of an earlier
-run is never read as the status of the new run.
+run is never read as the status of the new run. They SHALL also remove
+`<session file>.exit`, so that the exit of an earlier run is never read as the
+exit of the new one.
 
 #### Scenario: Resume after done
 - **WHEN** a session whose status file holds `done` is resumed
 - **THEN** the status file is removed before the child starts, and a `wait` for `done` returns only after the new run writes `done`
 
+#### Scenario: A stale sidecar does not end the new run
+- **WHEN** a session with a leftover `<session file>.exit` is resumed
+- **THEN** the sidecar is removed before the child starts, so the new run is not reported as the exit of the earlier one
+
 ### Requirement: A child that exits without completing is blocked
 
 When the run wrapper sees the child exit, and `<session file>.exit` does not
 exist, and the status file does not hold `done` or `blocked`, the wrapper SHALL
-write the status `blocked` with a `message` that gives the exit code. A clean
-completion or a ping SHALL NOT be changed by the wrapper.
+write the status `blocked` with a `message` that gives the exit code. It SHALL
+also write an `error` `.exit` sidecar that names the exit code and marks its
+source as the wrapper, so that a parent polling the sidecar ends the run at
+once. A clean completion or a ping SHALL NOT be changed by the wrapper.
 
 #### Scenario: The child crashes
 - **WHEN** pi exits with code 137 and wrote neither a sidecar nor a terminal status
-- **THEN** the status file holds `blocked` and its `message` names exit code 137
+- **THEN** the status file holds `blocked` and its `message` names exit code 137, and the `.exit` sidecar holds an `error` that names exit code 137 and marks its source as the wrapper
 
 #### Scenario: The child completed
 - **WHEN** pi exits after the child wrote `done` and the `done` sidecar
 - **THEN** the wrapper leaves the status file as it is
+
+#### Scenario: The child exits cleanly without reporting
+- **WHEN** pi exits with code 0 and wrote neither a sidecar nor a terminal status
+- **THEN** the wrapper writes the `error` sidecar and the `blocked` status, and the sidecar's message says the child did not call `pmux_done`
 
 ### Requirement: Wait for a status
 

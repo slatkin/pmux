@@ -33,10 +33,12 @@ you; plain text printed in its pane is never seen, and it cannot message you:
 - **The completion signal** = the `<session>.exit` sidecar file, written by
   `pmux_done` when the child ends: `{"type":"done"}`,
   `{"type":"handoff","message":...}`, `{"type":"ping",...}` or
-  `{"type":"error",...}`. You read it after every wait. The pane-side
-  wrapper prints `__SUBAGENT_DONE_<exit code>__` when the child exits, and
-  closes its own pane only on a `done` or `handoff` sidecar, after a grace
-  period (5000 ms by default, set per launch with `--close-grace-ms`).
+  `{"type":"error",...}`. The pane-side wrapper also writes an `error` sidecar
+  when the child exits without one (a crash); that one carries
+  `"source":"wrapper"` and the exit code. You read the sidecar after every wait.
+  The pane-side wrapper prints `__SUBAGENT_DONE_<exit code>__` when the child
+  exits, and closes its own pane only on a `done` or `handoff` sidecar, after a
+  grace period (5000 ms by default, set per launch with `--close-grace-ms`).
 
 Role definitions resolve in this order: the project's `.pi/agents/`, then
 the global `~/.pi/agent/agents/`, then the package's own `agents/`.
@@ -94,8 +96,9 @@ with user consent).
      `start` and put the handoff text in its brief. Do NOT resume that
      session.
    - `{"type":"error",...}` → provider failure — auto-retry exhausted, no
-     report was sent. The pane stays open showing
-     `__SUBAGENT_DONE_<n>__`; read the last assistant message from the
+     report was sent. A sidecar that carries `"source":"wrapper"` means the
+     child crashed instead; no report was sent either. The pane stays open
+     showing `__SUBAGENT_DONE_<n>__`; read the last assistant message from the
      session file per step 4, `rm` the `.exit`, then retry or resume, and
      close the pane once you are done with it.
    - `{"type":"ping",...}` → the child ignored the footer and used
@@ -103,10 +106,10 @@ with user consent).
      answer to a prompt file, and run `resume` with that prompt. The
      pane stays open until you close it.
    - `.exit` absent + `__SUBAGENT_DONE_<n>__` at the tail of the child's
-     pane → the process died without phoning home (crash). The pane stays
-     open. Read the last assistant message from the session file (step 4)
-     and decide whether to relaunch, then close the pane once you are done
-     with it.
+     pane → the wrapper itself was killed, so it wrote no sidecar (a child
+     crash now writes an `error` sidecar). The pane stays open. Read the last
+     assistant message from the session file (step 4) and decide whether to
+     relaunch, then close the pane once you are done with it.
 4. Read the report — the child's last assistant message in the session
    file from the start JSON:
    ```bash

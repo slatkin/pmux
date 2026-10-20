@@ -6,7 +6,7 @@
  * depend on the terminal host. Both backends read it through this module so
  * they decode a payload the same way.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 
 export interface PollResult {
   /** How the subagent exited */
@@ -19,6 +19,8 @@ export interface PollResult {
   handoff?: { message: string };
   /** Error message if reason is "error" (auto-retry exhausted, provider overload, etc.) */
   errorMessage?: string;
+  /** Who wrote the error sidecar: the child's own error path, or the wrapper. */
+  errorSource?: string;
 }
 
 /**
@@ -46,7 +48,12 @@ export function interpretExitSidecar(data: any): PollResult {
       typeof data.errorMessage === "string" && data.errorMessage.trim() !== ""
         ? data.errorMessage
         : "Subagent exited with stopReason=error (no errorMessage in sidecar).";
-    return { reason: "error", exitCode: 1, errorMessage };
+    return {
+      reason: "error",
+      exitCode: 1,
+      errorMessage,
+      ...(typeof data.source === "string" ? { errorSource: data.source } : {}),
+    };
   }
   return { reason: "done", exitCode: 0 };
 }
@@ -66,5 +73,31 @@ export function readExitSidecar(sessionFile: string): any {
     return JSON.parse(readFileSync(exitSidecarPath(sessionFile), "utf8"));
   } catch {
     return null;
+  }
+}
+
+/**
+ * Write the `.exit` sidecar next to a session file. Never throws: a failed
+ * write only costs the parent its exit signal, and the idle watchdog still
+ * ends the run.
+ */
+export function writeExitSidecar(sessionFile: string, data: unknown): boolean {
+  try {
+    writeFileSync(exitSidecarPath(sessionFile), JSON.stringify(data));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Remove the `.exit` sidecar next to a session file, so a later run never
+ * reads an earlier run's exit. A missing file is fine. Never throws.
+ */
+export function removeExitSidecar(sessionFile: string): void {
+  try {
+    rmSync(exitSidecarPath(sessionFile), { force: true });
+  } catch {
+    // Best effort: a stale sidecar only costs one poll cycle.
   }
 }

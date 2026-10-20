@@ -163,6 +163,31 @@ describe("tmux backend", () => {
     }
   });
 
+  it("returns the error sidecar of a crashed child as the exit result", async () => {
+    stub(() => "");
+    const dir = mkdtempSync(join(tmpdir(), "pmux-tmux-"));
+    const sessionFile = join(dir, "child.jsonl");
+    writeFileSync(
+      `${sessionFile}.exit`,
+      JSON.stringify({
+        type: "error",
+        errorMessage: "child exited with code 137",
+        source: "wrapper",
+        exitCode: 137,
+      }),
+    );
+    try {
+      const result = await pollForExit("%9", new AbortController().signal, {
+        interval: 10,
+        sessionFile,
+      });
+      assert.equal(result.reason, "error");
+      assert.equal(result.errorMessage, "child exited with code 137");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to the terminal sentinel when the pane is gone", async () => {
     stub((args) => {
       if (args[0] === "capture-pane") return "__SUBAGENT_DONE_3__";

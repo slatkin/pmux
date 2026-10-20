@@ -12,7 +12,7 @@ import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildPaneTitle, type LaunchSpec } from "./launch.ts";
 import { agentSend, closeSurface } from "./tmux.ts";
-import { exitSidecarPath, readExitSidecar } from "./exit-sidecar.ts";
+import { exitSidecarPath, readExitSidecar, writeExitSidecar } from "./exit-sidecar.ts";
 import { isTerminalChildStatus, readChildStatus, writeChildStatus } from "./status-file.ts";
 
 /**
@@ -134,13 +134,32 @@ export async function runSpec(
   const code = reportExit(outcome, spec.command, writeErr);
   write(`__SUBAGENT_DONE_${code}__\n`);
 
+  // The child's own sidecar, read before the wrapper writes its own below: the
+  // wake-up text has to describe the child's outcome, not the wrapper's.
+  const childSidecar = spec.sessionFile ? readExitSidecar(spec.sessionFile)?.type : undefined;
+
   // A child that died left `working` or `idle` on disk and no sidecar: mark it
-  // blocked with the exit code so a status wait ends. A clean completion or a
-  // ping (a sidecar, or a terminal status the child wrote itself) is left as is.
+  // blocked with the exit code so a status wait ends, and write the `error`
+  // sidecar the parent polls, so a crashed child ends the run at once instead
+  // of leaving the parent to poll until the idle watchdog gives up (forever, for
+  // an interactive child). A clean completion or a ping (a sidecar, or a
+  // terminal status the child wrote itself) is left as is: the parent deletes
+  // the sidecar as it reads it, so a child that already reported stays clean.
   if (spec.sessionFile && !existsSync(exitSidecarPath(spec.sessionFile))) {
     const status = readChildStatus(spec.sessionFile);
     if (status === null || !isTerminalChildStatus(status.status)) {
-      writeChildStatus(spec.sessionFile, "blocked", `child exited with code ${code}`);
+      const reason =
+        code === 0
+          ? "child exited with code 0 without calling pmux_done"
+          : `child exited with code ${code}`;
+      writeChildStatus(spec.sessionFile, "blocked", reason);
+      writeExitSidecar(spec.sessionFile, {
+        type: "error",
+        errorMessage: reason,
+        // Marks this sidecar as the wrapper's, not the child's own error path.
+        source: "wrapper",
+        exitCode: code,
+      });
     }
   }
 
@@ -148,8 +167,7 @@ export async function runSpec(
   // cannot see in the session file; wake the parent with the exit state so
   // it can read the session.
   if (spec.parent) {
-    const sidecar = spec.sessionFile ? readExitSidecar(spec.sessionFile)?.type : undefined;
-    const state = sidecar ?? (code === 0 ? "exited" : `crashed (code ${code})`);
+    const state = childSidecar ?? (code === 0 ? "exited" : `crashed (code ${code})`);
     try {
       (deps.sendToParent ?? agentSend)(
         spec.parent,

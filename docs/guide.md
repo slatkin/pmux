@@ -49,9 +49,9 @@ The file holds one JSON object with `status`, `at` (the ISO time of the write) a
 
 Each write replaces the whole file, so a reader never sees a partial object. A `done` or `blocked` write comes before the `.exit` sidecar write. A terminal write latches for the rest of the child process: later writes are skipped, and shutdown does not remove the file. A failed write never delays a turn, the sidecar write or shutdown.
 
-A new run starts with no status. `pmux_spawn`, `pmux_resume`, and the skill's `start` and `resume` remove `<session file>.status` before the child starts, so the status of an earlier run is never read as the status of the new run.
+A new run starts with no status. `pmux_spawn`, `pmux_resume`, and the skill's `start` and `resume` remove `<session file>.status` before the child starts, so the status of an earlier run is never read as the status of the new run. They remove `<session file>.exit` too, so the exit of an earlier run is never read as the exit of the new one.
 
-A child that exits without completing is marked `blocked`. When the run wrapper sees the child exit, and the session has neither an `.exit` sidecar nor a terminal status, the wrapper writes `blocked` with a message that gives the exit code. A clean completion or a ping is left as it is.
+A child that exits without completing is marked `blocked`. When the run wrapper sees the child exit, and the session has neither an `.exit` sidecar nor a terminal status, the wrapper writes `blocked` with a message that gives the exit code, and writes an `error` `.exit` sidecar that names the exit code and marks its source as the wrapper. The sidecar ends the parent's wait at once, so a crashed child does not leave the parent polling until the idle watchdog gives up. A clean completion or a ping is left as it is.
 
 The CLI's `wait` command polls the file (see [External orchestrators (Claude Code)](#external-orchestrators-claude-code)). The widget's own labels (see [In-progress status updates](#in-progress-status-updates)) are a different, coarser view; only these four statuses appear in the status file.
 

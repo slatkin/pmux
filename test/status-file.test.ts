@@ -11,6 +11,7 @@ import {
   writeChildStatus,
 } from "../pi-extension/pmux/status-file.ts";
 import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
+import { exitSidecarPath, readExitSidecar } from "../pi-extension/pmux/exit-sidecar.ts";
 import { runSpec } from "../pi-extension/pmux/run.ts";
 import { main } from "../pi-extension/pmux/cli.ts";
 import { writeLaunchSpec, LAUNCH_SPEC_VERSION } from "../pi-extension/pmux/launch.ts";
@@ -273,6 +274,55 @@ describe("runSpec crash status", () => {
     });
   });
 
+  it("writes an error sidecar when the child crashes", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      writeChildStatus(sessionFile, "working");
+      await runSpec(
+        {
+          version: LAUNCH_SPEC_VERSION,
+          name: "crasher",
+          env: {},
+          command: process.execPath,
+          args: ["-e", "process.exit(137)"],
+          sessionFile,
+        },
+        undefined,
+        { env: { PATH: process.env.PATH }, stdout: () => {}, stderr: () => {} },
+      );
+      // The parent polls the sidecar, so a crash has to write one: without it
+      // the parent waits for the idle watchdog (forever, for an interactive
+      // child).
+      const sidecar = readExitSidecar(sessionFile);
+      assert.equal(sidecar?.type, "error");
+      assert.match(sidecar?.errorMessage ?? "", /137/);
+      assert.equal(sidecar?.source, "wrapper");
+      assert.equal(sidecar?.exitCode, 137);
+    });
+  });
+
+  it("writes an error sidecar when the child exits cleanly without reporting", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      await runSpec(
+        {
+          version: LAUNCH_SPEC_VERSION,
+          name: "quitter",
+          env: {},
+          command: process.execPath,
+          args: ["-e", "process.exit(0)"],
+          sessionFile,
+        },
+        undefined,
+        { env: { PATH: process.env.PATH }, stdout: () => {}, stderr: () => {} },
+      );
+      const sidecar = readExitSidecar(sessionFile);
+      assert.equal(sidecar?.type, "error");
+      assert.match(sidecar?.errorMessage ?? "", /pmux_done/);
+      assert.equal(readChildStatus(sessionFile)?.status, "blocked");
+    });
+  });
+
   it("leaves the status of a completed run alone", async () => {
     await withTempDirAsync(async (dir) => {
       const sessionFile = join(dir, "session.jsonl");
@@ -293,6 +343,9 @@ describe("runSpec crash status", () => {
       );
       assert.equal(code, 0);
       assert.equal(readChildStatus(sessionFile)?.status, "done");
+      // The child's own sidecar stands: a clean completion is never turned
+      // into an error.
+      assert.equal(readExitSidecar(sessionFile)?.type, "done");
     });
   });
 
@@ -314,6 +367,9 @@ describe("runSpec crash status", () => {
         { env: { PATH: process.env.PATH }, stdout: () => {}, stderr: () => {} },
       );
       assert.equal(readFileSync(statusFilePath(sessionFile), "utf8"), before);
+      // The terminal status means the parent already has the outcome, so the
+      // wrapper writes no sidecar of its own.
+      assert.equal(existsSync(exitSidecarPath(sessionFile)), false);
     });
   });
 });
@@ -354,6 +410,7 @@ describe("cli resume removes a stale status", () => {
 
       // An earlier run's status must not survive into the resumed run.
       writeChildStatus(sessionFile, "done");
+      writeFileSync(exitSidecarPath(sessionFile), JSON.stringify({ type: "done" }));
       const code = await main(
         ["resume", "--launch", launchPath, "--prompt", followup, "--surface", "right"],
         {
@@ -365,6 +422,8 @@ describe("cli resume removes a stale status", () => {
       );
       assert.equal(code, 0);
       assert.equal(existsSync(statusFilePath(sessionFile)), false);
+      // The earlier run's exit must not end the resumed one.
+      assert.equal(existsSync(exitSidecarPath(sessionFile)), false);
     });
   });
 });
@@ -445,12 +504,15 @@ describe("supervisor resume removes a stale status", () => {
       const sessionFile = join(env.dir, "earlier-run.jsonl");
       writeFileSync(sessionFile, "");
       writeChildStatus(sessionFile, "done");
+      writeFileSync(exitSidecarPath(sessionFile), JSON.stringify({ type: "done" }));
       const result = await harness.supervisor.resume(
         { sessionPath: sessionFile, message: "Continue" },
         env.ctx,
       );
       assert.match(JSON.stringify(result), /resumed/i);
       assert.equal(existsSync(statusFilePath(sessionFile)), false);
+      // The earlier run's exit must not end the resumed one.
+      assert.equal(existsSync(exitSidecarPath(sessionFile)), false);
     } finally {
       harness.supervisor.shutdown();
       env.restore();

@@ -25,7 +25,7 @@ import {
   runInPane,
   sendEscape,
 } from "./tmux.ts";
-import { exitSidecarPath, type PollResult } from "./exit-sidecar.ts";
+import { exitSidecarPath, removeExitSidecar, type PollResult } from "./exit-sidecar.ts";
 import { removeChildStatus } from "./status-file.ts";
 import type { SurfacePlacement } from "./placement.ts";
 import {
@@ -191,6 +191,8 @@ export interface SubagentResult {
   error?: string;
   /** Provider/agent error message when auto-retry exhausted (overload, rate limit, etc.). */
   errorMessage?: string;
+  /** Who wrote the error sidecar: the child's own error path, or the wrapper. */
+  errorSource?: string;
   ping?: { name: string; message: string };
   /** Handoff text when the child ended with a `handoff` sidecar (D5) */
   handoff?: { message: string };
@@ -702,7 +704,10 @@ export function formatWidgetRightLabel(snapshot: StatusSnapshot): string {
 }
 
 export function resolveResultPresentation(
-  result: Pick<SubagentResult, "exitCode" | "elapsed" | "summary" | "sessionFile" | "errorMessage">,
+  result: Pick<
+    SubagentResult,
+    "exitCode" | "elapsed" | "summary" | "sessionFile" | "errorMessage" | "errorSource"
+  >,
   name: string,
 ): string {
   const sessionRef = result.sessionFile
@@ -715,9 +720,14 @@ export function resolveResultPresentation(
     // produce a usable result — surface the underlying provider/network
     // failure so the orchestrator can decide whether to retry, resume, or
     // change approach instead of silently treating the run as completed.
+    // A crash carries the same message but a different source, so the heading
+    // says which one it was.
+    const heading =
+      result.errorSource === "wrapper"
+        ? `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} (the child crashed).`
+        : `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} (provider/agent error — auto-retry exhausted).`;
     return (
-      `Sub-agent "${name}" failed after ${formatElapsed(result.elapsed)} ` +
-      `(provider/agent error — auto-retry exhausted).\n\n` +
+      `${heading}\n\n` +
       `Error: ${result.errorMessage}\n\n` +
       `The subagent did not produce a result. You can retry by spawning a new ` +
       `subagent or resume the session with pmux_resume.${sessionRef}`
@@ -917,6 +927,7 @@ interface BackendExtractedResult {
   ping?: PollResult["ping"];
   handoff?: PollResult["handoff"];
   errorMessage?: string;
+  errorSource?: string;
 }
 
 /** What a backend does before its pane closes; pi has nothing to do. */
@@ -1169,7 +1180,7 @@ function buildClaudeLaunch(request: BackendLaunchRequest): BackendLaunch {
 
 function extractPiResult(
   running: RunningSubagent,
-  poll: Pick<PollResult, "exitCode" | "errorMessage" | "ping" | "handoff">,
+  poll: Pick<PollResult, "exitCode" | "errorMessage" | "errorSource" | "ping" | "handoff">,
 ): BackendExtractedResult {
   const fallback = poll.errorMessage
     ? `Subagent error: ${poll.errorMessage}`
@@ -1186,12 +1197,13 @@ function extractPiResult(
     ping: poll.ping,
     handoff: poll.handoff,
     ...(poll.errorMessage ? { errorMessage: poll.errorMessage } : {}),
+    ...(poll.errorSource ? { errorSource: poll.errorSource } : {}),
   };
 }
 
 function extractClaudeResult(
   running: RunningSubagent,
-  poll: Pick<PollResult, "exitCode" | "errorMessage">,
+  poll: Pick<PollResult, "exitCode" | "errorMessage" | "errorSource">,
   readScreen: (surface: string, lines: number) => string,
 ): BackendExtractedResult {
   let summary = "";
@@ -1220,7 +1232,12 @@ function extractClaudeResult(
 
   // The child has no pi-style session file; the record sits beside the path a
   // later `pmux_resume` uses, so that path is the session reference.
-  return { summary, sessionFile: running.sessionFile };
+  return {
+    summary,
+    sessionFile: running.sessionFile,
+    ...(poll.errorMessage ? { errorMessage: poll.errorMessage } : {}),
+    ...(poll.errorSource ? { errorSource: poll.errorSource } : {}),
+  };
 }
 
 function copyClaudeTranscript(running: RunningSubagent): Pick<SubagentResult, "claudeSessionId"> {
@@ -1539,8 +1556,9 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
   ): RunningSubagent {
     const { spec, running } = backend.buildLaunch(request);
     writeLaunchSpec(request.run.launchScriptFile, spec);
-    // A new run must not read the status of an earlier run.
+    // A new run must not read the status of an earlier run, nor its exit.
     removeChildStatus(request.run.sessionFile);
+    removeExitSidecar(request.run.sessionFile);
     deps.pmux.runInPane(request.run.surface, paneLine);
 
     runningSubagents.set(running.id, running);
