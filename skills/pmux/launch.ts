@@ -18,7 +18,7 @@ const CLI_RELATIVE = join("pi-extension", "pmux", "cli.ts");
 const DONE_RELATIVE = join("pi-extension", "pmux", "pmux-done.ts");
 
 /** Install command named by the not-found error. */
-const INSTALL_COMMAND = "pi install git:github.com/slatkin/pi-luvus";
+const INSTALL_COMMAND = "pi install git:github.com/slatkin/pmux";
 
 /** Injected process pieces, forwarded to the CLI; the defaults are the real process. */
 export interface ShimDeps {
@@ -50,7 +50,7 @@ export function packageRootCandidates(shimPath: string, env: NodeJS.ProcessEnv):
   if (env.PI_PMUX_DIR) candidates.push(env.PI_PMUX_DIR);
   // This file lives at <root>/skills/pmux/launch.ts.
   candidates.push(resolve(dirname(resolved(shimPath)), "..", ".."));
-  candidates.push(join(agentConfigDir(env), "git", "github.com", "slatkin", "pi-luvus"));
+  candidates.push(join(agentConfigDir(env), "git", "github.com", "slatkin", "pmux"));
   return candidates;
 }
 

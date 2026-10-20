@@ -156,9 +156,10 @@ covers:
   starts there, and the old file stays where it is. The scratch directory
   `<tmp>/pi-luvus` becomes `<tmp>/pmux`.
 
-The GitHub repository path does not change here. `slatkin/pi-luvus` stays in
-the install command and in the lookup path of pi's git install, because
-renaming the repository is not a code change. A later change moves it.
+The GitHub repository path is `slatkin/pmux`: the package was forked into
+that repository before this change, so the install command and the lookup
+path of pi's git install name `slatkin/pmux`. `slatkin/pi-luvus` is the old
+upstream package and must not appear in an install path.
 
 This breaks every installed child and every external orchestrator that pins
 the old names, so it is a major version. The alternative, keeping the old

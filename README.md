@@ -14,7 +14,7 @@ when another client is attached to another window of the same server.
 
 ```bash
 pi install npm:pmux
-pi install git:github.com/slatkin/pi-luvus
+pi install git:github.com/slatkin/pmux
 # or from a local checkout:
 pi install /path/to/pmux
 ```
@@ -24,7 +24,7 @@ pi install /path/to/pmux
 If the orchestrator is not a pi session (for example Claude Code), drive pi subagents through the packaged `pmux` skill. Install it from GitHub or from a local checkout:
 
 ```bash
-npx skills add slatkin/pi-luvus -g -a claude-code
+npx skills add slatkin/pmux -g -a claude-code
 # or from a local checkout:
 npx skills add /path/to/pmux -g -a claude-code
 ```

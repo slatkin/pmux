@@ -20,7 +20,7 @@ from the session file.
 The package SHALL ship a `pmux` skill at `skills/pmux/` with its `SKILL.md` and a TypeScript launcher shim, `launch.ts`, which runs under `node`. The skill directory MUST NOT contain shell scripts. The skill MUST be installable with the `npx skills` CLI from the GitHub repository or a local checkout, and MUST work when the CLI copies the directory instead of linking it. It MUST be included in the published npm files. The pi manifest MUST NOT register the skill. `SKILL.md` SHALL document the tmux protocol: the launch commands, the `wait` command, the completion signal, the close-on-done behaviour and the report lookup. It SHALL tell the orchestrator to read `<session>.exit` after a wait, because the sidecar says whether the child finished, handed off, pinged or failed.
 
 #### Scenario: Install from GitHub
-- **WHEN** a user runs `npx skills add slatkin/pi-luvus -g -a claude-code`
+- **WHEN** a user runs `npx skills add slatkin/pmux -g -a claude-code`
 - **THEN** the `pmux` skill, with `launch.ts`, is installed for Claude Code
 
 #### Scenario: Copied install still launches
@@ -32,7 +32,7 @@ The package SHALL ship a `pmux` skill at `skills/pmux/` with its `SKILL.md` and 
 - **THEN** pi's skill list does not include `pmux`
 
 ### Requirement: Child extension lookup
-The skill launcher SHALL find the package root, meaning a directory that holds `pi-extension/pmux/cli.ts` and `pmux-done.ts`, in this order: the `PI_PMUX_DIR` directory, then the checkout containing the launcher's resolved real path, then pi's git install of this package under the pi agent directory (`PI_CODING_AGENT_DIR`, or `~/.pi/agent`, followed by `git/github.com/slatkin/pi-luvus`). Paths SHALL be built with the platform's path rules. The child SHALL be launched with `-e` on that root's `pmux-done.ts`. When no candidate holds the files, the launcher MUST exit non-zero, print an error naming the `pi install` command and the candidates searched, and create no pane.
+The skill launcher SHALL find the package root, meaning a directory that holds `pi-extension/pmux/cli.ts` and `pmux-done.ts`, in this order: the `PI_PMUX_DIR` directory, then the checkout containing the launcher's resolved real path, then pi's git install of this package under the pi agent directory (`PI_CODING_AGENT_DIR`, or `~/.pi/agent`, followed by `git/github.com/slatkin/pmux`). Paths SHALL be built with the platform's path rules. The child SHALL be launched with `-e` on that root's `pmux-done.ts`. When no candidate holds the files, the launcher MUST exit non-zero, print an error naming the `pi install` command and the candidates searched, and create no pane.
 
 #### Scenario: Dev override
 - **WHEN** `PI_PMUX_DIR` points at a checkout containing `pi-extension/pmux/pmux-done.ts`

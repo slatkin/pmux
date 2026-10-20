@@ -18,7 +18,7 @@
   "author": "slatkin",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/slatkin/pi-luvus.git"
+    "url": "git+https://github.com/slatkin/pmux.git"
   },
   "type": "module",
   "engines": {

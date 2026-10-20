@@ -70,7 +70,7 @@ The pane runs `cli.ts run`. It starts the child from the spec with no shell, rep
 
 ## Repository path
 
-The GitHub repository is `slatkin/pi-luvus` and has not moved. Keep that path in install commands and lookup paths even though the code names say pmux. A later change moves the repository.
+The GitHub repository is `slatkin/pmux`. The install commands and the launcher's git-install lookup use that path; the launcher finds the package where pi's git install of this repository lands.
 
 ## Tests
 

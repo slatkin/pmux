@@ -1223,7 +1223,7 @@ describe("cli.ts last-message", () => {
 const SHIM = join(REPO_ROOT, "skills", "pmux", "launch.ts");
 const SHIM_CLI = join(REPO_ROOT, "pi-extension", "pmux", "cli.ts");
 const SHIM_DONE = join(REPO_ROOT, "pi-extension", "pmux", "pmux-done.ts");
-const GIT_INSTALL_RELATIVE = join("git", "github.com", "slatkin", "pi-luvus");
+const GIT_INSTALL_RELATIVE = join("git", "github.com", "slatkin", "pmux");
 
 interface ShimModule {
   main: CliEntry;
@@ -1322,7 +1322,7 @@ describe("skills/pmux/launch.ts", () => {
       cwd: startCwd(caseDir),
       env: { HOME: home },
     });
-    assert.match(message, /pi install git:github\.com\/slatkin\/pi-luvus/);
+    assert.match(message, /pi install git:github\.com\/slatkin\/pmux/);
     assert.ok(message.includes(caseDir), `expected the checkout candidate in: ${message}`);
     assert.ok(message.includes(gitInstall), `expected the git install candidate in: ${message}`);
     assert.deepEqual(paneCalls, []);
