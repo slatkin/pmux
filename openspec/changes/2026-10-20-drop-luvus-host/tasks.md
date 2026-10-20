@@ -16,10 +16,10 @@
 
 ## 2. Status file (D2, D3, D9)
 
-- [ ] 2.1 In the child extension, write `<session file>.status` (whole-file replace) for `working`, `idle`, and the terminal `done` and `blocked` writes before the sidecar write. Latch after a terminal write. Write nothing without `PI_PMUX_SESSION`. A failed write must not block a turn, the sidecar or shutdown.
-- [ ] 2.2 Remove `<session file>.status` in `pmux_spawn`, `pmux_resume`, `start` and `resume`, before the child starts.
-- [ ] 2.3 In `cli.ts run`, write `blocked` with the exit code when the child exits with no sidecar and no terminal status.
-- [ ] 2.4 Add `wait --session <file> [--status <list>] [--timeout <s>]` to the CLI, with the exit codes and output of the `pmux-host` spec. Add it to the CLI help text.
+- [x] 2.1 In the child extension, write `<session file>.status` (whole-file replace) for `working`, `idle`, and the terminal `done` and `blocked` writes before the sidecar write. Latch after a terminal write. Write nothing without `PI_PMUX_SESSION`. A failed write must not block a turn, the sidecar or shutdown.
+- [x] 2.2 Remove `<session file>.status` in `pmux_spawn`, `pmux_resume`, `start` and `resume`, before the child starts.
+- [x] 2.3 In `cli.ts run`, write `blocked` with the exit code when the child exits with no sidecar and no terminal status.
+- [x] 2.4 Add `wait --session <file> [--status <list>] [--timeout <s>]` to the CLI, with the exit codes and output of the `pmux-host` spec. Add it to the CLI help text.
 
 ## 3. External orchestration (D2, D3, D4)
 
@@ -45,5 +45,5 @@
 ## 6. Checks
 
 - [x] 6.1 Delete `test/luvus-status.test.ts` and `test/uhp-events.test.ts`. Remove the `__setLuvusExecForTests__` stubs and the Luvus host cases from the other tests; the tmux stubs (`__setTmuxExecForTests__`) cover the surface. Keep `test/host-env.ts` clearing the old variables.
-- [ ] 6.2 Add focused tests for the status file (the writes and the latch), the removal at start, the crash write, and `wait` (success, timeout, usage error). Do not add one test per scenario.
+- [x] 6.2 Add focused tests for the status file (the writes and the latch), the removal at start, the crash write, and `wait` (success, timeout, usage error). Do not add one test per scenario.
 - [ ] 6.3 Run the full suite, the type check, the lint and the format check.
