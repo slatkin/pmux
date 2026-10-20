@@ -13,11 +13,13 @@ when another client is attached to another window of the same server.
 ## Install
 
 ```bash
-pi install npm:pmux
 pi install git:github.com/slatkin/pmux
 # or from a local checkout:
 pi install /path/to/pmux
 ```
+
+There is no npm release. The `pmux` name on npm belongs to an unrelated project,
+so the git and local-checkout installs are the supported paths.
 
 ## External orchestrators (Claude Code)
 
@@ -29,7 +31,7 @@ npx skills add slatkin/pmux -g -a claude-code
 npx skills add /path/to/pmux -g -a claude-code
 ```
 
-The skill launches each child in its own pane and waits for a terminal `.exit` sidecar. For the launcher commands, the completion signal, and close-on-done behavior, read [External orchestrators](docs/guide.md#external-orchestrators-claude-code).
+The skill launches each child in its own pane, waits for the child's status file to reach a terminal status, and then reads the `.exit` sidecar, which says whether the child finished, handed off, pinged or failed. For the launcher commands, the completion signal, and close-on-done behavior, read [External orchestrators](docs/guide.md#external-orchestrators-claude-code).
 
 ## Configuration
 
@@ -45,7 +47,7 @@ The extension reads `config.json` from `~/.pi/agent/extensions/pmux/` (under `$P
 | `reviewer`      | `openrouter/deepseek/deepseek-v4.1-flash` | Reviews code for bugs, security issues, and correctness.                          |
 | `visual-tester` | `openrouter/deepseek/deepseek-v4.1-flash` | Visual QA through Chrome CDP. Screenshots, responsive checks, interaction tests.  |
 
-Agent discovery uses this order: project-local (`.pi/agents/`), global (`~/.pi/agent/agents/`), package-bundled. To override a bundled agent, place a file with the same name in a higher-priority location. These models are defaults from each agent frontmatter. Pi resolves the name through its provider configuration. Override one spawn with the `model` parameter on the `pmux_spawn` tool, or permanently in frontmatter.
+Agent discovery uses this order: project-local (`.pi/agents/`), global (`~/.pi/agent/agents/`, or `$PI_CODING_AGENT_DIR/agents/` when that variable is set), package-bundled. To override a bundled agent, place a file with the same name in a higher-priority location. These models are defaults from each agent frontmatter. Pi resolves the name through its provider configuration. Override one spawn with the `model` parameter on the `pmux_spawn` tool, or permanently in frontmatter.
 
 ## Documentation
 
