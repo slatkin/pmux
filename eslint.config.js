@@ -30,8 +30,8 @@ export default [
     },
   },
   {
-    // The Claude stop hook and the stream tailer are plain Node scripts, so
-    // they need Node globals.
+    // Plain Node scripts, such as the Claude stop hook
+    // (pi-extension/pmux/plugin/hooks/on-stop.js), need Node globals.
     files: ["**/*.js", "**/*.mjs"],
     languageOptions: { globals: globals.node },
   },

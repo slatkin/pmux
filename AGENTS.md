@@ -52,11 +52,7 @@ The pane runs `cli.ts run`. It starts the child from the spec with no shell, rep
 
 ### Reload safety
 
-`index.ts` keeps the supervisor and the stream runtime on `globalThis`, under `Symbol.for` keys namespaced by `import.meta.url`. `/reload` re-imports the module, and the new load retires what the old one started: timers, watchers, panes and sockets. Keep any new long-lived resource in the same pattern, or it leaks across `/reload`.
-
-### Stream panes
-
-`/stream` opens follower panes. `stream-state.ts` runs a unix socket per session, with a replay ring for each stream (`thinking`, `tools`). `stream-tail.mjs` is the viewer that runs in the pane. `stream-projection.ts` changes the live transcript through the TUI that a zero-height widget factory captures. It fails open when the layout does not match.
+`index.ts` keeps the supervisor on `globalThis`, under `Symbol.for` keys namespaced by `import.meta.url`. `/reload` re-imports the module, and the new load retires what the old one started: timers, watchers, panes and sockets. Keep any new long-lived resource in the same pattern, or it leaks across `/reload`.
 
 ### Agent roles
 
@@ -75,7 +71,7 @@ The GitHub repository is `slatkin/pmux`. The install commands and the launcher's
 ## Tests
 
 - Use `node:test` with `node:assert/strict`. Name files `test/<thing>.test.ts`. `test/test.ts` is one large suite.
-- The `test/*.ts` glob also matches helpers: `host-env.ts`, `stream-fakes.ts`, `stream-harness.ts` and `temp-dir.ts`. They hold no tests.
+- The `test/*.ts` glob also matches helpers: `host-env.ts` and `temp-dir.ts`. They hold no tests.
 - Import `./host-env.ts` first in any test that reaches a backend. It removes `LUVUS_*`, `PI_LUVUS_*`, `PI_PMUX_*`, `TMUX` and `TMUX_PANE` from the process env. Without it, a run inside a pane drives the real host.
 - Fake the host with the test seam: `__setTmuxExecForTests__` in `tmux.ts`. Reset it to `null` afterwards.
 - Tests never need a live tmux server, and never open many panes. The user runs the live checks, so do not ask for live timings or pane counts in a plan.
