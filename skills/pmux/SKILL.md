@@ -186,8 +186,9 @@ your pane.
 
    The `sidecar` field of the printed JSON is that absolute path.
 5. Act on the reason from the wait JSON:
-   - `done` → clean finish. The child sent its report and closed itself;
-     the pane has closed after the close grace.
+   - `done` → clean finish. The child closed itself; the pane has closed
+     after the close grace. Its report was typed into your pane while it
+     ran — or the wrapper woke you that it exited without sending one.
    - `handoff` → the child ended cleanly at its context alert, but the task
      is NOT complete. The handoff text a fresh agent needs is in the JSON
      (`handoff.message`). The pane closes itself after the close grace,
@@ -195,8 +196,9 @@ your pane.
      `start` and put the handoff text in its brief.
    - `error` → two causes. The JSON carries `"errorSource":"wrapper"` when
      the wrapper wrote the sidecar: the child crashed. Otherwise it is a
-     provider failure — auto-retry exhausted. No report was sent either
-     way. The pane stays open showing `__SUBAGENT_DONE_<n>__`; read the
+     provider failure — auto-retry exhausted. Either way the child ended
+     before it could finish, so count on no report: only a wake-up already
+     typed into your pane tells you that one arrived. The pane stays open showing `__SUBAGENT_DONE_<n>__`; read the
      last assistant message with `last-message --session <session>`, then
      retry or resume, and close the pane once you are done with it.
    - `ping` → the child asked a question with `caller_ping` instead of

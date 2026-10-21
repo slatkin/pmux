@@ -48,8 +48,9 @@ export interface LaunchSpec {
   closeOnDone?: { graceMs: number };
   /** The role's `surface:`, when the role set a valid one. */
   surface?: SurfacePlacement;
-  /** Parent's name, as the brief footer (and a future `pending --parent`
-   * listing) present it to the child. */
+  /** The parent's tmux pane id, from `--parent`. Send mode types the report
+   * into this pane; last mode names it in the footer as the parent. A
+   * `pending --parent` listing (future) keys on it too. */
   parent?: string;
   /** Report mode. Written only for `send`; an absent field reads as `last`,
    * where the report is the child's last assistant message. */

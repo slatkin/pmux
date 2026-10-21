@@ -236,7 +236,7 @@ If this session auto-exits, it closes the first time you stop generating: the mo
 1. Finish the task.
 2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
    This is what wakes the orchestrator with your report — without it, it only learns that you exited.
-   The report text may be long or contain quotes — pass it however is convenient (for example read it from a file into the argument); only the target pane matters.
+   The report text may be long and may contain quotes — reading it from a file into the argument is fine; only the target pane matters. The text is typed into the parent's pane and Enter is pressed after it, so a newline inside it submits there and the rest arrives as separate input: keep the report on one line (fold it yourself, or read a file in with \`$(cat file)\` or \`tr '\\n' ' ' < file\`).
 3. Then call the pmux_done tool to close your session.
 
 If you are blocked, send your question with the send command and stop. The session closes; the parent resumes it with the answer. Do not try to reach the parent any other way.
@@ -758,6 +758,12 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     return resumeCommand(values as CliValues, deps);
   }
   if (command === "start") {
+    // Exit-code convention, per the external-orchestration spec ("Requirement:
+    // Start a subagent" / "Resume a subagent" / "Send a report" / "Wait for a
+    // child"): `start` reports an invalid FLAG VALUE with exit 2 — `--report`
+    // names a value the caller must fix before any side effect — while `wait`,
+    // `resume` and `send` report a USAGE error (a missing or unusable flag)
+    // with exit 1. The codes are pinned per command; they are not unified.
     const report = reportMode((values as CliValues).report, writeErr);
     return report === null ? 2 : startCommand(values as CliValues, deps, report);
   }

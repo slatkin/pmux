@@ -967,12 +967,10 @@ describe("cli.ts start", () => {
       "send-keys -t %24 Enter",
     ]);
 
-    // Footer names the parent and pane, and forbids the wrong channels.
+    // The brief header survives; the footer contract is owned verbatim by
+    // the last-footer golden test below.
     const promptText = readFileSync(res.promptPath, "utf8");
     assert.ok(promptText.includes("# Task"));
-    assert.ok(promptText.includes("Your last assistant message is the report the parent reads"));
-    assert.ok(promptText.includes("pane %21"));
-    assert.ok(promptText.includes("pmux_done"));
 
     // Role prompt holds the role body.
     assert.ok(readFileSync(res.rolePromptPath, "utf8").includes("Doer role body."));
@@ -1072,6 +1070,10 @@ describe("cli.ts start", () => {
     // The spec holds no report field: a last-mode spec stays byte for byte
     // what it was before the --report flag existed.
     assert.equal(res.spec.report, undefined);
+    // The last-mode footer golden: the external-orchestration spec requires
+    // these bytes to stay exactly what they were before --report existed, so
+    // the whole block is asserted verbatim here (this test owns the footer
+    // contract; no other test re-asserts it in substring form).
     const promptText = readFileSync(res.promptPath, "utf8");
     assert.ok(
       promptText.endsWith(
@@ -1812,13 +1814,22 @@ describe("cli.ts send", () => {
 
   it("writes a receipt only when PI_PMUX_SESSION is set", async () => {
     await withTempDirAsync(async (dir) => {
-      // The orchestrator's own send (no session env) writes nothing.
-      const res = await runCli(["send", "--to", "%3", "--text", "hi"], tmuxEnv());
-      assert.equal(res.code, 0);
-      assert.deepEqual(
-        readdirSync(dir).filter((name) => name.endsWith(".sent")),
-        [],
-      );
+      // The orchestrator's own send (no session env) writes nothing. The
+      // receipt path derives only from PI_PMUX_SESSION, so run with the cwd
+      // inside the temp dir: any receipt written without a session would
+      // have to land there, and this scan would see it.
+      const previousCwd = process.cwd();
+      process.chdir(dir);
+      try {
+        const res = await runCli(["send", "--to", "%3", "--text", "hi"], tmuxEnv());
+        assert.equal(res.code, 0);
+        assert.deepEqual(
+          readdirSync(dir).filter((name) => name.endsWith(".sent")),
+          [],
+        );
+      } finally {
+        process.chdir(previousCwd);
+      }
 
       // Inside a child the env carries PI_PMUX_SESSION, so one JSON line
       // lands in `<session>.sent`, carrying the target pane.

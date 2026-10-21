@@ -59,6 +59,8 @@ The pane runs `cli.ts run`. It starts the child from the spec with no shell, rep
 
 `agents/*.md` define roles: frontmatter, then a system prompt body. `agent-defs.ts` resolves a role in this order: `.pi/agents/` in the child's cwd, then `$PI_CODING_AGENT_DIR` (or `~/.pi/agent`) plus `/agents/`, then the package's `agents/`. `spawning: false` and `deny-tools` become `PI_DENY_TOOLS`.
 
+Send mode (`start --report send`) is the one exemption: the child runs the report as a `send` command, which needs the `bash` tool, so send mode adds `bash` to the tool allowlist and removes it from `PI_DENY_TOOLS` (`PI_DENY_TOOLS` otherwise wins over `--tools`). A role that denies `bash` therefore does not keep that denial in send mode — the caller opts in knowingly by passing `--report send`. `last` mode, the default, is untouched.
+
 ### Files with extra constraints
 
 - `skills/pmux/launch.ts`: `npx skills add` copies this file. It must stay self-contained, using Node built-ins only. The skill directory holds no shell scripts.
