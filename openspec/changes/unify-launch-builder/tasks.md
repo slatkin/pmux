@@ -24,7 +24,7 @@
 
 ## 5. Integration
 
-- [ ] 5.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck`, `pnpm test` and `openspec validate unify-launch-builder --strict`. Verify that all pass.
+- [x] 5.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck`, `pnpm test` and `openspec validate unify-launch-builder --strict`. Verify that all pass.
 - [x] 5.2 Make sure that the prompt path from a `start` test matches the tmux-agent-sidebar `parse_pmux_task` shape: the last four segments are `artifacts/<id>/context/<name>-<19-char timestamp>.md`. Verify with a test assertion on the path.
 
 ## Workflow follow-up
