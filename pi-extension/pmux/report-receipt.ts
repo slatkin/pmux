@@ -20,7 +20,7 @@ export interface ReportReceipt {
   at: string;
   /** The pane the report was typed into. */
   to: string;
-  /** Length of the delivered text. */
+  /** Length of the delivered text in UTF-8 bytes. */
   bytes: number;
 }
 

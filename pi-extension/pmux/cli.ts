@@ -94,7 +94,7 @@ const USAGE = [
   "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>]",
   "  node cli.ts run <spec> [<prompt>]",
   "  node cli.ts last-message --session <file>",
-  "  node cli.ts wait --session <file> [--signal status|sidecar] [--status <list>] [--timeout <seconds>]",
+  "  node cli.ts wait --session <file> [--signal status|sidecar] [--status <list>] [--timeout <seconds>] (--status with --signal sidecar is a usage error)",
   "  node cli.ts prune [--scratch <dir>] [--max-age-days <n>] [--dry-run]",
 ].join("\n");
 
@@ -516,8 +516,20 @@ function writeReportReceipt(env: NodeJS.ProcessEnv, to: string, text: string): v
   appendReportReceipt(session, {
     at: new Date().toISOString(),
     to,
-    bytes: text.length,
+    bytes: Buffer.byteLength(text, "utf8"),
   });
+}
+
+/**
+ * Report one command failure on stderr and return the usage-error exit code.
+ *
+ * A usage error must leave stdout empty and stay out of the entry wrapper,
+ * so each command catches it instead of letting it bubble up.
+ */
+function usageFailure(error: unknown, writeErr: (text: string) => void): number {
+  const message = error instanceof Error ? error.message : String(error);
+  writeErr(`cli.ts: ${message}\n`);
+  return 1;
 }
 
 /** `send`: deliver one report into a pane as one input (type it, then Enter). */
@@ -533,11 +545,7 @@ function sendCommand(values: CliValues, deps: CliDeps): number {
     writeReportReceipt(deps.env ?? process.env, to, text);
     return 0;
   } catch (error) {
-    // A usage error must leave stdout empty and stay out of the entry
-    // wrapper, so it is caught here instead of bubbling up.
-    const message = error instanceof Error ? error.message : String(error);
-    writeErr(`cli.ts: ${message}\n`);
-    return 1;
+    return usageFailure(error, writeErr);
   }
 }
 
@@ -721,11 +729,7 @@ async function waitCommand(values: CliValues, deps: CliDeps): Promise<number> {
     const wanted = new Set(waitStatuses(values.status));
     return await waitForStatus(sessionPath, wanted, timeout, wait);
   } catch (error) {
-    // A usage error must leave stdout empty, so it is caught here instead of
-    // bubbling to the entry wrapper.
-    const message = error instanceof Error ? error.message : String(error);
-    wait.writeErr(`cli.ts: ${message}\n`);
-    return 1;
+    return usageFailure(error, wait.writeErr);
   }
 }
 
@@ -800,9 +804,7 @@ if (invokedDirectly()) {
       process.exitCode = code;
     },
     (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`cli.ts: ${message}\n`);
-      process.exitCode = 1;
+      process.exitCode = usageFailure(error, (text) => process.stderr.write(text));
     },
   );
 }

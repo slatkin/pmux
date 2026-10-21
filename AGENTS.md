@@ -32,11 +32,11 @@ Both paths end in the same pane command: `node pi-extension/pmux/cli.ts run <spe
 - **pi parent.** The `pmux_spawn`, `pmux_resume`, `pmux_message`, `pmux_interrupt` and `pmux_list` tools in `index.ts` call `supervisor.ts`. The supervisor resolves the role, writes a launch spec, creates and names the pane, runs the pane command, and polls for exit. It also owns the status widget, the idle watchdog and message delivery.
 - **External orchestrator (Claude Code).** `skills/pmux/launch.ts` finds the package and passes its argv to `cli.ts start` or `cli.ts resume`. The CLI does the same steps: role resolution, parent footer, pane split, launch spec.
 
-The pane runs `cli.ts run`. It starts the child from the spec with no shell, reports the exit code, and, for skill launches only, closes the pane after a `done` or `handoff` sidecar.
+The pane runs `cli.ts run`. It starts the child from the spec with no shell, reports the exit code, wakes the parent when a send-mode child exits without a delivered report, and, for skill launches only, closes the pane after a `done` or `handoff` sidecar.
 
 ### tmux backend
 
-- `tmux.ts` is the only pane backend. It requires `TMUX` and `TMUX_PANE`; without them the tools refuse with a message that names tmux. `placement.ts`, `exit-sidecar.ts`, `status-file.ts` and `surface-types.ts` hold the host-independent parts.
+- `tmux.ts` is the only pane backend. It requires `TMUX` and `TMUX_PANE`; without them the tools refuse with a message that names tmux. `placement.ts`, `exit-sidecar.ts`, `status-file.ts`, `surface-types.ts`, `pane-input.ts` and `report-receipt.ts` hold the host-independent parts.
 - Every split anchors on a pane in the caller's own window: the caller's newest living child pane, tracked by the `@pmux_parent` pane option, or the caller's own pane (`TMUX_PANE`) when it has none. Never use a "current" pane, and never an untargeted window. tmux resolves an untargeted command against the server's most recently used window, so another client can move the split.
 - A pane starts empty, and the launch command goes in afterwards. The pane therefore outlives the child, so the parent can read it and close it.
 

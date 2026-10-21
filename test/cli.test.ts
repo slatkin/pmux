@@ -385,7 +385,12 @@ describe("runSpec", () => {
   // A skill launch carries the external-parent marker even with `parent` set:
   // the wrapper contacts nobody in last mode, and the wrapper-error sidecar
   // logic is untouched.
+  // The invariance the wake-up tests guard: only a `send` spec with a parent
+  // may contact the parent. A `last` spec with a parent must stay silent,
+  // whether the child wrote a sidecar or not.
   it("contacts nobody when a last-mode child exits", async () => {
+    // The child wrote no sidecar, so the wrapper writes its own `error`
+    // sidecar; the contact rule must not depend on that difference.
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, {
         spec: { parent: "orch" },
@@ -401,11 +406,9 @@ describe("runSpec", () => {
       assert.equal(sidecar?.type, "error");
       assert.equal(sidecar?.source, "wrapper");
     });
-  });
 
-  // The invariance the wake-up tests guard: only a `send` spec with a parent
-  // may contact the parent. A `last` spec with a parent must stay silent.
-  it("contacts nobody when the spec has a parent and no report mode", async () => {
+    // The child wrote a `done` sidecar: still nothing is woken and stderr
+    // stays empty.
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, {
         spec: { parent: "%12" },
@@ -1089,8 +1092,9 @@ describe("cli.ts start", () => {
     assert.equal(res.spec.report, undefined);
     // The last-mode footer golden: the external-orchestration spec requires
     // these bytes to stay exactly what they were before --report existed, so
-    // the whole block is asserted verbatim here (this test owns the footer
-    // contract; no other test re-asserts it in substring form).
+    // the whole block is asserted verbatim here (this test owns the
+    // byte-stability contract; the resume test separately checks that a
+    // resumed prompt still carries the last footer).
     const promptText = readFileSync(res.promptPath, "utf8");
     assert.ok(
       promptText.endsWith(
@@ -1843,23 +1847,6 @@ describe("cli.ts send", () => {
 
   it("writes a receipt only when PI_PMUX_SESSION is set", async () => {
     await withTempDirAsync(async (dir) => {
-      // The orchestrator's own send (no session env) writes nothing. The
-      // receipt path derives only from PI_PMUX_SESSION, so run with the cwd
-      // inside the temp dir: any receipt written without a session would
-      // have to land there, and this scan would see it.
-      const previousCwd = process.cwd();
-      process.chdir(dir);
-      try {
-        const res = await runCli(["send", "--to", "%3", "--text", "hi"], tmuxEnv());
-        assert.equal(res.code, 0);
-        assert.deepEqual(
-          readdirSync(dir).filter((name) => name.endsWith(".sent")),
-          [],
-        );
-      } finally {
-        process.chdir(previousCwd);
-      }
-
       // Inside a child the env carries PI_PMUX_SESSION, so one JSON line
       // lands in `<session>.sent`, carrying the target pane.
       const sessionFile = join(dir, "session.jsonl");
@@ -1873,8 +1860,33 @@ describe("cli.ts send", () => {
       assert.equal(lines.length, 1);
       const receipt = JSON.parse(lines[0]) as { at: string; to: string; bytes: number };
       assert.equal(receipt.to, "%3");
-      assert.equal(receipt.bytes, text.length);
+      assert.equal(receipt.bytes, Buffer.byteLength(text, "utf8"));
       assert.match(receipt.at, /^\d{4}-\d{2}-\d{2}T/);
+
+      // The same send without PI_PMUX_SESSION writes no receipt: the file
+      // above keeps its single line and no other `.sent` file appears.
+      const orphan = await runCli(["send", "--to", "%3", "--text", "hi"], tmuxEnv());
+      assert.equal(orphan.code, 0);
+      const after = readFileSync(`${sessionFile}.sent`, "utf8").trimEnd().split("\n");
+      assert.equal(after.length, 1);
+      assert.deepEqual(
+        readdirSync(dir).filter((name) => name.endsWith(".sent")),
+        ["session.jsonl.sent"],
+      );
+
+      // The `bytes` unit is UTF-8 bytes, not UTF-16 code units: a non-ASCII
+      // report must record the byte count, which differs from `text.length`.
+      const emojiText = "done 🌍";
+      assert.notEqual(emojiText.length, Buffer.byteLength(emojiText, "utf8"));
+      const emoji = await runCli(["send", "--to", "%3", "--text", emojiText], {
+        ...tmuxEnv(),
+        PI_PMUX_SESSION: sessionFile,
+      });
+      assert.equal(emoji.code, 0);
+      const emojiLines = readFileSync(`${sessionFile}.sent`, "utf8").trimEnd().split("\n");
+      assert.equal(emojiLines.length, 2);
+      const emojiReceipt = JSON.parse(emojiLines[1]) as { bytes: number };
+      assert.equal(emojiReceipt.bytes, Buffer.byteLength(emojiText, "utf8"));
     });
   });
 

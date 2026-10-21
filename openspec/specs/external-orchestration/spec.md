@@ -329,11 +329,11 @@ The CLI SHALL provide `send --to <pane> --text <text>`. It SHALL type the text i
 - **THEN** it exits 1 with an error naming `--text` on stderr, stdout is empty, and tmux receives no call
 
 ### Requirement: Report receipts
-When `send` runs with `PI_PMUX_SESSION` set, it SHALL append, after the delivery, one JSON line `{"at":<ISO time>,"to":<to>,"bytes":<text length>}` to `<PI_PMUX_SESSION>.sent`, where `<text length>` is the length of the text `send` received, before the pane-input encoding. When `PI_PMUX_SESSION` is not set, it SHALL write no receipt. A failed receipt write MUST NOT fail the send. `prune` SHALL treat `.sent` files as launcher files, so it deletes them past the retention and keeps them within it.
+When `send` runs with `PI_PMUX_SESSION` set, it SHALL append, after the delivery, one JSON line `{"at":<ISO time>,"to":<to>,"bytes":<text length in bytes>}` to `<PI_PMUX_SESSION>.sent`, where `<text length in bytes>` is the length in bytes of the text `send` received, before the pane-input encoding. When `PI_PMUX_SESSION` is not set, it SHALL write no receipt. A failed receipt write MUST NOT fail the send. `prune` SHALL treat `.sent` files as launcher files, so it deletes them past the retention and keeps them within it.
 
 #### Scenario: Receipt inside a child
 - **WHEN** `send --to %12 --text hi` runs with `PI_PMUX_SESSION=/s/w.jsonl`
-- **THEN** `/s/w.jsonl.sent` gains one line whose JSON has `to` equal to `%12`, `bytes` equal to `2` and an ISO `at`
+- **THEN** `/s/w.jsonl.sent` gains one line whose JSON has `to` equal to `%12`, `bytes` equal to `2` UTF-8 bytes and an ISO `at`
 
 #### Scenario: Receipt counts the text as received
 - **WHEN** `send --to %12 --text 'line one\nline two'` runs with `PI_PMUX_SESSION=/s/w.jsonl`
