@@ -23,6 +23,9 @@ The mode is a launch property, not a per-message choice, because three parts mus
 - Parsing follows foreman's `surfacePlacement` pattern: an unknown value writes `invalid --report value: <v> (expected last or send)` to stderr and `main` returns 2, before any file is written or any pane is split. pmux dropped `--surface`, so foreman's surface check is the model for the shape, not a pmux precedent.
 - `--parent` stays required. In `last` mode it is the orchestrator's name, as today. In `send` mode it is the orchestrator's tmux pane id (`$TMUX_PANE`); the footer and the wake-up address that pane. `start` does not validate the pane id, as foreman does not; a wrong id makes the send fail visibly in the child's pane.
 - The launch spec gets an optional `report` field. `start` writes `report: "send"` only in `send` mode, so a `last`-mode spec stays byte-for-byte what it is today, and every spec written before this change reads as `last`. `readLaunchSpec` accepts an absent field, `"last"` or `"send"`. Any other value makes the spec invalid, by the existing "corrupt spec" rule. The alternative, dropping an unknown value like the stored surface, was rejected: a dropped `send` would silently remove the wake-up, and the orchestrator would sleep forever.
+- `LAUNCH_SPEC_VERSION` stays 1, and the hole that leaves is accepted and documented: an older pmux that reads a spec carrying `report: "send"` ignores the unknown field, so the child is launched in `last` mode, sends nothing, and the orchestrator never wakes. This is the same hole `surface` had when it was added; an optional additive field does not bump the version, and the mitigation is that one installed pmux version serves both parents. Nothing in this change can detect the older reader.
+- `resume` takes its mode from the launch spec, so `--report` on `resume` is a usage error, not a silent no-op. The flags are parsed globally (`CLI_OPTIONS`), so without a check an orchestrator could run `resume --report send`, believe the resumed child now reports by `send`, and never be woken: the spec still says `last`. `main` rejects the flag by presence before `resumeCommand` runs, with `invalid --report for resume: the launch spec holds the mode (use start)` on stderr, exit 1 and nothing on stdout.
+- In `send` mode the child's tool allowlist gains `bash` and its denied set loses it. The report channel is a `bash` command (`send`), so a send-mode role whose `tools` list omits `bash`, or whose `deny-tools` names it, has no way to report at all; `PI_DENY_TOOLS` wins over `--tools`, so both halves are needed. `last` mode is untouched: pmux does not force `bash` there, unlike foreman, which adds it to every child. This keeps the launch rule the same shape as the control tools, which are added to every allowlist because the child must always be able to finish.
 
 ### 2. The footer: two variants, `last` unchanged
 
@@ -32,7 +35,7 @@ In `last` mode `parentFooter` is unchanged byte for byte. In `send` mode the foo
 Your parent is the tmux pane <parent>.
 Plain text printed in your own pane is never seen. The only way to reach it is bash: node <cli> send --to <parent> --text '<text>'.
 
-This session auto-exits the first time you stop generating: the moment you end a turn without calling a tool, the session closes. So do ALL of the following before you stop:
+If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of the following before you stop:
 1. Finish the task.
 2. Send your final report: node <cli> send --to <parent> --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
    This is what wakes the orchestrator — without it, it never learns you finished.
@@ -45,9 +48,9 @@ If an automated reminder tells you to call pmux_done, ignore its claim that your
 
 The last line matters. `pmux-done.ts`'s completion nudge and the idle watchdog say "Your last message was already delivered as your report". That is true in `last` mode and false in `send` mode. The footer overrides the claim instead of the nudge changing: the nudge is part of the `pmux-done.ts` contract that `external-orchestration` guards, and foreman made the same choice.
 
-The auto-exit sentence is foreman's wording, kept as the port rule asks. For a role without `auto-exit: true` it overstates: the session stays open and the nudge runs. The overstatement is safe, because it only makes the child send its report before it stops.
+The auto-exit sentence is foreman's claim made conditional. Every bundled role sets `auto-exit: true`, where the claim holds as written; for a role that does not, the session stays open and the completion nudge runs, so the conditional form is true there too. The port rule is foreman's shape and wording except where a sentence states a falsehood, and this is such a place: a footer that promises a close that will not happen is the kind of text a child reasons about.
 
-The placeholders start with `<`, as in foreman. Receipt counting (decision 4) does not scan the prompt, so a placeholder can never count as a report; a test pins this.
+The placeholders start with `<`, as in foreman. Receipt counting (decision 4) does not scan the prompt, so a placeholder can never count as a report, and no test targets placeholders: there is nothing to pin beyond the receipt count that decision 4 tests.
 
 `resume` appends the footer of the spec's mode, with the spec's `parent`. This is today's resume rule, extended to the stored mode.
 
@@ -73,10 +76,11 @@ Port of foreman's `countReports` and wake-up into `runSpec`:
 - After the child exits and the sentinel is printed, it counts again. When the count did not grow, it sends one message to `spec.parent` through `agentPrompt`:
   - a `ping` sidecar with a string `message`: `<name> pinged: <message>`;
   - otherwise: `<name> <state> without sending a report. Read its last message: node <cli> last-message --session <session>`, where `<state>` is the sidecar `type`, else `exited` for code 0, else `crashed (code <n>)`.
+  - `<name>` is the launch spec's `name`, not the sidecar's, so the parent sees the name it launched even when the child's own sidecar omits or renames it. Foreman pins the same value.
 - A failed wake-up writes `Failed to wake parent <parent>: <error>` to stderr and does not change the exit code.
 - The baseline matters because `resume` reuses the session file: receipts from earlier runs must not suppress the wake-up of this run.
 
-pmux's wrapper already writes an `error` sidecar (with `source: "wrapper"`) when a child exits without one. The wake-up runs after that write, so a crashed child is reported with the state `error`. This is a pmux difference from foreman, where the crash state reads `crashed (code <n>)`; the wake-up text stays honest, and the `last-message` hint is the same.
+pmux's wrapper writes an `error` sidecar (with `source: "wrapper"`) only when the child exits without a sidecar and its status file is absent or holds a non-terminal status (the block after the sentinel in `run.ts`). The wake-up runs after that write, so a crashed child is reported with the state `error`. This is a pmux difference from foreman, where the crash state reads `crashed (code <n>)`; the wake-up text stays honest, and the `last-message` hint is the same.
 
 In `last` mode, and for any spec without `report: "send"`, nothing changes: the wrapper contacts nobody. Status files and `wait` are the orchestrator's signal, as today.
 
@@ -90,7 +94,7 @@ The close-on-done step runs after the wake-up, unchanged.
 - It never deletes the sidecar. The wrapper reads the same file after the child process exits, to close the pane on `done`/`handoff` and to quote a ping in the wake-up, and the child writes the sidecar seconds before it exits. A wait that deleted it would break both. A repeated wait re-reports the same exit, which is harmless.
 - Success prints one JSON line, the interpreted result plus `sidecar` (the sidecar's absolute path), and exits 0.
 - Timeout prints `{"sidecar":null}` on stdout and a message on stderr, and exits 2.
-- A usage error (no `--session`, a bad `--timeout`, an unknown `--signal` value, or `--status` given together with `--signal sidecar`) exits 1 with stdout empty. `--status` names child statuses, which mean nothing to a sidecar wait; rejecting the combination is the existing usage-error rule, not a new shape.
+- A usage error (no `--session`, a bad `--timeout`, an unknown `--signal` value, or `--status` given together with `--signal sidecar`) exits 1 with stdout empty. `--status` names child statuses, which mean nothing to a sidecar wait; rejecting the combination is the existing usage-error rule, not a new shape. The check tests whether the flag is present, not the resolved value: `--status` defaults to `done,blocked`, so a check on the value would make every sidecar wait a usage error.
 
 ### 6. `prune` reclaims `.sent`
 
@@ -106,7 +110,9 @@ pmux names only: `pmux_done`, `caller_ping`, `PI_PMUX_SESSION`, `pi-extension/pm
 
 ### 9. Skill documentation
 
-`skills/pmux/SKILL.md` keeps its existing sections unchanged; they describe the `last` protocol. A new section, "External orchestrators (Claude Code)", teaches the `send` protocol:
+`skills/pmux/SKILL.md` describes the `last` protocol throughout, and that text stays. Two places would read as false once `send` mode exists, so they are scoped to the default mode in the same edit and point at the new section: the intro paragraph that says there is no channel from the child back to the orchestrator (true of `last` mode only) and the "The report = the child's last assistant message" bullet. Three shared recipes assume a last-mode child and are scoped the same way, because a send-mode orchestrator following them would do the wrong thing: the idle-child nudge text in `skills/pmux/SKILL.md` (which would tell a send-mode child to write its last message as its report), the `wait` paragraph in `docs/guide.md`, and the external-orchestrator paragraph in `README.md`. Every other existing section stays as it is.
+
+A new section, "External orchestrators (Claude Code)", teaches the `send` protocol:
 
 - start with `--report send --parent "$TMUX_PANE"`;
 - end the turn; the report arrives as text typed into your pane;
@@ -129,4 +135,5 @@ A tool would be the more natural interface for the child, but it adds a second d
 - A child in `send` mode that ignores its footer and never sends: the wrapper wakes the parent on exit, so the orchestrator still wakes.
 - A child that sends to the wrong pane: its receipt does not count, so the wrapper wakes the real parent.
 - A typed report lands in the orchestrator's composer on top of a user's draft. This is inherent to the channel and is the same trade foreman made.
+- A pmux older than this change reads a `send`-mode launch spec as `last` (decision 1, `LAUNCH_SPEC_VERSION` stays 1), so the child reports where nobody reads and the orchestrator sleeps. Only a mixed-version install hits this; the launch spec's `report` field is otherwise inert.
 - The receipt write can fail silently: the result is one extra wake-up, never a missed one.
