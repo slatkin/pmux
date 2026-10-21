@@ -333,6 +333,40 @@ describe("launch record", () => {
       }
     });
   });
+
+  it("round trips the external-only fields", () => {
+    withTempDir((dir) => {
+      const file = join(dir, "external.jsonl.launch.json");
+      const record: LaunchRecord = {
+        ...BASE_RECORD,
+        parentSessionId: "%12",
+        closeGraceMs: 1500,
+      };
+      writeLaunchRecord(file, record);
+
+      assert.deepEqual(readLaunchRecord(file), record);
+    });
+  });
+
+  it("keeps a record without the external-only fields", () => {
+    withTempDir((dir) => {
+      const file = join(dir, "supervisor.jsonl.launch.json");
+      writeLaunchRecord(file, BASE_RECORD);
+
+      const record = readLaunchRecord(file);
+      assert.ok(record);
+      assert.equal("parentSessionId" in record, false);
+      assert.equal("closeGraceMs" in record, false);
+    });
+  });
+
+  it("rejects a non-numeric closeGraceMs", () => {
+    withTempDir((dir) => {
+      const file = join(dir, "grace.jsonl.launch.json");
+      writeFileSync(file, JSON.stringify({ ...BASE_RECORD, closeGraceMs: "soon" }));
+      assert.equal(readLaunchRecord(file), null);
+    });
+  });
 });
 
 describe("supervisor launch", () => {

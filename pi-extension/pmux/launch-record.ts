@@ -33,6 +33,12 @@ export interface LaunchRecord {
   autoExit: boolean;
   interactive: boolean;
   claudeSessionId?: string;
+  /** The parent session id of an external launch (design D5): the pi parent
+   * resolves nothing, so it keeps none. Only `validateLaunchRecord` and a
+   * future external writer read them; absence stays valid (design D6). */
+  parentSessionId?: string;
+  /** The close grace of an external launch spec, in milliseconds. */
+  closeGraceMs?: number;
 }
 
 /** `<session>.launch.json`: the record sits beside the child session file. */
@@ -93,6 +99,12 @@ export function validateLaunchRecord(data: unknown): LaunchRecord {
   const tools = optionalString(record.tools, "tools");
   const rolePrompt = optionalString(record.rolePrompt, "rolePrompt");
   const claudeSessionId = optionalString(record.claudeSessionId, "claudeSessionId");
+  const parentSessionId = optionalString(record.parentSessionId, "parentSessionId");
+  const rawCloseGraceMs = record.closeGraceMs;
+  if (rawCloseGraceMs !== undefined && typeof rawCloseGraceMs !== "number") {
+    invalid("closeGraceMs must be a number");
+  }
+  const closeGraceMs = typeof rawCloseGraceMs === "number" ? rawCloseGraceMs : undefined;
 
   // The stored surface is parsed, not validated: an unknown value is dropped
   // and does not make the file invalid, matching the role key's treatment.
@@ -114,6 +126,8 @@ export function validateLaunchRecord(data: unknown): LaunchRecord {
     ...(systemPromptMode !== undefined ? { systemPromptMode } : {}),
     ...(surface !== undefined ? { surface } : {}),
     ...(claudeSessionId !== undefined ? { claudeSessionId } : {}),
+    ...(parentSessionId !== undefined ? { parentSessionId } : {}),
+    ...(closeGraceMs !== undefined ? { closeGraceMs } : {}),
   };
 }
 

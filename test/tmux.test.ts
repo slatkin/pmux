@@ -19,6 +19,7 @@ import {
   namePane,
   paneExists,
   pollForExit,
+  readPaneOption,
   readScreen,
   runInPane,
   sendEscape,
@@ -368,6 +369,33 @@ describe("tmux backend", () => {
       throw new Error("can't find pane: %9");
     });
     assert.doesNotThrow(() => closeSurface("%9"));
+  });
+
+  it("reads a pane option with show -pv", () => {
+    const calls = stub((args) => {
+      assert.deepEqual(args, ["show", "-pv", "-t", "%3", "@pane_session_id"]);
+      return "sess-abc";
+    });
+    assert.equal(readPaneOption("%3", "@pane_session_id"), "sess-abc");
+    assert.equal(calls.length, 1);
+  });
+
+  it("reads a pane option as null when the pane has none", () => {
+    const calls = stub((args) => {
+      assert.deepEqual(args, ["show", "-pv", "-t", "%3", "@pane_session_id"]);
+      return "";
+    });
+    assert.equal(readPaneOption("%3", "@pane_session_id"), null);
+    assert.equal(calls.length, 1);
+  });
+
+  it("reads a pane option as null when the read fails", () => {
+    const calls = stub((args) => {
+      assert.deepEqual(args, ["show", "-pv", "-t", "%3", "@pane_session_id"]);
+      throw new Error("can't find pane: %3");
+    });
+    assert.equal(readPaneOption("%3", "@pane_session_id"), null);
+    assert.equal(calls.length, 1);
   });
 
   it("reports whether a pane still exists", () => {

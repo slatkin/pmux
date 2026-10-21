@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type, type Static } from "@sinclair/typebox";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
@@ -27,12 +27,7 @@ import {
 import { exitSidecarPath, removeExitSidecar, type PollResult } from "./exit-sidecar.ts";
 import { removeChildStatus } from "./status-file.ts";
 import { resolvePlacement, type SurfaceDefault } from "./placement.ts";
-import {
-  getAgentConfigDir,
-  loadAgentDefaults,
-  type AgentDefaults,
-  type SubagentSessionMode,
-} from "./agent-defs.ts";
+import { type AgentDefaults, type SubagentSessionMode } from "./agent-defs.ts";
 import {
   LAUNCH_SPEC_VERSION,
   buildPaneTitle,
@@ -49,7 +44,12 @@ import {
   type LaunchBackendName,
   type LaunchRecord,
 } from "./launch-record.ts";
-import { SUBAGENTS_DIR, buildPiLaunch, type PiLaunchRequest } from "./launch-build.ts";
+import {
+  SUBAGENTS_DIR,
+  buildPiLaunch,
+  resolveLaunchRecord,
+  type PiLaunchRequest,
+} from "./launch-build.ts";
 import { findLastAssistantMessage, getNewEntries, seedSubagentSessionFile } from "./session.ts";
 import { slugifyName } from "./slug.ts";
 import {
@@ -73,7 +73,7 @@ import {
   type ActivityReadResult,
   type SubagentActivityState,
 } from "./activity.ts";
-import { decodeChildEnv, resolveDenyTools } from "./child-env.ts";
+import { decodeChildEnv } from "./child-env.ts";
 import { capSummary, SCREEN_SUMMARY_CHARS } from "./report-cap.ts";
 import {
   IDLE_NUDGE_TEXT,
@@ -308,20 +308,7 @@ export interface Supervisor {
 }
 
 export { resolveDenyTools } from "./child-env.ts";
-
-export function resolveSubagentPaths(
-  params: Static<typeof SubagentParams>,
-  agentDefs: AgentDefaults | null,
-): { effectiveCwd: string | null; localAgentDir: string | null; effectiveAgentDir: string } {
-  const rawCwd = params.cwd ?? agentDefs?.cwd ?? null;
-  const cwdIsFromAgent = !params.cwd && agentDefs?.cwd != null;
-  const cwdBase = cwdIsFromAgent ? getAgentConfigDir() : process.cwd();
-  const effectiveCwd = rawCwd ? (isAbsolute(rawCwd) ? rawCwd : join(cwdBase, rawCwd)) : null;
-  const localAgentDir = effectiveCwd ? join(effectiveCwd, ".pi", "agent") : null;
-  const effectiveAgentDir =
-    localAgentDir && existsSync(localAgentDir) ? localAgentDir : getAgentConfigDir();
-  return { effectiveCwd, localAgentDir, effectiveAgentDir };
-}
+export { resolveSubagentPaths } from "./launch-build.ts";
 
 function sessionDirSlugFor(cwd: string): string {
   return cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
@@ -1349,12 +1336,24 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     const startTime = Date.now();
     const id = Math.random().toString(16).slice(2, 10);
 
-    const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
-    const effectiveModel = params.model ?? agentDefs?.model;
-    const effectiveTools = params.tools ?? agentDefs?.tools;
-    const effectiveSkills = params.skills ?? agentDefs?.skills;
-    const effectiveThinking = agentDefs?.thinking;
-    const effectiveInteractive = resolveEffectiveInteractive(params, agentDefs);
+    // The role resolves once (design D6); the launch records what it resolved
+    // and the pane opens after that, so nothing is written on a thrown error.
+    const resolved = resolveLaunchRecord({
+      role: params.agent,
+      cwd: ctx.cwd,
+      overrides: {
+        name: params.name,
+        model: params.model,
+        tools: params.tools,
+        skills: params.skills,
+        cwd: params.cwd,
+        interactive: params.interactive ?? null,
+        systemPrompt: params.systemPrompt,
+      },
+    });
+    const { record, definition } = resolved;
+    const agentDefs = definition;
+    const effectiveSkills = resolved.skills;
 
     const sessionFile = ctx.sessionManager.getSessionFile();
     if (!sessionFile) throw new Error("No session file");
@@ -1362,12 +1361,9 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     const artifactDir = getArtifactDir(ctx.sessionManager.getSessionDir(), sessionId);
     ensureRosterContext(ctx);
 
-    const { effectiveCwd, localAgentDir, effectiveAgentDir } = resolveSubagentPaths(
-      params,
-      agentDefs,
-    );
+    const { localAgentDir, effectiveAgentDir } = resolved.paths;
 
-    const targetCwdForSession = effectiveCwd ?? ctx.cwd;
+    const targetCwdForSession = resolved.paths.effectiveCwd ?? ctx.cwd;
     const sessionDir = getDefaultSessionDirFor(targetCwdForSession, effectiveAgentDir);
 
     // Generate a deterministic session file path for this subagent.
@@ -1389,34 +1385,12 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     const paneLine = paneCommandLine(SUBAGENTS_CLI_PATH, launchScriptFile);
 
     const launchBehavior = resolveLaunchBehavior(params, agentDefs);
-    const denySet = resolveDenyTools(agentDefs);
     const backend = backendFor(agentDefs);
-    const rolePrompt = backend.resolveRolePrompt(params, agentDefs);
 
     // Resolve the placement after the role is loaded: the role's `surface:`
     // wins over the configured default; there is no per-call value.
-    const placement = resolvePlacement(agentDefs?.surface, options?.fallback);
+    const placement = resolvePlacement(record.surface, options?.fallback);
 
-    // Resolve the agent defaults once and keep them in the launch record, so a
-    // later resume starts the same role without reading the agent file again.
-    const record: LaunchRecord = {
-      version: LAUNCH_RECORD_VERSION,
-      backend: backend.name,
-      name: params.name,
-      ...(params.agent ? { agent: params.agent } : {}),
-      ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-      ...(effectiveModel ? { model: effectiveModel } : {}),
-      ...(effectiveThinking ? { thinking: effectiveThinking } : {}),
-      ...(effectiveTools ? { tools: effectiveTools } : {}),
-      ...(rolePrompt ? { rolePrompt } : {}),
-      ...(agentDefs?.systemPromptMode ? { systemPromptMode: agentDefs.systemPromptMode } : {}),
-      // The record holds the role's surface only, so a later resume keeps
-      // the same placement.
-      ...(agentDefs?.surface ? { surface: agentDefs.surface } : {}),
-      denyTools: [...denySet],
-      autoExit: agentDefs?.autoExit ?? false,
-      interactive: effectiveInteractive,
-    };
     writeLaunchRecord(getLaunchRecordFile(subagentSessionFile), record);
 
     // Create the surface, then pause briefly so the shell is ready before

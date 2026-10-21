@@ -9,7 +9,7 @@
  * test/supervisor.test.ts covers end to end through the supervisor.
  */
 import "./host-env.ts";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -19,10 +19,12 @@ import {
   buildPiLaunch,
   parentFooter,
   reportFooter,
+  resolveLaunchRecord,
   sendFooter,
   type ParentContact,
   type PiLaunchRequest,
 } from "../pi-extension/pmux/launch-build.ts";
+import { agentDefinitionPaths, getAgentConfigDir } from "../pi-extension/pmux/agent-defs.ts";
 import { LAUNCH_RECORD_VERSION, type LaunchRecord } from "../pi-extension/pmux/launch-record.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
@@ -378,5 +380,192 @@ describe("reportFooter dispatch", () => {
     assert.equal(reportFooter("orch", "send", "%21"), sendFooter("orch", SUBAGENTS_CLI_PATH));
     assert.equal(reportFooter("orch", "last", "%21"), parentFooter("orch", "%21"));
     assert.equal(reportFooter("orch", undefined, "%21"), parentFooter("orch", "%21"));
+  });
+});
+
+/** Write one role file under `<agentsDir>/<name>.md` and return its path. */
+function writeRoleFile(agentsDir: string, name: string, frontmatter: string, body = ""): string {
+  mkdirSync(agentsDir, { recursive: true });
+  const file = join(agentsDir, `${name}.md`);
+  writeFileSync(file, `---\nname: ${name}\n${frontmatter}\n---\n\n${body}\n`);
+  return file;
+}
+
+describe("resolveLaunchRecord (design D6)", () => {
+  it("raises the external-path errors before anything writes a file", () => {
+    withTempDir((dir) => {
+      const searched = agentDefinitionPaths("ghost-role", dir).join(" ");
+      assert.throws(
+        () =>
+          resolveLaunchRecord({
+            role: "ghost-role",
+            cwd: dir,
+            overrides: { name: "Ghost" },
+            strict: true,
+          }),
+        (error: Error) => error.message === `unknown role 'ghost-role' (searched: ${searched})`,
+      );
+
+      const rolePath = writeRoleFile(join(dir, ".pi", "agents"), "no-model-role", "tools: read");
+      assert.throws(
+        () =>
+          resolveLaunchRecord({
+            role: "no-model-role",
+            cwd: dir,
+            overrides: { name: "NM" },
+            strict: true,
+          }),
+        (error: Error) => error.message === `role 'no-model-role' has an empty model (${rolePath})`,
+      );
+
+      // The pi path's escape hatch (no strict): a call model fills the gap and
+      // the same role resolves instead of throwing.
+      const filled = resolveLaunchRecord({
+        role: "no-model-role",
+        cwd: dir,
+        overrides: { name: "NM", model: "task-model" },
+        strict: true,
+      });
+      assert.equal(filled.record.model, "task-model");
+
+      // A pi parent's miss reads as a task-only launch: no throw.
+      const lenient = resolveLaunchRecord({
+        role: "ghost-role",
+        cwd: dir,
+        overrides: { name: "Ghost" },
+      });
+      assert.equal(lenient.definition, null);
+    });
+  });
+
+  it("resolves a role into the record a later resume reads", () => {
+    withTempDir((dir) => {
+      writeRoleFile(
+        join(dir, ".pi", "agents"),
+        "worker-role",
+        [
+          "model: test-model",
+          "thinking: medium",
+          "tools: read",
+          "skill: review",
+          "deny-tools: claude",
+          "spawning: false",
+          "auto-exit: true",
+          "system-prompt: append",
+          "surface: tab",
+        ].join("\n"),
+        "You are a worker.",
+      );
+
+      const resolved = resolveLaunchRecord({
+        role: "worker-role",
+        cwd: dir,
+        overrides: { name: "W1" },
+      });
+      assert.equal(resolved.definition?.model, "test-model");
+      assert.deepEqual(resolved.record, {
+        version: LAUNCH_RECORD_VERSION,
+        backend: "pi",
+        name: "W1",
+        agent: "worker-role",
+        model: "test-model",
+        thinking: "medium",
+        tools: "read",
+        rolePrompt: "You are a worker.",
+        systemPromptMode: "append",
+        surface: "tab",
+        // spawning: false expands, and the role's own denial rides along.
+        denyTools: ["pmux_spawn", "pmux_interrupt", "pmux_list", "pmux_resume", "claude"],
+        autoExit: true,
+        interactive: false,
+      });
+      assert.equal("cwd" in resolved.record, false);
+      assert.equal(resolved.skills, "review");
+      assert.equal(resolved.paths.effectiveAgentDir, getAgentConfigDir());
+    });
+  });
+
+  it("resolves a call-only launch with no role name", () => {
+    withTempDir((dir) => {
+      const resolved = resolveLaunchRecord({
+        cwd: dir,
+        overrides: { name: "Helper", model: "task-model", interactive: false },
+      });
+      assert.equal(resolved.definition, null);
+      assert.deepEqual(resolved.record, {
+        version: LAUNCH_RECORD_VERSION,
+        backend: "pi",
+        name: "Helper",
+        model: "task-model",
+        denyTools: [],
+        autoExit: false,
+        interactive: false,
+      });
+      assert.equal("agent" in resolved.record, false);
+      assert.equal(resolved.skills, undefined);
+    });
+  });
+
+  it("lets the call values override the role's", () => {
+    withTempDir((dir) => {
+      writeRoleFile(
+        join(dir, ".pi", "agents"),
+        "auto-role",
+        ["model: role-model", "skills: a"].join("\n"),
+      );
+
+      // No override: the record holds the role's values...
+      const fromRole = resolveLaunchRecord({
+        role: "auto-role",
+        cwd: dir,
+        overrides: { name: "R" },
+      });
+      assert.equal(fromRole.record.model, "role-model");
+      // ...and `interactive` is the inverse of the role's auto-exit.
+      assert.equal(fromRole.record.interactive, true);
+
+      const perCall = resolveLaunchRecord({
+        role: "auto-role",
+        cwd: dir,
+        overrides: { name: "R", model: "call-model", interactive: false, skills: "b" },
+      });
+      assert.equal(perCall.record.model, "call-model");
+      assert.equal(perCall.record.interactive, false);
+      assert.equal(perCall.skills, "b");
+    });
+  });
+
+  it("resolves the call cwd into the record and the agent dir", () => {
+    withTempDir((dir) => {
+      const localAgentDir = join(dir, "repo", ".pi", "agent");
+      mkdirSync(localAgentDir, { recursive: true });
+
+      const resolved = resolveLaunchRecord({
+        cwd: dir,
+        overrides: { name: "R", cwd: "repo" },
+      });
+      assert.equal(resolved.record.cwd, join(dir, "repo"));
+      assert.equal(resolved.paths.localAgentDir, localAgentDir);
+      assert.equal(resolved.paths.effectiveAgentDir, localAgentDir);
+    });
+  });
+
+  it("resolves the Claude Code backend from the role's cli", () => {
+    withTempDir((dir) => {
+      writeRoleFile(
+        join(dir, ".pi", "agents"),
+        "cc-role",
+        "cli: claude\nmodel: cc-model",
+        "You are Claude.",
+      );
+
+      const resolved = resolveLaunchRecord({
+        role: "cc-role",
+        cwd: dir,
+        overrides: { name: "CC" },
+      });
+      assert.equal(resolved.record.backend, "claude");
+      assert.equal(resolved.record.rolePrompt, "You are Claude.");
+    });
   });
 });

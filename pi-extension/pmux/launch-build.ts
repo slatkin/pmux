@@ -7,15 +7,24 @@
  * only it resolves (design D2).
  *
  * `launch.ts` stays the spec format the pane side reads; this module adds the
- * prompt and env helpers the launch needs on top of it.
+ * prompt and env helpers the launch needs on top of it. Role resolution is
+ * here too (design D6): one function resolves every launch's role into the
+ * record a resume reads, so the pi parent and the external orchestrator
+ * cannot resolve a role differently.
  */
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildSubagentToolAllowlist } from "./agent-defs.ts";
-import { encodeChildEnv } from "./child-env.ts";
+import {
+  agentDefinitionPaths,
+  buildSubagentToolAllowlist,
+  getAgentConfigDir,
+  loadAgentDefaults,
+  type AgentDefaults,
+} from "./agent-defs.ts";
+import { encodeChildEnv, resolveDenyTools } from "./child-env.ts";
 import { LAUNCH_SPEC_VERSION, buildPaneTitle, type LaunchSpec, type ReportMode } from "./launch.ts";
-import type { LaunchRecord } from "./launch-record.ts";
+import { LAUNCH_RECORD_VERSION, type LaunchRecord } from "./launch-record.ts";
 import { slugifyName } from "./slug.ts";
 
 /** Absolute path to `pi-extension/pmux`. https://github.com/nodejs/node/issues/37845 */
@@ -78,6 +87,168 @@ export interface PiLaunchRequest {
     /** Child session file (pi). */
     sessionFile: string;
     activityFile: string;
+  };
+}
+
+/** The launch's resolved cwd values (the record carries only the effective cwd). */
+export interface ResolvedLaunchPaths {
+  /** The cwd the child starts in; null leaves the caller's cwd. */
+  effectiveCwd: string | null;
+  /** The effective cwd's own `.pi/agent` directory. */
+  localAgentDir: string | null;
+  /** The session directory's `.pi/agent` root: the effective cwd's, or the
+   * global agent config dir.
+   */
+  effectiveAgentDir: string;
+}
+
+/** The pi parent's per-call values on top of the role's (design D6). */
+export interface LaunchRecordOverrides {
+  /** The child's display name; the record field, not a role value. */
+  name: string;
+  model?: string;
+  tools?: string;
+  skills?: string;
+  /** Per-call cwd; a relative value resolves against the call's cwd, then
+   * the role's own `cwd:` (the resolveSubagentPaths rule). */
+  cwd?: string;
+  /** Explicit per-call value; `null` leaves the role value to decide. */
+  interactive?: boolean | null;
+  /** Role instructions supplied on the call when the role body leaves a gap. */
+  systemPrompt?: string;
+  systemPromptMode?: "append" | "replace";
+}
+
+/** The role resolution one launch does: the record, the definition it came
+ * from, the skills the launch prompt uses, and the cwd values the launch
+ * layout needs.
+ */
+export interface ResolvedLaunchRole {
+  record: LaunchRecord;
+  /** The role definition, when one loaded: null when `role` is absent or
+   * did not resolve. */
+  definition: AgentDefaults | null;
+  /** Effective skill prompts of the launch (overrides win over the role's). */
+  skills?: string;
+  paths: ResolvedLaunchPaths;
+}
+
+function isFilePath(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve the launch's cwd values: a per-call cwd wins over the role's own
+ * `cwd:`, and a relative one resolves against the call's cwd when it came from
+ * the call, else against the global agent config dir when it came from the
+ * role (both paths stay byte-identical today).
+ */
+export function resolveSubagentPaths(
+  cwd: string | undefined,
+  definition: AgentDefaults | null,
+  baseCwd: string,
+): ResolvedLaunchPaths {
+  const rawCwd = cwd ?? definition?.cwd ?? null;
+  const cwdIsFromAgent = !cwd && definition?.cwd != null;
+  const cwdBase = cwdIsFromAgent ? getAgentConfigDir() : baseCwd;
+  const effectiveCwd = rawCwd ? (rawCwd.startsWith("/") ? rawCwd : join(cwdBase, rawCwd)) : null;
+  const localAgentDir = effectiveCwd ? join(effectiveCwd, ".pi", "agent") : null;
+  const effectiveAgentDir =
+    localAgentDir && existsSync(localAgentDir) ? localAgentDir : getAgentConfigDir();
+  return { effectiveCwd, localAgentDir, effectiveAgentDir };
+}
+
+/**
+ * A subagent is interactive (user-driven, long-running) unless it opted out:
+ * an explicit `interactive:` wins over `auto-exit:`, whose inverse is the
+ * default. Agents that auto-exit are autonomous and the parent session is
+ * woken on stall events; agents that do not are user-driven and stall pings
+ * are noise. No role values at all (a bare spawn) reads as interactive.
+ */
+export function resolveInteractiveDefault(definition: AgentDefaults | null): boolean {
+  if (definition?.interactive != null) return definition.interactive;
+  return !(definition?.autoExit ?? false);
+}
+
+/**
+ * Resolve one launch's role into the record a later resume reads (design D6).
+ * `strict` fails before any file is written when the role does not resolve or
+ * has an empty model and no override supplies one; an external launch sets it
+ * because its role name comes from a `--role` flag, while a pi parent's miss
+ * reads as a task-only launch.
+ */
+export function resolveLaunchRecord(params: {
+  role?: string;
+  /** The launch's cwd: the role search anchor and the base a relative
+   * per-call cwd resolves against. */
+  cwd: string;
+  /** The per-call values on top of the role's. */
+  overrides: LaunchRecordOverrides;
+  /** Fail loudly on an unknown role or an empty effective model. */
+  strict?: boolean;
+}): ResolvedLaunchRole {
+  const overrides = params.overrides;
+  const definition = params.role ? loadAgentDefaults(params.role, params.cwd) : null;
+
+  if (params.strict && params.role) {
+    const rolePaths = agentDefinitionPaths(params.role, params.cwd);
+    if (definition === null) {
+      throw new Error(`unknown role '${params.role}' (searched: ${rolePaths.join(" ")})`);
+    }
+    if (!definition.model && overrides.model === undefined) {
+      const rolePath = rolePaths.find(isFilePath) ?? rolePaths[0];
+      throw new Error(`role '${params.role}' has an empty model (${rolePath})`);
+    }
+  }
+
+  const paths = resolveSubagentPaths(overrides.cwd, definition, params.cwd);
+  // The role body is the role; the call's system prompt only fills a gap, and
+  // for a Claude Code child it wins (that backend kept the old precedence).
+  const rolePrompt =
+    definition?.cli === "claude"
+      ? (overrides.systemPrompt ?? definition.body)
+      : (definition?.body ?? overrides.systemPrompt);
+  const effectiveModel = overrides.model ?? definition?.model;
+  const effectiveTools = overrides.tools ?? definition?.tools;
+  const effectiveSkills = overrides.skills ?? definition?.skills;
+
+  const record: LaunchRecord = {
+    version: LAUNCH_RECORD_VERSION,
+    // The backend follows the role's `cli:` value, like the supervisor's
+    // backend table does.
+    backend: definition?.cli === "claude" ? "claude" : "pi",
+    name: overrides.name,
+    ...(params.role ? { agent: params.role } : {}),
+    ...(paths.effectiveCwd ? { cwd: paths.effectiveCwd } : {}),
+    ...(effectiveModel ? { model: effectiveModel } : {}),
+    // Only the role's `thinking:` exists: no call value.
+    ...(definition?.thinking ? { thinking: definition.thinking } : {}),
+    ...(effectiveTools ? { tools: effectiveTools } : {}),
+    ...(rolePrompt ? { rolePrompt } : {}),
+    ...(definition?.systemPromptMode
+      ? { systemPromptMode: definition.systemPromptMode }
+      : overrides.systemPromptMode
+        ? { systemPromptMode: overrides.systemPromptMode }
+        : {}),
+    // The record holds the role's surface only, so a later resume keeps
+    // the same placement.
+    ...(definition?.surface ? { surface: definition.surface } : {}),
+    denyTools: [...resolveDenyTools(definition)],
+    autoExit: definition?.autoExit ?? false,
+    interactive:
+      overrides.interactive === undefined || overrides.interactive === null
+        ? resolveInteractiveDefault(definition)
+        : overrides.interactive,
+  };
+
+  return {
+    record,
+    definition,
+    skills: effectiveSkills,
+    paths,
   };
 }
 
@@ -300,33 +471,27 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
   // roster and the config-dir propagation (the target cwd's own .pi/agent/
   // wins); an external parent adds only the external-parent marker (design
   // D3) — its wrapper writes the surface from `TMUX_PANE` at runtime.
-  const spawnEnv =
-    parentContact.kind === "external"
-      ? buildSpawnEnvParts({
-          name: record.name,
-          agent: record.agent,
-          autoExit: record.autoExit,
-          subagentSessionFile: run.sessionFile,
-          id: run.id,
-          activityFile: run.activityFile,
-          denySet: denied,
-          externalParent: true,
-        })
-      : buildSpawnEnvParts({
-          name: record.name,
-          agent: record.agent,
-          autoExit: record.autoExit,
-          subagentSessionFile: run.sessionFile,
-          id: run.id,
-          activityFile: run.activityFile,
-          denySet: denied,
+  const piMode = parentContact.kind === "pi";
+  const spawnEnv = buildSpawnEnvParts({
+    name: record.name,
+    agent: record.agent,
+    autoExit: record.autoExit,
+    subagentSessionFile: run.sessionFile,
+    id: run.id,
+    activityFile: run.activityFile,
+    denySet: denied,
+    ...(piMode
+      ? {
           surface: parentContact.surface,
           parentRosterFile: parentContact.parentRosterFile,
+          // The target cwd's own .pi/agent/ wins over the parent's.
           codingAgentDir:
             request.localAgentDir && existsSync(request.localAgentDir)
               ? request.localAgentDir
               : process.env.PI_CODING_AGENT_DIR,
-        });
+        }
+      : { externalParent: true }),
+  });
 
   if (parentContact.kind === "external") {
     // Today's external bytes (design D3): the follow-up text or the brief, the
