@@ -2259,14 +2259,24 @@ describe("tool registration", () => {
       const tool = registeredTools.find((t: any) => t.name === toolName);
       assert.ok(tool, `expected ${toolName} to be registered`);
       assert.equal("surface" in tool.parameters.properties, false);
-      // No description text may name a surface value or ask the agent to
-      // choose a placement.
+      // The per-call surface parameter is gone: no description text may
+      // carry its vocabulary, offer its values as a menu, or ask the agent
+      // to choose a placement.
       const texts = [tool.description, tool.promptSnippet];
       for (const property of Object.values<Record<string, unknown>>(tool.parameters.properties)) {
         if (typeof property.description === "string") texts.push(property.description);
       }
       for (const text of texts) {
-        assert.doesNotMatch(text, /\b(pane|tab|float)\b/);
+        // The removed parameter's own vocabulary; any of it means the
+        // per-call surface is back.
+        assert.doesNotMatch(text, /\b(surface|placement)\b/i);
+        // The quoted vocabulary the removed parameter offered as a menu.
+        assert.doesNotMatch(text, /"(pane|tab|float)"/);
+        // Asking the agent to choose a placement, in other words. The
+        // patterns stay within one sentence so a distant "where" and
+        // "opens" cannot match spuriously.
+        assert.doesNotMatch(text, /\bopen it (?:in|beside|within)\b/i);
+        assert.doesNotMatch(text, /\bwhere the (?:subagent|child|pane) opens\b/i);
       }
     }
   });
