@@ -1478,6 +1478,20 @@ describe("subagent discovery", () => {
     assert.equal(parsed.thinking, "low");
   });
 
+  it("parses the role surface from the frontmatter, ignoring invalid values", () => {
+    const parse = (lines: string[]) => {
+      const parsed = parseAgentDefinition([...lines, "---", "", "Body."].join("\n"), "s");
+      assert.ok(parsed, "expected the definition to parse");
+      return parsed.surface;
+    };
+
+    assert.equal(parse(["---", "name: s", "surface: float"]), "float");
+    assert.equal(parse(["---", "name: s", "surface: tab"]), "tab");
+    assert.equal(parse(["---", "name: s", "surface: pane"]), "pane");
+    assert.equal(parse(["---", "name: s", "surface: window"]), undefined);
+    assert.equal(parse(["---", "name: s"]), undefined);
+  });
+
   it("parses a CRLF role file the same as its LF twin", async () => {
     await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
       const lf = [
@@ -1485,6 +1499,7 @@ describe("subagent discovery", () => {
         "name: crlf-test-agent",
         "model: anthropic/test-crlf",
         "tools: read,bash",
+        "surface: float",
         "auto-exit: true",
         "spawning: false",
         "deny-tools: a, b",
@@ -1505,6 +1520,7 @@ describe("subagent discovery", () => {
       assert.equal(crlf.autoExit, true);
       assert.equal(crlf.spawning, false);
       assert.equal(crlf.denyTools, "a, b");
+      assert.equal(crlf.surface, "float");
       assert.equal(crlf.body, "Body line one.\nBody line two.");
     });
   });
