@@ -89,6 +89,17 @@ const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 /** Pane-side entry point every pi-parent launch spec runs through. */
 const SUBAGENTS_CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
 
+/**
+ * The `surface` tool parameter: where a subagent's pane goes. Shared by the
+ * spawn and resume tools so both offer the same values and wording.
+ */
+export const SurfaceParam = Type.Optional(
+  Type.Union([Type.Literal("pane"), Type.Literal("tab")], {
+    description:
+      '"pane" (default): place the pane automatically. "tab": open a window. Overrides the configured default.',
+  }),
+);
+
 export const SubagentParams = Type.Object({
   name: Type.String({ description: "Display name." }),
   task: Type.String({ description: "Task prompt for the subagent." }),
@@ -125,15 +136,7 @@ export const SubagentParams = Type.Object({
         "true: the user drives the subagent, and stall events do not wake you. Default: the agent `interactive` value, else the inverse of `auto-exit`.",
     }),
   ),
-  surface: Type.Optional(
-    Type.Union(
-      [Type.Literal("right"), Type.Literal("down"), Type.Literal("tab"), Type.Literal("pane")],
-      {
-        description:
-          '"right" (default): split side by side. "down": split below. "tab": new workspace tab. "pane" = "right". Overrides the configured default.',
-      },
-    ),
-  ),
+  surface: SurfaceParam,
 });
 
 /** One steer message delivered to the parent session through `deps.send`. */

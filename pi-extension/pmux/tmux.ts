@@ -97,6 +97,26 @@ function splitFlag(direction: SplitDirection): string {
   return direction === "down" ? "-v" : "-h";
 }
 
+/** The pane id in a tmux command's output, or a throw when there is none. */
+function paneIdFrom(out: string): string {
+  const surface = out.trim();
+  if (!surface.startsWith("%")) {
+    throw new Error(`Unexpected tmux split result (no pane id): ${surface}`);
+  }
+  return surface;
+}
+
+/**
+ * Split a pane without taking focus and return the new pane id. The target
+ * pane is passed in rather than read from the environment, because callers
+ * may carry it in an injected environment.
+ */
+function splitWindow(target: string, direction: SplitDirection): string {
+  return paneIdFrom(
+    tmux(["split-window", "-d", splitFlag(direction), "-t", target, "-P", "-F", "#{pane_id}"]),
+  );
+}
+
 /** True when the pane still exists. A closed pane fails the lookup. */
 export function paneExists(surface: string): boolean {
   try {
@@ -106,12 +126,55 @@ export function paneExists(surface: string): boolean {
   }
 }
 
+/** One row of the placement listing: a window pane with its shape and parent. */
+interface PaneRow {
+  id: string;
+  /** The numeric part of the pane id (`%10` -> 10); `-1` when malformed. */
+  num: number;
+  width: number;
+  height: number;
+  /** The `@pmux_parent` value; empty when the option is unset. */
+  parent: string;
+}
+
+/**
+ * Parse the placement listing. A line may carry 3 fields (`@pmux_parent`
+ * unset prints as an empty field) or 4; malformed rows are skipped.
+ */
+function parsePaneRows(out: string): PaneRow[] {
+  const rows: PaneRow[] = [];
+  for (const line of out.split("\n")) {
+    const fields = line.trim().split(/\s+/);
+    if (fields.length < 3 || !fields[0].startsWith("%")) continue;
+    const width = Number(fields[1]);
+    const height = Number(fields[2]);
+    if (!Number.isFinite(width) || !Number.isFinite(height)) continue;
+    const num = Number(fields[0].slice(1));
+    rows.push({
+      id: fields[0],
+      num: Number.isFinite(num) ? num : -1,
+      width,
+      height,
+      parent: fields[3] ?? "",
+    });
+  }
+  return rows;
+}
+
+/** Side by side when the target is at least twice as wide as it is tall. */
+function axisDirection(row: PaneRow): SplitDirection {
+  return row.width >= 2 * row.height ? "right" : "down";
+}
+
 /**
  * Create a new pane for a subagent and return its id.
  *
- * `right` and `down` split the caller's pane without taking focus (`-d`), so
- * the new pane joins the caller's own window. `tab` opens a new window in the
- * caller's session and restores focus to the caller's window afterwards.
+ * `pane` splits a target pane in the caller's own window without taking
+ * focus (`-d`). The target is the newest living pane this caller created in
+ * that window (tracked with the `@pmux_parent` pane option), or the caller's
+ * own pane when there is none; the axis comes from the target's shape. `tab`
+ * opens a new window in the caller's session and restores focus to the
+ * caller's window afterwards.
  */
 export function createSurface(
   name: string,
@@ -125,28 +188,52 @@ export function createSurface(
   let surface: string;
   if (placement === "tab") {
     const session = tmux(["display-message", "-p", "-t", caller, "#{session_id}"]).trim();
-    surface = tmux(["new-window", "-d", "-t", session, "-P", "-F", "#{pane_id}"]).trim();
+    const created = tmux(["new-window", "-d", "-t", session, "-P", "-F", "#{pane_id}"]);
     const callerWindow = tmux(["display-message", "-p", "-t", caller, "#{window_id}"]).trim();
     try {
       tmux(["select-window", "-t", callerWindow]);
     } catch {
       // Focus restore is best effort; the new window exists either way.
     }
+    surface = paneIdFrom(created);
   } else {
-    surface = tmux([
-      "split-window",
-      "-d",
-      splitFlag(placement === "down" ? "down" : "right"),
-      "-t",
-      caller,
-      "-P",
-      "-F",
-      "#{pane_id}",
-    ]).trim();
-  }
-
-  if (!surface.startsWith("%")) {
-    throw new Error(`Unexpected tmux split result (no pane id): ${surface}`);
+    let target = caller;
+    let direction: SplitDirection = "right";
+    try {
+      const rows = parsePaneRows(
+        tmux([
+          "list-panes",
+          "-t",
+          caller,
+          "-F",
+          "#{pane_id} #{pane_width} #{pane_height} #{@pmux_parent}",
+        ]),
+      );
+      // A candidate is a living pane this caller created in this window; the
+      // caller's own row carries its own parent (or none) and never matches.
+      const candidates = rows.filter((row) => row.parent === caller && row.id !== caller);
+      const newest = candidates.reduce<PaneRow | undefined>(
+        (best, row) => (best === undefined || row.num > best.num ? row : best),
+        undefined,
+      );
+      // The newest child gives both the target and the shape; without one,
+      // the caller's own row does.
+      const targetRow = newest ?? rows.find((row) => row.id === caller);
+      if (targetRow) {
+        target = targetRow.id;
+        direction = axisDirection(targetRow);
+      }
+    } catch {
+      // The listing failed: fall back to splitting the caller side by side
+      // rather than failing the spawn.
+    }
+    surface = splitWindow(target, direction);
+    try {
+      tmux(["set-option", "-p", "-t", surface, "@pmux_parent", caller]);
+    } catch {
+      // The parentage marker is best effort; the pane still works without it,
+      // it just cannot become a later spawn's target.
+    }
   }
 
   try {
@@ -163,20 +250,7 @@ export function createSurface(
  * may carry it in an injected environment.
  */
 export function splitPane(caller: string, direction: SplitDirection = "right"): string {
-  const surface = tmux([
-    "split-window",
-    "-d",
-    splitFlag(direction),
-    "-t",
-    caller,
-    "-P",
-    "-F",
-    "#{pane_id}",
-  ]).trim();
-  if (!surface.startsWith("%")) {
-    throw new Error(`Unexpected tmux split result (no pane id): ${surface}`);
-  }
-  return surface;
+  return splitWindow(caller, direction);
 }
 
 /**

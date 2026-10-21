@@ -24,6 +24,7 @@ import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import {
   createSupervisor,
   SubagentParams,
+  SurfaceParam,
   borderLine,
   buildLaunchMessagingHint,
   buildPiPromptArgs,
@@ -184,10 +185,10 @@ function muxUnavailableResult() {
 
 const statusConfig = loadStatusConfig();
 
-// Subagent surface placement default: "right" (side-by-side split), "down"
-// (stacked split) or "tab" (own workspace tab). Loaded from the extension config
-// (~/.pi/agent/extensions/pmux/config.json), changeable at
-// runtime via /pmux-surface, overridable per call via the tool's `surface` param.
+// Subagent surface placement default: "pane" (the dwindle split rule places
+// the pane in the caller's window) or "tab" (own workspace tab). Loaded from
+// the extension config (~/.pi/agent/extensions/pmux/config.json), changeable
+// at runtime via /pmux-surface, overridable per call via the tool's `surface` param.
 let surfaceDefault: SurfacePlacement = loadSurfaceConfig();
 
 export function getSurfaceDefault(): SurfacePlacement {
@@ -534,9 +535,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "pmux_spawn",
       label: "Subagent",
       description:
-        "Start a subagent in a new tmux pane. The tool is fire-and-forget: it returns only an acknowledgement. When the subagent finishes, its result arrives automatically as a steer message that starts a new turn. Do not poll, sleep, read logs, or call other tools to check status. Do not fabricate or guess the result. After the call, end your turn or do other independent work, for example start more subagents. Set placement with the surface parameter.",
+        "Start a subagent in a new tmux pane. The tool is fire-and-forget: it returns only an acknowledgement. When the subagent finishes, its result arrives automatically as a steer message that starts a new turn. Do not poll, sleep, read logs, or call other tools to check status. Do not fabricate or guess the result. After the call, end your turn or do other independent work, for example start more subagents.",
       promptSnippet:
-        "Start an async subagent in a tmux pane or tab (surface parameter); its result arrives later as a steer message.",
+        "Start an async subagent in a tmux pane; its result arrives later as a steer message.",
       parameters: SubagentParams,
 
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -839,9 +840,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "pmux_resume",
       label: "Resume Subagent",
       description:
-        "Resume an earlier subagent session in a new tmux pane, to continue a cancelled run or give follow-up work. Delivery is the same as subagent: fire-and-forget, the result arrives as a steer message, do not poll or fabricate it. Set placement with the surface parameter.",
+        "Resume an earlier subagent session in a new tmux pane, to continue a cancelled run or give follow-up work. Delivery is the same as subagent: fire-and-forget, the result arrives as a steer message, do not poll or fabricate it.",
       promptSnippet:
-        "Resume an earlier subagent session (surface parameter); its result arrives later as a steer message.",
+        "Resume an earlier subagent session; its result arrives later as a steer message.",
       parameters: Type.Object({
         sessionPath: Type.String({ description: "Path to the session .jsonl file." }),
         message: Type.Optional(
@@ -849,19 +850,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             description: "Message to send after the resume, for example follow-up instructions.",
           }),
         ),
-        surface: Type.Optional(
-          Type.Union(
-            [
-              Type.Literal("right"),
-              Type.Literal("down"),
-              Type.Literal("tab"),
-              Type.Literal("pane"),
-            ],
-            {
-              description: 'Same values as subagent surface: "right" (default), "down", "tab".',
-            },
-          ),
-        ),
+        surface: SurfaceParam,
         autoExit: Type.Optional(
           Type.Boolean({
             description:
@@ -946,7 +935,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
   // /pmux-surface command — show or set the default surface placement
   pi.registerCommand("pmux-surface", {
-    description: "Show or set the default subagent surface: /pmux-surface [right|down|tab]",
+    description: "Show or set the default subagent surface: /pmux-surface [pane|tab]",
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
       const placement = parseSurfacePlacement(arg);
@@ -964,10 +953,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       } else if (arg === "") {
         ctx.ui.notify(`Subagent surface: ${getSurfaceDefault()}`, "info");
       } else {
-        ctx.ui.notify(
-          `Subagent surface: ${getSurfaceDefault()} (accepted: right, down, tab)`,
-          "warning",
-        );
+        ctx.ui.notify(`Subagent surface: ${getSurfaceDefault()} (accepted: pane, tab)`, "warning");
       }
     },
   });

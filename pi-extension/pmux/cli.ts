@@ -73,8 +73,8 @@ const MIN_NODE: readonly [number, number] = [22, 18];
 
 const USAGE = [
   "Usage:",
-  "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--surface right|down|tab]",
-  "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>] [--surface right|down|tab]",
+  "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--surface pane|tab]",
+  "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>] [--surface pane|tab]",
   "  node cli.ts run <spec> [<prompt>]",
   "  node cli.ts last-message --session <file>",
   "  node cli.ts wait --session <file> [--status <list>] [--timeout <seconds>]",
@@ -531,7 +531,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     const requested = values.surface;
     const parsed = requested === undefined ? undefined : parseSurfacePlacement(requested);
     if (requested !== undefined && parsed === undefined) {
-      writeErr(`invalid --surface value: ${requested} (expected right, down or tab)\n`);
+      writeErr(`invalid --surface value: ${requested} (expected pane or tab)\n`);
       return 2;
     }
     // Explicit flag wins; otherwise the extension's configured default.

@@ -67,11 +67,15 @@ The skill launcher SHALL find the package root, meaning a directory that holds `
 - **THEN** its model, tools, auto-exit flag, spawning flag, deny-tools list and body resolve the same as the LF version
 
 ### Requirement: Launch contract
-`start` SHALL split a new pane next to the caller's pane without taking focus and name it after the child. It SHALL write a launch spec that starts pi with `--session`, the env vars `pmux-done.ts` reads (with `PI_PMUX_SESSION` equal to `--session`), and the brief as the prompt. It SHALL remove `<session>.status` before it runs that spec, and then run the spec in the pane. On success it SHALL print exactly one JSON document on stdout, giving the pane id, the session file and the launch-spec path. Everything else SHALL go to stderr. Because every `start` is an external-orchestrator launch, it SHALL set `PI_PMUX_EXTERNAL_PARENT=1` in the launch spec env; a pi-parent launch does not set that key. A `resume` reuses the launch spec unchanged, so the resumed child carries the marker too.
+`start` SHALL create a new pane by the tmux-backend placement rule, with the caller's pane as the anchor, without taking focus, and name it after the child. It SHALL write a launch spec that starts pi with `--session`, the env vars `pmux-done.ts` reads (with `PI_PMUX_SESSION` equal to `--session`), and the brief as the prompt. It SHALL remove `<session>.status` before it runs that spec, and then run the spec in the pane. On success it SHALL print exactly one JSON document on stdout, giving the pane id, the session file and the launch-spec path. Everything else SHALL go to stderr. Because every `start` is an external-orchestrator launch, it SHALL set `PI_PMUX_EXTERNAL_PARENT=1` in the launch spec env; a pi-parent launch does not set that key. A `resume` reuses the launch spec unchanged, so the resumed child carries the marker too.
 
 #### Scenario: Successful launch
 - **WHEN** `start` is given a child name, a role, a working directory, a brief file and the parent's name
 - **THEN** a new named pane runs pi in that directory with that session, and stdout is JSON with `pane`, `session` and `launch`
+
+#### Scenario: Second launch from the same orchestrator
+- **WHEN** the orchestrator in pane `%3` ran `start` once, its child pane `%5` is still alive, and it runs `start` again
+- **THEN** the new pane is created by splitting `%5`, not `%3`
 
 #### Scenario: Hostile names and paths
 - **WHEN** the child name contains `;`, `$(...)` and a single quote, and the scratch directory contains a space
@@ -88,6 +92,7 @@ The skill launcher SHALL find the package root, meaning a directory that holds `
 #### Scenario: A pi-parent child does not carry the marker
 - **WHEN** a pi parent spawns a child with `pmux_spawn`
 - **THEN** the child's env has no `PI_PMUX_EXTERNAL_PARENT`
+- **THEN** no pane is addressed by title and no text is typed into any pane but the child's own
 
 ### Requirement: Parent-contact footer
 `start` SHALL append a footer to the brief that gives the parent's name and pane. The footer SHALL tell the child that its last assistant message is the report the parent reads, and that it SHALL then call `pmux_done`. It SHALL tell the child not to use `caller_ping` or `pmux_message` to reach the parent.
@@ -132,7 +137,7 @@ After the child exits, the skill-path run wrapper SHALL print `__SUBAGENT_DONE_<
 - **THEN** no pane is addressed by title and no text is typed into any pane but the child's own
 
 ### Requirement: Resume in a new pane
-`resume --launch <spec> --prompt <file> [--name <child>]` SHALL split a new pane, name it (after `--name`, or the child name stored in the spec), and run the existing launch spec there with the new prompt, so that pi resumes the same session with its context. Resume MUST NOT need the child's previous pane to exist. On success it SHALL print JSON with `pane` and `launch`.
+`resume --launch <spec> --prompt <file> [--name <child>]` SHALL create a new pane by the tmux-backend placement rule, with the caller's pane as the anchor, name it (after `--name`, or the child name stored in the spec), and run the existing launch spec there with the new prompt, so that pi resumes the same session with its context. Resume MUST NOT need the child's previous pane to exist. On success it SHALL print JSON with `pane` and `launch`.
 
 #### Scenario: Resume after close-on-done
 - **WHEN** a child's pane closed on done and the orchestrator resumes it with a follow-up prompt
@@ -197,3 +202,14 @@ The CLI SHALL provide `last-message --session <file>`, which prints the text of 
 #### Scenario: The orchestrator reads the report
 - **WHEN** the wait returns `done`
 - **THEN** the skill tells the orchestrator to run `last-message --session <file>` for the report
+
+### Requirement: Surface flag values
+`start` and `resume` SHALL accept `--surface pane` and `--surface tab`. They SHALL read the legacy values `right` and `down` as `pane`. Any other value MUST fail before a pane is created, with an error that names the accepted values `pane` and `tab`. When the flag is absent, the default comes from the extension's `config.json`.
+
+#### Scenario: Legacy value
+- **WHEN** `start` runs with `--surface down`
+- **THEN** the pane is placed by the tmux-backend split rule
+
+#### Scenario: Invalid value
+- **WHEN** `start` runs with `--surface window`
+- **THEN** it exits non-zero with an error naming `pane` and `tab`, and no pane is created

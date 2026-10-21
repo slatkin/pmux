@@ -342,7 +342,7 @@ describe("supervisor launch", () => {
       const running = await h.supervisor.spawn(
         { name: "Scout", task: "Fix the login bug", model: "test-model" },
         env.ctx,
-        { placement: "right" },
+        { placement: "pane" },
       );
 
       const launchPath = running.launchScriptFile as string;
