@@ -60,7 +60,7 @@ with user consent).
    procedure) itself.
 2. Start the child:
    ```bash
-   node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--surface pane|tab]
+   node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--surface pane|tab|float]
    ```
    `<cwd>` is the child's working directory; `--scratch` (default
    `${TMPDIR:-/tmp}/pmux`) holds the generated prompt, role prompt
@@ -73,10 +73,14 @@ with user consent).
    `--surface` places the new pane: `pane` (default) places it
    automatically in your window — it splits your newest living child pane,
    or your own pane when you have none, side by side when that pane is at
-   least twice as wide as it is tall and stacked below otherwise — and
-   `tab` gives it its own window; the legacy values `right` and `down` are
-   still accepted and mean `pane`; when omitted, it comes from the
-   extension's `config.json`. On success it prints JSON on stdout:
+   least twice as wide as it is tall and stacked below otherwise —
+   `tab` gives it its own window, and `float` opens a floating pane in
+   your window, half the window's width and height, at the top right, while
+   you keep the focus (successive floats cascade down and left); the legacy
+   values `right` and `down` are still accepted and mean `pane`; when
+   omitted, the role's `surface:` frontmatter applies when it names `pane`,
+   `tab` or `float`, and then the extension's `config.json`. On success it
+   prints JSON on stdout:
    `{"pane":..., "session":..., "launch":...}`. `launch` is the launch-spec
    path a resume needs; `pane` is the child's pane id, which the nudge and
    the close commands below need; a `done` child closes its own pane after
@@ -127,11 +131,13 @@ with user consent).
   runs in a **new** pane: `rm` the child's `.exit`, write the follow-up to
   a prompt file, and run:
   ```bash
-  node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child>] [--surface pane|tab]
+  node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child>] [--surface pane|tab|float]
   ```
   `<spec>` is the `launch` field from the start JSON; `--name` defaults to
   the child name stored in the spec. `--surface` places the resumed pane the
-  same way as `start`. The same session resumes with full
+  same way as `start`. When omitted, the role surface stored in the launch
+  spec applies — a resume keeps the role's surface — and then the
+  extension's `config.json`. The same session resumes with full
   context and the child re-reports the same way. The old pane is not needed.
   A fresh role or a correction lane → new child via `start`.
 - Idle child (you expected a report long ago): type a nudge into the

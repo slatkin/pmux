@@ -3,6 +3,8 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
+
 /** Absolute path to `pi-extension/pmux`. https://github.com/nodejs/node/issues/37845 */
 const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -19,6 +21,7 @@ export interface AgentDefaults {
   interactive?: boolean;
   systemPromptMode?: "append" | "replace";
   sessionMode?: SubagentSessionMode;
+  surface?: SurfacePlacement;
   cwd?: string;
   cli?: string;
   body?: string;
@@ -98,6 +101,7 @@ export function parseAgentDefinition(
     autoExit: parseOptionalBoolean(getFrontmatterValue(frontmatter, "auto-exit")),
     interactive: parseOptionalBoolean(getFrontmatterValue(frontmatter, "interactive")),
     sessionMode: parseSessionMode(getFrontmatterValue(frontmatter, "session-mode")),
+    surface: parseSurfacePlacement(getFrontmatterValue(frontmatter, "surface")),
     cwd: getFrontmatterValue(frontmatter, "cwd"),
     cli: getFrontmatterValue(frontmatter, "cli"),
     body: body || undefined,

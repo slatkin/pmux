@@ -20,7 +20,7 @@ import {
   agentPrompt,
   readWindowOptions,
 } from "./tmux.ts";
-import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
+import { parseSurfaceDefault, parseSurfacePlacement, type SurfaceDefault } from "./placement.ts";
 import {
   createSupervisor,
   SubagentParams,
@@ -186,22 +186,18 @@ function muxUnavailableResult() {
 const statusConfig = loadStatusConfig();
 
 // Subagent surface placement default: "pane" (the dwindle split rule places
-// the pane in the caller's window) or "tab" (own workspace tab). Loaded from
-// the extension config (~/.pi/agent/extensions/pmux/config.json), changeable
-// at runtime via /pmux-surface, overridable per call via the tool's `surface` param.
-let surfaceDefault: SurfacePlacement = loadSurfaceConfig();
+// the pane in the caller's window) or "tab" (own workspace tab), never
+// "float" — the SurfaceDefault type makes that a compile-time rule. Loaded
+// from the extension config (~/.pi/agent/extensions/pmux/config.json) and
+// changeable at runtime via /pmux-surface.
+let surfaceDefault: SurfaceDefault = loadSurfaceConfig();
 
-export function getSurfaceDefault(): SurfacePlacement {
+export function getSurfaceDefault(): SurfaceDefault {
   return surfaceDefault;
 }
 
-export function setSurfaceDefault(value: SurfacePlacement): void {
+export function setSurfaceDefault(value: SurfaceDefault): void {
   surfaceDefault = value;
-}
-
-/** Resolve placement for one spawn: explicit tool param > configured default. */
-export function resolveSurfacePlacement(param: unknown): SurfacePlacement {
-  return parseSurfacePlacement(param) ?? surfaceDefault;
 }
 
 // Test hook: redirect config.json writes away from the extension config dir.
@@ -575,7 +571,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // Launch the subagent (creates pane or tab, sends command) and start
         // watching it in the background; the supervisor delivers the result.
         const running = await currentSupervisor().spawn(params, ctx, {
-          placement: resolveSurfacePlacement(params.surface),
+          callSurface: parseSurfacePlacement(params.surface),
+          fallback: getSurfaceDefault(),
         });
 
         // Return immediately
@@ -898,7 +895,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // pi-style session file; without a record, a missing session file is
         // still an error result.
         return currentSupervisor().resume(params, ctx, {
-          placement: resolveSurfacePlacement(params.surface),
+          callSurface: parseSurfacePlacement(params.surface),
+          fallback: getSurfaceDefault(),
         });
       },
     });
@@ -938,7 +936,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     description: "Show or set the default subagent surface: /pmux-surface [pane|tab]",
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
-      const placement = parseSurfacePlacement(arg);
+      const placement = parseSurfaceDefault(arg);
       if (placement) {
         setSurfaceDefault(placement);
         try {

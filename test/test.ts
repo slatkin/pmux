@@ -67,6 +67,11 @@ import {
   readSubagentActivityFile,
 } from "../pi-extension/pmux/activity.ts";
 import {
+  parseSurfaceDefault,
+  parseSurfacePlacement,
+  resolvePlacement,
+} from "../pi-extension/pmux/placement.ts";
+import {
   shouldMarkUserTookOver,
   shouldAutoExitOnAgentEnd,
   shouldScheduleAgentEndNudge,
@@ -598,13 +603,38 @@ describe("status.ts", () => {
     });
   });
 
-  it("resolves the surface placement default: tab as given, legacy right/down/pane, junk and absent -> pane", () => {
+  it("resolves the surface placement default: tab as given, legacy right/down/pane, junk, float and absent -> pane", () => {
     assert.equal(parseSurfaceConfig({ surface: "tab" }), "tab");
     assert.equal(parseSurfaceConfig({ surface: "down" }), "pane");
     assert.equal(parseSurfaceConfig({ surface: "right" }), "pane");
     assert.equal(parseSurfaceConfig({ surface: "pane" }), "pane");
+    assert.equal(parseSurfaceConfig({ surface: "float" }), "pane");
     assert.equal(parseSurfaceConfig({ surface: "junk" }), "pane");
     assert.equal(parseSurfaceConfig({}), "pane");
+  });
+
+  it("parses the per-call surface values, accepting float", () => {
+    assert.equal(parseSurfacePlacement("pane"), "pane");
+    assert.equal(parseSurfacePlacement("tab"), "tab");
+    assert.equal(parseSurfacePlacement("float"), "float");
+    assert.equal(parseSurfacePlacement("right"), "pane");
+    assert.equal(parseSurfacePlacement("down"), "pane");
+    assert.equal(parseSurfacePlacement("junk"), undefined);
+  });
+
+  it("rejects float as a surface default", () => {
+    assert.equal(parseSurfaceDefault("pane"), "pane");
+    assert.equal(parseSurfaceDefault("tab"), "tab");
+    assert.equal(parseSurfaceDefault("right"), "pane");
+    assert.equal(parseSurfaceDefault("down"), "pane");
+    assert.equal(parseSurfaceDefault("float"), undefined);
+    assert.equal(parseSurfaceDefault("junk"), undefined);
+  });
+
+  it("resolves the placement: the call beats the role, the role beats the default", () => {
+    assert.equal(resolvePlacement("tab", "float", "pane"), "tab");
+    assert.equal(resolvePlacement(undefined, "float", "pane"), "float");
+    assert.equal(resolvePlacement(undefined, undefined, "pane"), "pane");
   });
 
   it("loads the surface placement from a temp config file", () => {
@@ -615,6 +645,9 @@ describe("status.ts", () => {
       assert.equal(loadSurfaceConfig(configPath, examplePath), "tab");
 
       writeFileSync(configPath, JSON.stringify({ surface: "junk" }));
+      assert.equal(loadSurfaceConfig(configPath, examplePath), "pane");
+
+      writeFileSync(configPath, JSON.stringify({ surface: "float" }));
       assert.equal(loadSurfaceConfig(configPath, examplePath), "pane");
 
       assert.equal(loadSurfaceConfig(join(dir, "missing.json"), examplePath), "pane");
@@ -1197,22 +1230,6 @@ describe("surface placement resolution", () => {
     assert.match(subagentsModule.resolveModeHint(false), /call the pmux_done tool/);
     assert.match(subagentsModule.resolveModeHint(undefined), /call the pmux_done tool/);
   });
-  it("prefers the tool param over the configured default and ignores invalid values", () => {
-    const saved = subagentsModule.getSurfaceDefault();
-    try {
-      subagentsModule.setSurfaceDefault("tab");
-      assert.equal(subagentsModule.resolveSurfacePlacement(undefined), "tab");
-      assert.equal(subagentsModule.resolveSurfacePlacement("down"), "pane");
-      assert.equal(subagentsModule.resolveSurfacePlacement("right"), "pane");
-      assert.equal(subagentsModule.resolveSurfacePlacement("pane"), "pane");
-
-      subagentsModule.setSurfaceDefault("pane");
-      assert.equal(subagentsModule.resolveSurfacePlacement("junk"), "pane");
-      assert.equal(subagentsModule.resolveSurfacePlacement("tab"), "tab");
-    } finally {
-      subagentsModule.setSurfaceDefault(saved);
-    }
-  });
 });
 
 describe("subagent discovery", () => {
@@ -1445,6 +1462,20 @@ describe("subagent discovery", () => {
     assert.equal(parsed.thinking, "low");
   });
 
+  it("parses the role surface from the frontmatter, ignoring invalid values", () => {
+    const parse = (lines: string[]) => {
+      const parsed = parseAgentDefinition([...lines, "---", "", "Body."].join("\n"), "s");
+      assert.ok(parsed, "expected the definition to parse");
+      return parsed.surface;
+    };
+
+    assert.equal(parse(["---", "name: s", "surface: float"]), "float");
+    assert.equal(parse(["---", "name: s", "surface: tab"]), "tab");
+    assert.equal(parse(["---", "name: s", "surface: pane"]), "pane");
+    assert.equal(parse(["---", "name: s", "surface: window"]), undefined);
+    assert.equal(parse(["---", "name: s"]), undefined);
+  });
+
   it("parses a CRLF role file the same as its LF twin", async () => {
     await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
       const lf = [
@@ -1452,6 +1483,7 @@ describe("subagent discovery", () => {
         "name: crlf-test-agent",
         "model: anthropic/test-crlf",
         "tools: read,bash",
+        "surface: float",
         "auto-exit: true",
         "spawning: false",
         "deny-tools: a, b",
@@ -1472,6 +1504,7 @@ describe("subagent discovery", () => {
       assert.equal(crlf.autoExit, true);
       assert.equal(crlf.spawning, false);
       assert.equal(crlf.denyTools, "a, b");
+      assert.equal(crlf.surface, "float");
       assert.equal(crlf.body, "Body line one.\nBody line two.");
     });
   });
@@ -2131,6 +2164,21 @@ describe("pmux-surface command", () => {
     return { command, notifications, ctx };
   }
 
+  function withSurfaceConfig(config: object, check: (configPath: string) => void) {
+    withTempDir((dir) => {
+      const configPath = join(dir, "config.json");
+      writeFileSync(configPath, JSON.stringify(config));
+      (subagentsModule as any).__surfaceTest__.setConfigPath(configPath);
+      const saved = subagentsModule.getSurfaceDefault();
+      try {
+        check(configPath);
+      } finally {
+        (subagentsModule as any).__surfaceTest__.setConfigPath(undefined);
+        subagentsModule.setSurfaceDefault(saved);
+      }
+    });
+  }
+
   it("shows the current default with no argument", () => {
     const { command, notifications, ctx } = loadCommand();
     command.handler("", ctx);
@@ -2139,50 +2187,51 @@ describe("pmux-surface command", () => {
   });
 
   it("reads the legacy down argument as pane and persists pane", () => {
-    withTempDir((dir) => {
-      const configPath = join(dir, "config.json");
-      writeFileSync(configPath, JSON.stringify({ status: { enabled: false } }));
-      (subagentsModule as any).__surfaceTest__.setConfigPath(configPath);
-      const saved = subagentsModule.getSurfaceDefault();
-      try {
-        const { command, notifications, ctx } = loadCommand();
-        command.handler("down", ctx);
+    withSurfaceConfig({ status: { enabled: false } }, (configPath) => {
+      const { command, notifications, ctx } = loadCommand();
+      command.handler("down", ctx);
 
-        assert.equal(subagentsModule.getSurfaceDefault(), "pane");
-        assert.equal(notifications[0].level, "info");
-        assert.match(notifications[0].message, /set to "pane" \(saved to config\.json\)/);
-        assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
-          status: { enabled: false },
-          surface: "pane",
-        });
-      } finally {
-        (subagentsModule as any).__surfaceTest__.setConfigPath(undefined);
-        subagentsModule.setSurfaceDefault(saved);
-      }
+      assert.equal(subagentsModule.getSurfaceDefault(), "pane");
+      assert.equal(notifications[0].level, "info");
+      assert.match(notifications[0].message, /set to "pane" \(saved to config\.json\)/);
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+        status: { enabled: false },
+        surface: "pane",
+      });
     });
   });
 
   it("sets a valid placement, persists it, and reports the new value", () => {
-    withTempDir((dir) => {
-      const configPath = join(dir, "config.json");
-      writeFileSync(configPath, JSON.stringify({ status: { enabled: false } }));
-      (subagentsModule as any).__surfaceTest__.setConfigPath(configPath);
-      const saved = subagentsModule.getSurfaceDefault();
-      try {
-        const { command, notifications, ctx } = loadCommand();
-        command.handler("tab", ctx);
+    withSurfaceConfig({ status: { enabled: false } }, (configPath) => {
+      const { command, notifications, ctx } = loadCommand();
+      command.handler("tab", ctx);
 
-        assert.equal(subagentsModule.getSurfaceDefault(), "tab");
-        assert.equal(notifications[0].level, "info");
-        assert.match(notifications[0].message, /set to "tab" \(saved to config\.json\)/);
-        assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
-          status: { enabled: false },
-          surface: "tab",
-        });
-      } finally {
-        (subagentsModule as any).__surfaceTest__.setConfigPath(undefined);
-        subagentsModule.setSurfaceDefault(saved);
-      }
+      assert.equal(subagentsModule.getSurfaceDefault(), "tab");
+      assert.equal(notifications[0].level, "info");
+      assert.match(notifications[0].message, /set to "tab" \(saved to config\.json\)/);
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+        status: { enabled: false },
+        surface: "tab",
+      });
+    });
+  });
+
+  it("leaves the default and config.json unchanged for a float argument", () => {
+    withSurfaceConfig({ status: { enabled: false }, surface: "tab" }, (configPath) => {
+      const saved = subagentsModule.getSurfaceDefault();
+      const { command, notifications, ctx } = loadCommand();
+      command.handler("float", ctx);
+
+      assert.equal(subagentsModule.getSurfaceDefault(), saved);
+      assert.equal(notifications[0].level, "warning");
+      assert.match(
+        notifications[0].message,
+        /Subagent surface: (pane|tab) \(accepted: pane, tab\)/,
+      );
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+        status: { enabled: false },
+        surface: "tab",
+      });
     });
   });
 
@@ -2211,7 +2260,11 @@ describe("tool registration", () => {
       const surface = tool.parameters.properties.surface;
       assert.ok(surface, `${toolName} should accept surface`);
       const values = surface.anyOf.map((option: { const?: string }) => option.const);
-      assert.deepEqual(values.sort(), ["pane", "tab"]);
+      assert.deepEqual(values.sort(), ["float", "pane", "tab"]);
+      // The description offers float and the role fallback.
+      assert.match(surface.description, /float/);
+      assert.match(surface.description, /role's surface/);
+      assert.match(surface.description, /top right/);
       assert.doesNotMatch(tool.description, /\bright\b|\bdown\b/);
       assert.doesNotMatch(tool.promptSnippet, /\bright\b|\bdown\b/);
     }

@@ -4,8 +4,8 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
 
 ## 1. Placement values and resolution helper
 
-- [ ] 1.1 In `pi-extension/pmux/placement.ts`, add `"float"` to `SurfacePlacement`. Make `parseSurfacePlacement` accept `float`. Add `SurfaceDefault = "pane" | "tab"`, `parseSurfaceDefault` (which rejects `float`), and `resolvePlacement(call, role, fallback)` (design decisions 1 and 2). Switch `parseSurfaceConfig`, `loadSurfaceConfig` and `writeSurfaceConfig` in `status.ts` to `SurfaceDefault`. Verify with `pnpm run typecheck`.
-- [ ] 1.2 In `test/test.ts`, add surface-config cases:
+- [x] 1.1 In `pi-extension/pmux/placement.ts`, add `"float"` to `SurfacePlacement`. Make `parseSurfacePlacement` accept `float`. Add `SurfaceDefault = "pane" | "tab"`, `parseSurfaceDefault` (which rejects `float`), and `resolvePlacement(call, role, fallback)` (design decisions 1 and 2). Switch `parseSurfaceConfig`, `loadSurfaceConfig` and `writeSurfaceConfig` in `status.ts` to `SurfaceDefault`. Verify with `pnpm run typecheck`.
+- [x] 1.2 In `test/test.ts`, add surface-config cases:
   - `"float"` in `config.json` loads as `pane`;
   - `parseSurfacePlacement("float")` gives `float`;
   - `parseSurfaceDefault("float")` gives `undefined`;
@@ -15,21 +15,21 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
 
 ## 2. Role frontmatter key
 
-- [ ] 2.1 In `pi-extension/pmux/agent-defs.ts`, add `surface?: SurfacePlacement` to `AgentDefaults`, and read `surface:` with `parseSurfacePlacement` (an invalid value gives `undefined`). Verify with `pnpm run typecheck`.
-- [ ] 2.2 Add `parseAgentDefinition` tests: `surface: float`, `surface: tab`, `surface: window` (undefined), no key (undefined), and a CRLF file with `surface: float`. Verify with `node --test test/test.ts`.
-- [ ] 2.3 In `docs/guide.md`, add `surface` to the frontmatter table and a short `### surface` section. The section says: `pane`, `tab` or `float`; it is used when the call gives no `surface`; it is kept on resume; `float` is never a default. Check by hand that the text matches the `luvus-surface` delta.
+- [x] 2.1 In `pi-extension/pmux/agent-defs.ts`, add `surface?: SurfacePlacement` to `AgentDefaults`, and read `surface:` with `parseSurfacePlacement` (an invalid value gives `undefined`). Verify with `pnpm run typecheck`.
+- [x] 2.2 Add `parseAgentDefinition` tests: `surface: float`, `surface: tab`, `surface: window` (undefined), no key (undefined), and a CRLF file with `surface: float`. Verify with `node --test test/test.ts`.
+- [x] 2.3 In `docs/guide.md`, add `surface` to the frontmatter table and a short `### surface` section. The section says: `pane`, `tab` or `float`; it is used when the call gives no `surface`; it is kept on resume; `float` is never a default. Check by hand that the text matches the `luvus-surface` delta.
 
 ## 3. Float placement and cascade in the tmux backend
 
-- [ ] 3.1 In `pi-extension/pmux/tmux.ts` `createSurface`, do these four things (design decision 4):
+- [x] 3.1 In `pi-extension/pmux/tmux.ts` `createSurface`, do these four things (design decision 4):
   - extend the dwindle `list-panes` format with `pane_floating_flag`, `pane_left`, `pane_top`, `window_width`, `window_height` and `pane-border-lines`;
   - skip floating rows as dwindle candidates;
   - add the `float` branch: anchor, newest pmux float, border width, cascade step, wrap to the anchor, then `new-pane -d -t <caller> -x -y -X -Y -P -F '#{pane_id}'`;
   - set `@pmux_parent` and the pane name, as for a tiled pane.
 
   Update the doc comment. Verify with `pnpm run typecheck`.
-- [ ] 3.2 Update `test/tmux-fakes.ts` so that the placement `list-panes` fake can return rows with the new fields. The default is one tiled caller row in a 200x50 window. Verify that `node --test test/cli.test.ts test/supervisor.test.ts` still passes.
-- [ ] 3.3 In `test/tmux.test.ts`, add one test for each tmux-backend delta scenario:
+- [x] 3.2 Update `test/tmux-fakes.ts` so that the placement `list-panes` fake can return rows with the new fields. The default is one tiled caller row in a 200x50 window. Verify that `node --test test/cli.test.ts test/supervisor.test.ts` still passes.
+- [x] 3.3 In `test/tmux.test.ts`, add one test for each tmux-backend delta scenario:
   - a floating child is not a split target;
   - the first float on 200x50 gives `-x 100 -y 25 -X 98 -Y 1` and `-d`;
   - the second float gives `-X 96 -Y 2`;
@@ -47,18 +47,18 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
 
 ## 4. pi parent: precedence, record and resume
 
-- [ ] 4.1 In `pi-extension/pmux/index.ts`, stop resolving the placement:
+- [x] 4.1 In `pi-extension/pmux/index.ts`, stop resolving the placement:
   - pass the parsed per-call `surface` (possibly `undefined`) and `getSurfaceDefault()` to `spawn` and `resume`;
   - add `float` to the `surface` union of both tools, with the new description;
   - make `/pmux-surface` parse with `parseSurfaceDefault`, so that `float` is reported as invalid with the accepted values `pane, tab`.
 
   Update the `surfaceDefault` comment. Verify with `pnpm run typecheck`.
-- [ ] 4.2 In `pi-extension/pmux/supervisor.ts`:
+- [x] 4.2 In `pi-extension/pmux/supervisor.ts`:
   - `spawn` resolves with `resolvePlacement(call, agentDefs?.surface, default)`, and writes `agentDefs?.surface` (never the per-call value) into the launch record;
   - `resume` resolves with `resolvePlacement(call, storedRecord?.surface, default)`.
 
   In `launch-record.ts`, add the optional `surface`. It is parsed with `parseSurfacePlacement`, and an unknown value is dropped. Verify with `pnpm run typecheck`.
-- [ ] 4.3 Add tests for the `luvus-surface` and `subagent-supervision` delta scenarios:
+- [x] 4.3 Add tests for the `luvus-surface` and `subagent-supervision` delta scenarios:
   - a floating role spawns a float;
   - the per-call `pane` beats the role's float;
   - the role's `pane` beats a `tab` default;
@@ -74,14 +74,14 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
 
 ## 5. External orchestrator CLI
 
-- [ ] 5.1 In `pi-extension/pmux/cli.ts`, make these changes:
+- [x] 5.1 In `pi-extension/pmux/cli.ts`, make these changes:
   - parse `--surface` with `parseSurfacePlacement`, and keep it as `undefined` when the flag is absent;
   - in `start`, resolve with `resolvePlacement(flag, definition.surface, loadSurfaceConfig())` after `loadAgentDefaults`, and write `definition.surface` into the launch spec;
   - in `resume`, resolve with `resolvePlacement(flag, spec.surface, loadSurfaceConfig())`;
   - change the usage to `[--surface pane|tab|float]` and the error text to `(expected pane, tab or float)`.
 
   In `launch.ts`, add the optional `surface`. It is parsed with `parseSurfacePlacement`, and an unknown value is dropped. Verify with `pnpm run typecheck`. Also verify that an invalid `--surface` still fails before any tmux call.
-- [ ] 5.2 In `test/cli.test.ts`, add tests for the `external-orchestration` delta scenarios:
+- [x] 5.2 In `test/cli.test.ts`, add tests for the `external-orchestration` delta scenarios:
   - a floating role with no flag gives `new-pane`;
   - `--surface pane` beats the role;
   - `--surface float` with no role surface gives a float, and the spec holds no surface;
@@ -92,13 +92,13 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
   - a CRLF role with `surface: float` behaves like the LF role.
 
   Verify with `node --test test/cli.test.ts`.
-- [ ] 5.3 In `skills/pmux/SKILL.md`, describe `--surface pane|tab|float` for `start` and `resume`. The text must say that the role's `surface:` applies when the flag is absent, and that a resume keeps the role's surface. Check by hand with `grep -n "surface" skills/pmux/SKILL.md`.
+- [x] 5.3 In `skills/pmux/SKILL.md`, describe `--surface pane|tab|float` for `start` and `resume`. The text must say that the role's `surface:` applies when the flag is absent, and that a resume keeps the role's surface. Check by hand with `grep -n "surface" skills/pmux/SKILL.md`.
 
 ## 6. Integration
 
-- [ ] 6.1 In `README.md`, mention the float surface and the role `surface:` key next to the placement text. Check by hand that it matches the specs.
-- [ ] 6.2 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`, in that order. All four must pass. The `no-explicit-any` warnings are expected.
-- [ ] 6.3 Run `openspec validate 2026-10-20-role-surface-float --strict` and verify that it passes.
+- [x] 6.1 In `README.md`, mention the float surface and the role `surface:` key next to the placement text. Check by hand that it matches the specs.
+- [x] 6.2 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`, in that order. All four must pass. The `no-explicit-any` warnings are expected.
+- [x] 6.3 Run `openspec validate 2026-10-20-role-surface-float --strict` and verify that it passes.
 
 ## Workflow follow-up
 
