@@ -13,8 +13,8 @@ The porting source is `/home/slatkin/Dev/foreman` (`src/cli.ts`, `src/run.ts`, `
 
 ## 2. `send` subcommand and receipts
 
-- [ ] 2.1 In `pi-extension/pmux/cli.ts`, add `to` and `text` options and `sendCommand`: `required("--to")`, `required("--text")`, then `agentPrompt(to, text)` from `tmux.ts` (do not add a `sendToPane` copy), then `writeReportReceipt(env, to, text)` ported from foreman with `PI_PMUX_SESSION`. `sendCommand` catches its usage errors the way `waitCommand` does: the message goes to stderr and the command returns 1, so stdout stays empty and the error does not bubble to the entry wrapper. Route `send` in `main`; add the usage line.
-- [ ] 2.2 Verify: port foreman's `test/cli.test.ts` cases with `useTmuxPaneFake()`: "send pastes the text into the target pane and presses Enter", "send keeps multiline text in one paste", "send requires --to and --text" (exit 1, stderr names the flag, stdout empty, no tmux call), "send writes a receipt only when PI_PMUX_SESSION is set" (parse the line: `to`, `bytes`, ISO `at`). Add: a receipt path in a missing directory still exits 0 and delivers.
+- [x] 2.1 In `pi-extension/pmux/cli.ts`, add `to` and `text` options and `sendCommand`: `required("--to")`, `required("--text")`, then `agentPrompt(to, text)` from `tmux.ts` (do not add a `sendToPane` copy), then `writeReportReceipt(env, to, text)` ported from foreman with `PI_PMUX_SESSION`. `sendCommand` catches its usage errors the way `waitCommand` does: the message goes to stderr and the command returns 1, so stdout stays empty and the error does not bubble to the entry wrapper. Route `send` in `main`; add the usage line.
+- [x] 2.2 Verify: port foreman's `test/cli.test.ts` cases with `useTmuxPaneFake()`: "send pastes the text into the target pane and presses Enter", "send keeps multiline text in one paste", "send requires --to and --text" (exit 1, stderr names the flag, stdout empty, no tmux call), "send writes a receipt only when PI_PMUX_SESSION is set" (parse the line: `to`, `bytes`, ISO `at`). Add: a receipt path in a missing directory still exits 0 and delivers.
 
 ## 3. Send-mode wake-up in the run wrapper
 
