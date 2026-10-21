@@ -97,6 +97,28 @@ function splitFlag(direction: SplitDirection): string {
   return direction === "down" ? "-v" : "-h";
 }
 
+/**
+ * Split a pane without taking focus and return the new pane id. The target
+ * pane is passed in rather than read from the environment, because callers
+ * may carry it in an injected environment.
+ */
+function splitWindow(target: string, direction: SplitDirection): string {
+  const surface = tmux([
+    "split-window",
+    "-d",
+    splitFlag(direction),
+    "-t",
+    target,
+    "-P",
+    "-F",
+    "#{pane_id}",
+  ]).trim();
+  if (!surface.startsWith("%")) {
+    throw new Error(`Unexpected tmux split result (no pane id): ${surface}`);
+  }
+  return surface;
+}
+
 /** True when the pane still exists. A closed pane fails the lookup. */
 export function paneExists(surface: string): boolean {
   try {
@@ -202,16 +224,7 @@ export function createSurface(
       // The listing failed: fall back to splitting the caller side by side
       // rather than failing the spawn.
     }
-    surface = tmux([
-      "split-window",
-      "-d",
-      splitFlag(direction),
-      "-t",
-      target,
-      "-P",
-      "-F",
-      "#{pane_id}",
-    ]).trim();
+    surface = splitWindow(target, direction);
     try {
       tmux(["set-option", "-p", "-t", surface, "@pmux_parent", caller]);
     } catch {
@@ -238,20 +251,7 @@ export function createSurface(
  * may carry it in an injected environment.
  */
 export function splitPane(caller: string, direction: SplitDirection = "right"): string {
-  const surface = tmux([
-    "split-window",
-    "-d",
-    splitFlag(direction),
-    "-t",
-    caller,
-    "-P",
-    "-F",
-    "#{pane_id}",
-  ]).trim();
-  if (!surface.startsWith("%")) {
-    throw new Error(`Unexpected tmux split result (no pane id): ${surface}`);
-  }
-  return surface;
+  return splitWindow(caller, direction);
 }
 
 /**
