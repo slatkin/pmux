@@ -29,13 +29,13 @@ The porting source is `/home/slatkin/Dev/foreman` (`src/cli.ts`, `src/run.ts`, `
 
 ## 5. Prune reclaims receipts
 
-- [ ] 5.1 In `pi-extension/pmux/prune.ts`, add `name.endsWith(".sent")` to `isManagedScratchFile` and `.sent` to the module comment's list of sidecars.
-- [ ] 5.2 Verify: port foreman's "prunes a report receipt past the retention and keeps it within it" into `test/prune.test.ts`.
+- [x] 5.1 In `pi-extension/pmux/prune.ts`, add `name.endsWith(".sent")` to `isManagedScratchFile` and `.sent` to the module comment's list of sidecars.
+- [x] 5.2 Verify: port foreman's "prunes a report receipt past the retention and keeps it within it" into `test/prune.test.ts`.
 
 ## 6. Mode-neutral `pmux_message` error
 
-- [ ] 6.1 In `pi-extension/pmux/index.ts`, change the external-parent error to: the parent is an external orchestrator that does not read subagent messages; report the way the parent-contact footer at the end of your brief says; use `caller_ping` to ask a question. Remove the "last assistant message" sentence.
-- [ ] 6.2 Verify: update the external-parent target test in `test/test.ts` to assert the footer wording and `caller_ping`, and to assert that the text does not say "last assistant message".
+- [x] 6.1 In `pi-extension/pmux/index.ts`, change the external-parent error to: the parent is an external orchestrator that does not read subagent messages; report the way the parent-contact footer at the end of your brief says; use `caller_ping` to ask a question. Remove the "last assistant message" sentence.
+- [x] 6.2 Verify: update the external-parent target test in `test/test.ts` to assert the footer wording and `caller_ping`, and to assert that the text does not say "last assistant message".
 
 ## 7. Skill and guide docs
 
