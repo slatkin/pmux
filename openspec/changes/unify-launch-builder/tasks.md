@@ -4,7 +4,7 @@
 
 - [x] 1.1 Create `pi-extension/pmux/launch-build.ts` and move `writeRunContextFile`, `buildPiLaunch`, `buildSubagentTaskPrompt`, `buildLaunchMessagingHint`, `resolveModeHint`, `buildPiPromptArgs` and `buildSpawnEnvParts` into it from `supervisor.ts`. Re-export the moved names from `supervisor.ts`. Verify that `pnpm test` passes with no test change.
 - [x] 1.2 Change `buildPiLaunch` to return only the `LaunchSpec`, and build `RunningSubagent` in `supervisor.ts` (design D2). Verify that `pnpm test` and `pnpm run typecheck` pass.
-- [ ] 1.3 Add the `ParentContact` input (design D3) and move `reportFooter`, `parentFooter` and `sendFooter` from `cli.ts` into the module. The supervisor passes the `pi` kind. Add tests in `test/launch-build.test.ts`. For `last` and `send`, the `external` kind gives `task + "\n" + footer`, pinned to today's bytes. It sets `PI_PMUX_EXTERNAL_PARENT`, `parent`, `report` and `closeOnDone`. It applies the send-mode bash rule. Verify that the new tests pass.
+- [x] 1.3 Add the `ParentContact` input (design D3) and move `reportFooter`, `parentFooter` and `sendFooter` from `cli.ts` into the module. The supervisor passes the `pi` kind. Add tests in `test/launch-build.test.ts`. For `last` and `send`, the `external` kind gives `task + "\n" + footer`, pinned to today's bytes. It sets `PI_PMUX_EXTERNAL_PARENT`, `parent`, `report` and `closeOnDone`. It applies the send-mode bash rule. Verify that the new tests pass.
 - [ ] 1.4 Add `resolveLaunchRecord` (design D6) and the optional record fields `parentSessionId` and `closeGraceMs` in `launch-record.ts`. Make `launchSubagent` use it. Add tests for the unknown-role and empty-model errors and for the new fields. Verify that `pnpm test` passes.
 
 ## 2. Parent session id
