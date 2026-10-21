@@ -1,0 +1,49 @@
+# Tasks
+
+The porting source is `/home/slatkin/Dev/foreman` (`src/cli.ts`, `src/run.ts`, `src/prune.ts`, `test/*`, `skills/foreman/SKILL.md`). Port its shapes under pmux names. Do not add a `foreman_` name, a send tool or a new `PI_PMUX_*` key. Each unit ends green on `pnpm test`; unit 8 runs all four gates.
+
+## 1. Report mode: flag, launch spec, footer
+
+- [ ] 1.1 In `pi-extension/pmux/launch.ts`, add `report?: "last" | "send"` to `LaunchSpec`. `readLaunchSpec` accepts an absent field, `"last"` or `"send"`, and calls `invalid("report must be last or send")` for any other value. Keep the field out of the returned spec when it is absent.
+- [ ] 1.2 In `pi-extension/pmux/cli.ts`, add `report` to `CLI_OPTIONS` and `CliValues`. Parse it in `main` before `startCommand` runs, after foreman's `surfacePlacement` pattern: an unknown value writes `invalid --report value: <v> (expected last or send)` to stderr and returns 2. `startCommand` writes `report: "send"` into the spec only in `send` mode.
+- [ ] 1.3 Add `sendFooter(parent, cliPath)`: foreman's `parentFooter` text with `foreman_done` → `pmux_done` (both lines) and the CLI path `CLI_PATH`. Keep `parentFooter` byte for byte. `startCommand` and `resumeCommand` pick the footer from the mode (`resume` reads `spec.report`).
+- [ ] 1.4 Update `USAGE`: `[--report last|send]` on `start`.
+- [ ] 1.5 Verify: tests in `test/cli.test.ts` (`cli.ts start` and `cli.ts resume` blocks): no flag → no `report` field and the `last` footer unchanged (assert the exact existing text); `--report send --parent %12` → spec `report: "send"`, `parent: "%12"`, prompt ends with the send footer (holds `send --to %12 --text`, `pmux_done`, the blocked line, the "ignore its claim" line; holds no "last assistant message is the report"); `--report email` → exit 2, stderr names `email`, no scratch file, no pane call; resume of a send spec appends the send footer, resume of a last spec appends the last footer; `readLaunchSpec` rejects `report: "email"` and `cli.ts run` fails naming the file.
+
+## 2. `send` subcommand and receipts
+
+- [ ] 2.1 In `pi-extension/pmux/cli.ts`, add `to` and `text` options and `sendCommand`: `required("--to")`, `required("--text")`, then `agentPrompt(to, text)` from `tmux.ts` (do not add a `sendToPane` copy), then `writeReportReceipt(env, to, text)` ported from foreman with `PI_PMUX_SESSION`. Route `send` in `main`; add the usage line.
+- [ ] 2.2 Verify: port foreman's `test/cli.test.ts` cases with `useTmuxPaneFake()`: "send pastes the text into the target pane and presses Enter", "send keeps multiline text in one paste", "send requires --to and --text" (no tmux call), "send writes a receipt only when PI_PMUX_SESSION is set" (parse the line: `to`, `bytes`, ISO `at`). Add: a receipt path in a missing directory still exits 0 and delivers.
+
+## 3. Send-mode wake-up in the run wrapper
+
+- [ ] 3.1 In `pi-extension/pmux/run.ts`, port `countReports(sessionFile, parent)`. Add `sendToParent?` and `cliPath?` to `RunSpecDeps` (default `agentPrompt`; `runCommand` in `cli.ts` passes `CLI_PATH`).
+- [ ] 3.2 In `runSpec`, only when `spec.report === "send"` and `spec.parent` is set: take the baseline before spawn; after the sentinel and after the existing wrapper `error`-sidecar block, count again and, when it did not grow, send foreman's wake-up text (`<name> pinged: <message>` for a ping sidecar with a string message, else `<name> <state> without sending a report. Read its last message: node <cli> last-message --session <session>`). Catch a send failure and write `Failed to wake parent <parent>: <error>` to stderr. Keep the close-on-done block after it, unchanged. Update the module comment.
+- [ ] 3.3 Verify: in the `runSpec` blocks of `test/cli.test.ts`, port foreman's `test/run.test.ts` wake-up cases with a recording `sendToParent`: exit without a report wakes the parent (state, `last-message --session`); a crash (code 2, no sidecar) wakes with state `error` after the wrapper sidecar; a ping sidecar is quoted; a child that reported is not woken; a receipt to another pane does not count; a receipt to the parent suppresses the wake-up; a malformed receipt line is skipped; receipts from an earlier run do not suppress the wake-up; the footer's placeholders do not count; a failed wake-up goes to stderr and keeps the exit code; a send child with a `done` sidecar wakes the parent, then closes its pane. Keep "contacts nobody when the child exits" passing and rename it to say last mode; add the same assertion for a spec with `parent` and no `report`.
+
+## 4. `wait --signal sidecar`
+
+- [ ] 4.1 In `pi-extension/pmux/cli.ts`, add `signal` to the options. In `waitCommand`, parse `--signal` (default `status`; unknown → usage error). `status` runs today's loop unchanged. `sidecar` runs foreman's loop: `existsSync(exitSidecarPath(session))` every `WAIT_POLL_MS`, print `{...interpretExitSidecar(readExitSidecar(session)), sidecar: resolve(path)}`, exit 0; timeout prints `{"sidecar":null}` plus a stderr message, exit 2. `--status` with `--signal sidecar` is a usage error. Never remove the sidecar. Update `USAGE`.
+- [ ] 4.2 Verify: port foreman's `test/cli-wait.test.ts` into `test/cli-wait.test.ts` with `--signal sidecar`: prints the interpreted sidecar and leaves it in place; a second wait reports the same exit; the ping payload is printed; timeout prints `{"sidecar":null}` and exits 2; a sidecar that appears while polling is picked up; a malformed sidecar does not crash; usage errors (no `--session`, bad `--timeout`, `--signal fast`, `--status done --signal sidecar`) exit 1 with stdout empty. Keep the existing status-wait tests unchanged.
+
+## 5. Prune reclaims receipts
+
+- [ ] 5.1 In `pi-extension/pmux/prune.ts`, add `name.endsWith(".sent")` to `isManagedScratchFile` and `.sent` to the module comment's list of sidecars.
+- [ ] 5.2 Verify: port foreman's "prunes a report receipt past the retention and keeps it within it" into `test/prune.test.ts`.
+
+## 6. Mode-neutral `pmux_message` error
+
+- [ ] 6.1 In `pi-extension/pmux/index.ts`, change the external-parent error to: the parent is an external orchestrator that does not read subagent messages; report the way the parent-contact footer at the end of your brief says; use `caller_ping` to ask a question. Remove the "last assistant message" sentence.
+- [ ] 6.2 Verify: update the external-parent target test in `test/test.ts` to assert the footer wording and `caller_ping`, and to assert that the text does not say "last assistant message".
+
+## 7. Skill and guide docs
+
+- [ ] 7.1 In `skills/pmux/SKILL.md`, extend the frontmatter `description` to cover external orchestrators such as Claude Code, which get the report typed into their pane. Leave every existing section unchanged.
+- [ ] 7.2 Add a section "External orchestrators (Claude Code)", ported from `skills/foreman/SKILL.md` steps 0–5 and its resume text with pmux names: `start ... --report send --parent "$TMUX_PANE"`; end the turn, the report arrives as text typed into your pane (do not poll instead of ending the turn); `wait --session <file> --signal sidecar [--timeout <s>]` and its JSON, exit codes 0/2/1; LEAVE the sidecar (the wrapper reads it after the child exits; `start` and `resume` clear it on relaunch; `prune` reclaims it; a repeated wait re-reports); the reasons `done`, `handoff`, `error`, `ping` and what to do; the wrapper's wake-up when a child exits without a report; `resume --launch <spec> --prompt <file>` re-appends the send footer.
+- [ ] 7.3 In `docs/guide.md`, add `--report`, `send` and `--signal` to the skill usage lines, and update the external-parent paragraph of `pmux_message` to the new error wording.
+- [ ] 7.4 Verify by reading: every command line in the new section matches `node cli.ts help`; no `foreman` name appears in `skills/pmux/` or `docs/guide.md` (`grep -ri foreman skills docs` is empty).
+
+## 8. Gates
+
+- [ ] 8.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck`, `pnpm test`.
+- [ ] 8.2 Run `openspec validate send-report-channel --strict`.
