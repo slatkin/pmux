@@ -13,9 +13,10 @@
 
 ## 3. CLI on the shared builder
 
-- [ ] 3.1 Rewrite `startCommand` to call `resolveLaunchRecord`, write `<session>.launch.json`, compute the artifact directory (design D5) and call `buildPiLaunch` with the `external` kind. Remove the `.prompt.md` and `.role.md` writes and the prompt argument on the pane line. Update `test/cli.test.ts` for the new prompt path, the record file, the `@pane_session_id` path and the fallback path. Verify that the "Task prompt location", "Parent session id" and "Per-child launch spec" scenarios have passing tests.
-- [ ] 3.2 Rewrite `resumeCommand` to read the record, rebuild the spec with `resume.message`, write it over `--launch` and run it (design D7). Refuse a spec without a record with exit 1. Remove the `.resume.md` write. Update `test/cli.test.ts` for the resume scenarios, the close grace and the refusal. Verify that `pnpm test` passes.
-- [ ] 3.3 Remove the code in `cli.ts` that steps 3.1 and 3.2 left unused. Verify with `pnpm run lint` and `pnpm run typecheck`.
+- [x] 3.1 Rewrite `startCommand` to call `resolveLaunchRecord`, write `<session>.launch.json`, compute the artifact directory (design D5) and call `buildPiLaunch` with the `external` kind. Remove the `.prompt.md` and `.role.md` writes and the prompt argument on the pane line. Update `test/cli.test.ts` for the new prompt path, the record file, the `@pane_session_id` path and the fallback path. Verify that the "Task prompt location", "Parent session id" and "Per-child launch spec" scenarios have passing tests.
+- [x] 3.2 Rewrite `resumeCommand` to read the record, rebuild the spec with `resume.message`, write it over `--launch` and run it (design D7). Refuse a spec without a record with exit 1. Remove the `.resume.md` write. Update `test/cli.test.ts` for the resume scenarios, the close grace and the refusal. Verify that `pnpm test` passes.
+- [x] 3.3 Remove the code in `cli.ts` that steps 3.1 and 3.2 left unused. Verify with `pnpm run lint` and `pnpm run typecheck`.
+- [x] 3.4 Make `pruneScratch` cover the `<scratch>/artifacts/<id>/context` and `<scratch>/artifacts/<id>/pmux-resume` prompt files that design D5 introduced (correction from the U4 review: the top-level prune left them behind, so scratch grew without bound). Verify with `node --test test/prune.test.ts`.
 
 ## 4. Documentation
 
@@ -24,7 +25,7 @@
 ## 5. Integration
 
 - [ ] 5.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck`, `pnpm test` and `openspec validate unify-launch-builder --strict`. Verify that all pass.
-- [ ] 5.2 Make sure that the prompt path from a `start` test matches the tmux-agent-sidebar `parse_pmux_task` shape: the last four segments are `artifacts/<id>/context/<name>-<19-char timestamp>.md`. Verify with a test assertion on the path.
+- [x] 5.2 Make sure that the prompt path from a `start` test matches the tmux-agent-sidebar `parse_pmux_task` shape: the last four segments are `artifacts/<id>/context/<name>-<19-char timestamp>.md`. Verify with a test assertion on the path.
 
 ## Workflow follow-up
 
