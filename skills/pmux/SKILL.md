@@ -166,8 +166,9 @@ your pane.
    `wait` blocks until `<session>.exit` appears (default timeout 600 s). On
    success it prints one JSON line and exits 0:
    `{"reason":"done","exitCode":0,"sidecar":"/abs/path/<session>.exit"}`.
-   `reason` is one of `done`, `handoff`, `ping`, `error`; a wrapper-written
-   error sidecar carries `"errorSource":"wrapper"`. A timeout prints
+   `reason` is one of `done`, `handoff`, `ping`, `error`; a sidecar the
+   wrapper wrote itself carries `"source":"wrapper"`, printed in the wait
+   JSON as `"errorSource":"wrapper"`. A timeout prints
    `{"sidecar":null}` and exits 2 (a child may simply still be working —
    wait again, or nudge it); a usage error exits 1 and prints nothing on
    stdout. `wait` never deletes the sidecar, and neither should you: the
@@ -192,10 +193,12 @@ your pane.
      (`handoff.message`). The pane closes itself after the close grace,
      like a `done` pane. Do NOT resume that session: start a NEW child with
      `start` and put the handoff text in its brief.
-   - `error` → provider failure — auto-retry exhausted, no report was sent.
-     The pane stays open showing `__SUBAGENT_DONE_<n>__`; read the last
-     assistant message with `last-message --session <session>`, then retry
-     or resume, and close the pane once you are done with it.
+   - `error` → two causes. The JSON carries `"errorSource":"wrapper"` when
+     the wrapper wrote the sidecar: the child crashed. Otherwise it is a
+     provider failure — auto-retry exhausted. No report was sent either
+     way. The pane stays open showing `__SUBAGENT_DONE_<n>__`; read the
+     last assistant message with `last-message --session <session>`, then
+     retry or resume, and close the pane once you are done with it.
    - `ping` → the child asked a question with `caller_ping` instead of
      sending a report. The question is in the JSON (`ping.message`) and in
      the wake-up text the wrapper sent you. Answer it with a `resume`
@@ -229,8 +232,9 @@ via `start`.
 ## While it runs / after
 
 - A follow-up (a recheck, or the answer to the child's question) always
-  runs in a **new** pane: `rm` the child's `.exit`, write the follow-up to
-  a prompt file, and run:
+  runs in a **new** pane: write the follow-up to a prompt file and run
+  (`resume` clears the stale `.exit` sidecar of the session it relaunches,
+  so there is nothing to remove by hand):
   ```bash
   node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child>]
   ```
