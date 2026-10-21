@@ -8,6 +8,7 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 
 /** Record version written by `writeLaunchRecord`; readers reject others. */
 export const LAUNCH_RECORD_VERSION = 1;
@@ -26,6 +27,8 @@ export interface LaunchRecord {
   tools?: string;
   rolePrompt?: string;
   systemPromptMode?: "append" | "replace";
+  /** The role's `surface:`, when the role set a valid one. Never the per-call value. */
+  surface?: SurfacePlacement;
   denyTools: string[];
   autoExit: boolean;
   interactive: boolean;
@@ -91,6 +94,10 @@ export function validateLaunchRecord(data: unknown): LaunchRecord {
   const rolePrompt = optionalString(record.rolePrompt, "rolePrompt");
   const claudeSessionId = optionalString(record.claudeSessionId, "claudeSessionId");
 
+  // The stored surface is parsed, not validated: an unknown value is dropped
+  // and does not make the file invalid, matching the role key's treatment.
+  const surface = parseSurfacePlacement(record.surface);
+
   return {
     version: LAUNCH_RECORD_VERSION,
     backend: record.backend,
@@ -105,6 +112,7 @@ export function validateLaunchRecord(data: unknown): LaunchRecord {
     ...(tools !== undefined ? { tools } : {}),
     ...(rolePrompt !== undefined ? { rolePrompt } : {}),
     ...(systemPromptMode !== undefined ? { systemPromptMode } : {}),
+    ...(surface !== undefined ? { surface } : {}),
     ...(claudeSessionId !== undefined ? { claudeSessionId } : {}),
   };
 }

@@ -322,7 +322,6 @@ describe("launch record", () => {
       const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
       for (const key of [
         "id",
-        "surface",
         "task",
         "activityFile",
         "rosterFile",
@@ -342,7 +341,7 @@ describe("supervisor launch", () => {
       const running = await h.supervisor.spawn(
         { name: "Scout", task: "Fix the login bug", model: "test-model" },
         env.ctx,
-        { placement: "pane" },
+        { fallback: "pane" },
       );
 
       const launchPath = running.launchScriptFile as string;
@@ -561,6 +560,87 @@ function writeRecord(sessionPath: string, overrides: Partial<LaunchRecord> = {})
   return record;
 }
 
+/** The global agent dir the supervisor reads roles from in these tests. */
+function agentsDir(env: TestEnv): string {
+  return join(env.dir, "agent", "agents");
+}
+
+describe("surface precedence", () => {
+  it("spawns a floating role as a float and records the role's surface", async () => {
+    await withHarness(async (h, env) => {
+      writeAgentFile(agentsDir(env), "float-role", "surface: float", "You float.");
+
+      const running = await h.supervisor.spawn(
+        { name: "Reviewer", task: "review it", agent: "float-role" },
+        env.ctx,
+      );
+
+      assert.deepEqual(h.surfaces, [{ name: "Reviewer", placement: "float" }]);
+      const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
+      assert.equal(record?.surface, "float");
+    });
+  });
+
+  it("lets the per-call pane beat the role's float", async () => {
+    await withHarness(async (h, env) => {
+      writeAgentFile(agentsDir(env), "float-role", "surface: float", "You float.");
+
+      const running = await h.supervisor.spawn(
+        { name: "Reviewer", task: "review it", agent: "float-role" },
+        env.ctx,
+        { callSurface: "pane" },
+      );
+
+      assert.deepEqual(h.surfaces, [{ name: "Reviewer", placement: "pane" }]);
+      // The record keeps the role's value, never the per-call one.
+      const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
+      assert.equal(record?.surface, "float");
+    });
+  });
+
+  it("lets the role's pane beat a tab default", async () => {
+    await withHarness(async (h, env) => {
+      writeAgentFile(agentsDir(env), "pane-role", "surface: pane", "You split.");
+
+      await h.supervisor.spawn({ name: "Worker", task: "build it", agent: "pane-role" }, env.ctx, {
+        fallback: "tab",
+      });
+
+      assert.deepEqual(h.surfaces, [{ name: "Worker", placement: "pane" }]);
+    });
+  });
+
+  it("falls back to the default when the role's surface value is invalid", async () => {
+    await withHarness(async (h, env) => {
+      writeAgentFile(agentsDir(env), "odd-role", "surface: window", "You are odd.");
+
+      const running = await h.supervisor.spawn(
+        { name: "Worker", task: "build it", agent: "odd-role" },
+        env.ctx,
+        { fallback: "tab" },
+      );
+
+      assert.deepEqual(h.surfaces, [{ name: "Worker", placement: "tab" }]);
+      const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
+      assert.ok(record);
+      assert.equal("surface" in record, false);
+    });
+  });
+
+  it("floats an ad-hoc call surface and records no surface", async () => {
+    await withHarness(async (h, env) => {
+      const running = await h.supervisor.spawn({ name: "Scout", task: "look around" }, env.ctx, {
+        callSurface: "float",
+      });
+
+      assert.deepEqual(h.surfaces, [{ name: "Scout", placement: "float" }]);
+      const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
+      assert.ok(record);
+      assert.equal("surface" in record, false);
+    });
+  });
+});
+
 describe("supervisor resume", () => {
   it("restores the role configuration from the launch record", async () => {
     await withHarness(async (h, env) => {
@@ -576,7 +656,7 @@ describe("supervisor resume", () => {
       );
 
       // The pane is named after the record, not a resume default.
-      assert.deepEqual(h.surfaces, [{ name: "Worker", placement: undefined }]);
+      assert.deepEqual(h.surfaces, [{ name: "Worker", placement: "pane" }]);
       assert.equal(h.runs.length, 1);
       assert.equal(result.content[0].text, 'Session "Worker" resumed.');
       assert.equal(result.details.name, "Worker");
@@ -611,6 +691,39 @@ describe("supervisor resume", () => {
       assert.ok(prompt.indexOf("You can message") < prompt.indexOf("Continue the work"));
 
       assert.equal(h.supervisor.running()[0].interactive, false);
+    });
+  });
+
+  it("restores the role's float surface, and lets the call beat it", async () => {
+    await withHarness(async (h, env) => {
+      const sessionPath = join(env.dir, "child.jsonl");
+      writePiSession(sessionPath);
+      writeRecord(sessionPath, { surface: "float" });
+
+      await h.supervisor.resume({ sessionPath, message: "Continue the work" }, env.ctx);
+      await h.supervisor.resume({ sessionPath, message: "And again" }, env.ctx, {
+        callSurface: "pane",
+      });
+
+      // The record's surface applies when the call gives none; the call wins.
+      assert.deepEqual(h.surfaces, [
+        { name: "Worker", placement: "float" },
+        { name: "Worker", placement: "pane" },
+      ]);
+    });
+  });
+
+  it("uses the configured default when the record holds no surface", async () => {
+    await withHarness(async (h, env) => {
+      const sessionPath = join(env.dir, "child.jsonl");
+      writePiSession(sessionPath);
+      writeRecord(sessionPath);
+
+      await h.supervisor.resume({ sessionPath, message: "Continue the work" }, env.ctx, {
+        fallback: "tab",
+      });
+
+      assert.deepEqual(h.surfaces, [{ name: "Worker", placement: "tab" }]);
     });
   });
 
@@ -692,7 +805,7 @@ describe("supervisor resume", () => {
         env.ctx,
       );
 
-      assert.deepEqual(h.surfaces, [{ name: "Resume", placement: undefined }]);
+      assert.deepEqual(h.surfaces, [{ name: "Resume", placement: "pane" }]);
       assert.equal(result.details.name, "Resume");
       assert.match(result.content[0].text, /No launch record was found/);
       assert.match(result.content[0].text, /role configuration was not restored/);
@@ -712,7 +825,7 @@ describe("supervisor resume", () => {
 
       const result = await h.supervisor.resume({ sessionPath, autoExit: false }, env.ctx);
 
-      assert.deepEqual(h.surfaces, [{ name: "Resume", placement: undefined }]);
+      assert.deepEqual(h.surfaces, [{ name: "Resume", placement: "pane" }]);
       assert.match(result.content[0].text, /No launch record was found/);
       assert.match(result.content[0].text, /role configuration was not restored/);
 
@@ -748,7 +861,7 @@ describe("supervisor resume", () => {
 
       assert.equal(result.details.status, "started");
       assert.equal(result.details.name, "Worker");
-      assert.deepEqual(h.surfaces, [{ name: "Worker", placement: undefined }]);
+      assert.deepEqual(h.surfaces, [{ name: "Worker", placement: "pane" }]);
       // The pi-style session file is not required and never created.
       assert.equal(existsSync(sessionPath), false);
 

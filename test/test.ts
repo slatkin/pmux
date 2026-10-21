@@ -1230,18 +1230,15 @@ describe("surface placement resolution", () => {
     assert.match(subagentsModule.resolveModeHint(false), /call the pmux_done tool/);
     assert.match(subagentsModule.resolveModeHint(undefined), /call the pmux_done tool/);
   });
-  it("prefers the tool param over the configured default and ignores invalid values", () => {
+  it("narrows the in-memory default to the SurfaceDefault values", () => {
+    // `float` is not a compile-time member of SurfaceDefault; at runtime the
+    // stored default only ever comes from parseSurfaceDefault or setSurfaceDefault.
     const saved = subagentsModule.getSurfaceDefault();
     try {
       subagentsModule.setSurfaceDefault("tab");
-      assert.equal(subagentsModule.resolveSurfacePlacement(undefined), "tab");
-      assert.equal(subagentsModule.resolveSurfacePlacement("down"), "pane");
-      assert.equal(subagentsModule.resolveSurfacePlacement("right"), "pane");
-      assert.equal(subagentsModule.resolveSurfacePlacement("pane"), "pane");
-
+      assert.equal(subagentsModule.getSurfaceDefault(), "tab");
       subagentsModule.setSurfaceDefault("pane");
-      assert.equal(subagentsModule.resolveSurfacePlacement("junk"), "pane");
-      assert.equal(subagentsModule.resolveSurfacePlacement("tab"), "tab");
+      assert.equal(subagentsModule.getSurfaceDefault(), "pane");
     } finally {
       subagentsModule.setSurfaceDefault(saved);
     }
@@ -2235,6 +2232,33 @@ describe("pmux-surface command", () => {
     });
   });
 
+  it("leaves the default and config.json unchanged for a float argument", () => {
+    withTempDir((dir) => {
+      const configPath = join(dir, "config.json");
+      writeFileSync(configPath, JSON.stringify({ status: { enabled: false }, surface: "tab" }));
+      (subagentsModule as any).__surfaceTest__.setConfigPath(configPath);
+      const saved = subagentsModule.getSurfaceDefault();
+      try {
+        const { command, notifications, ctx } = loadCommand();
+        command.handler("float", ctx);
+
+        assert.equal(subagentsModule.getSurfaceDefault(), saved);
+        assert.equal(notifications[0].level, "warning");
+        assert.match(
+          notifications[0].message,
+          /Subagent surface: (pane|tab) \(accepted: pane, tab\)/,
+        );
+        assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+          status: { enabled: false },
+          surface: "tab",
+        });
+      } finally {
+        (subagentsModule as any).__surfaceTest__.setConfigPath(undefined);
+        subagentsModule.setSurfaceDefault(saved);
+      }
+    });
+  });
+
   it("keeps the default and explains accepted values on an invalid argument", () => {
     const saved = subagentsModule.getSurfaceDefault();
     const { command, notifications, ctx } = loadCommand();
@@ -2260,7 +2284,11 @@ describe("tool registration", () => {
       const surface = tool.parameters.properties.surface;
       assert.ok(surface, `${toolName} should accept surface`);
       const values = surface.anyOf.map((option: { const?: string }) => option.const);
-      assert.deepEqual(values.sort(), ["pane", "tab"]);
+      assert.deepEqual(values.sort(), ["float", "pane", "tab"]);
+      // The description offers float and the role fallback.
+      assert.match(surface.description, /float/);
+      assert.match(surface.description, /role's surface/);
+      assert.match(surface.description, /top right/);
       assert.doesNotMatch(tool.description, /\bright\b|\bdown\b/);
       assert.doesNotMatch(tool.promptSnippet, /\bright\b|\bdown\b/);
     }
