@@ -21,7 +21,7 @@ Precondition: `2026-10-20-role-surface-float` is applied and archived. Start fro
 
 ## 4. Docs
 
-- [ ] 4.1 In `docs/guide.md`, remove the `surface` rows from the `pmux_spawn` and `pmux_resume` parameter tables, remove `[--surface ...]` from the skill usage lines and the `--surface` explanation paragraph, and rewrite the precedence section to the two sources (role frontmatter, then `config.json`).
-- [ ] 4.2 In `skills/pmux/SKILL.md`, remove `[--surface pane|tab|float]` from the `start` and `resume` command lines and the `--surface` explanation sentences.
-- [ ] 4.3 Check `README.md` and `agents/*.md` for per-call surface wording; the README mentions only the role `surface:` preference and needs no change unless the wording implies a call-level override.
-- [ ] 4.4 Run `openspec validate 2026-10-21-drop-call-surface --strict`.
+- [x] 4.1 In `docs/guide.md`, remove the `surface` rows from the `pmux_spawn` and `pmux_resume` parameter tables, remove `[--surface ...]` from the skill usage lines and the `--surface` explanation paragraph, and rewrite the precedence section to the two sources (role frontmatter, then `config.json`).
+- [x] 4.2 In `skills/pmux/SKILL.md`, remove `[--surface pane|tab|float]` from the `start` and `resume` command lines and the `--surface` explanation sentences.
+- [x] 4.3 Check `README.md` and `agents/*.md` for per-call surface wording; the README mentions only the role `surface:` preference and needs no change unless the wording implies a call-level override.
+- [x] 4.4 Run `openspec validate 2026-10-21-drop-call-surface --strict`.
