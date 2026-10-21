@@ -86,7 +86,7 @@ Install the `pmux` skill first (see the [README](../README.md#external-orchestra
 The skill launcher `launch.ts` prepares everything outside the child pane. It finds the child extension, resolves the role, appends the parent-contact footer to the brief, splits and names a new pane, and writes the launch spec. A launch spec is a JSON file that starts one child. Run it with `node`:
 
 ```bash
-node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>]
+node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--report last|send]
 ```
 
 On success it prints JSON with the pane id, the session file, and the launch-spec path. A follow-up always runs in a new pane from the same launch spec:
@@ -99,7 +99,7 @@ Placement has two sources: the role's `surface:` frontmatter applies when it nam
 
 For the report cross-check, run `node <skill-dir>/launch.ts last-message --session <file>`. It prints the last assistant message of the session, or `(no assistant message)`.
 
-Completion signal: a child that finishes, pings, or errors writes its status to `<session>.status` before it exits — `done`, or `blocked` with the ping question or error text as the message. Wait for the status with the CLI's `wait` command. Do not poll the pane:
+Completion signal: a child that finishes, pings, or errors writes its status to `<session>.status` before it exits — `done`, or `blocked` with the ping question or error text as the message. In the default `last` mode, wait for the status with the CLI's `wait` command. Do not poll the pane:
 
 ```bash
 node <skill-dir>/launch.ts wait --session <file> --status done,blocked --timeout <seconds>
@@ -108,6 +108,8 @@ node <skill-dir>/launch.ts wait --session <file> --status done,blocked --timeout
 The command polls the status file at a fixed interval; a missing file counts as no status yet. It exits 0 when the status matches, and prints the matched status line on stdout. It exits 2 when the timeout passes first, printing the last content it saw (or `{"status":null}` when there was none) on stdout and an error that names that status on stderr. It exits 1 on a usage error. `--status` is a comma-separated list of `working`, `idle`, `done` and `blocked`, and defaults to `done,blocked`; `--timeout` defaults to 600 seconds.
 
 Read the `<session>.exit` sidecar after every wait: it says whether the child finished (`done`), handed off (`handoff`), pinged (`ping`) or failed (`error`). The status file is the wake-up signal; the `.exit` sidecar stays the authoritative lifecycle record.
+
+A child started with `--report send` is different: it types its report into your pane, and you wait for its `.exit` sidecar with `node <skill-dir>/launch.ts wait --session <file> --signal sidecar [--timeout <seconds>]`. That mode is documented in the skill's "External orchestrators (Claude Code)" section (`skills/pmux/SKILL.md`).
 
 Close-on-done: after pi exits, the run wrapper closes its own pane only when the session `.exit` sidecar holds `done` or `handoff`. It first waits a grace period of 5000 ms by default. Set it per launch with `start --close-grace-ms <n>`. `0` closes at once. The delay lets a blocked `wait` in the orchestrator observe the terminal status before the pane goes away. A provider error, a `caller_ping`, or a crash leaves the pane open with the `__SUBAGENT_DONE_<n>__` sentinel visible, so you can inspect the failure. Close those panes yourself when done with them.
 
@@ -293,7 +295,7 @@ Reachable targets: exactly these three, nothing else:
 
 Grandchildren, grandparents, finished children, and unrelated agents are not reachable. If you message a finished child, the tool returns an error that lists the reachable targets. Use `pmux_resume` for a finished session. If a name is ambiguous, pass the exact subagent id.
 
-`parent` is reachable only when a pi parent exists. A child that the pmux skill launcher started for an external orchestrator (Claude Code) carries `PI_PMUX_EXTERNAL_PARENT` in its env: no pi parent reads its message file, so `parent` is not in its reachable-target list, and nothing is delivered. Sending to `parent` returns an error that says the parent is an external orchestrator that does not read subagent messages, names the child's last assistant message as the report, and names `caller_ping` as the way to ask a question. A child of a pi parent still reaches `parent` as before.
+`parent` is reachable only when a pi parent exists. A child that the pmux skill launcher started for an external orchestrator (Claude Code) carries `PI_PMUX_EXTERNAL_PARENT` in its env: no pi parent reads its message file, so `parent` is not in its reachable-target list, and nothing is delivered. Sending to `parent` returns an error that says the parent is an external orchestrator that does not read subagent messages, tells the child to report the way the parent-contact footer at the end of its brief says, and names `caller_ping` as the way to ask a question. A child of a pi parent still reaches `parent` as before.
 
 Delivery uses two paths. Messages to children and siblings are typed into the target's tmux pane as literal input (`tmux send-keys -l`), followed by an Enter keypress. They appear in the target pane as input with a sender header (for example `[subagent message from Worker (sibling)]`). tmux cannot tell whether the target is ready for input, so the text is typed as it is: a target on an approval screen receives it as typed input. Messages to `parent` append to the child message file when a pi parent exists. The parent injects them as a steering message. They never touch a draft that the user types in the parent composer.
 
