@@ -155,32 +155,71 @@ interface PaneRow {
 }
 
 /**
- * Parse the placement listing. A row carries 8 fields (`@pmux_parent` unset
- * prints as an empty trailing field) or 9; malformed rows are skipped.
+ * Parse the placement listing. A row carries 9 fields, or 10 when
+ * `@pmux_parent` is set: `trim` drops the empty field an unset option prints.
+ * Malformed rows are skipped.
  */
 function parsePaneRows(out: string): PaneRow[] {
   const rows: PaneRow[] = [];
   for (const line of out.split("\n")) {
     const fields = line.trim().split(/\s+/);
-    if (fields.length < 8 || !fields[0].startsWith("%")) continue;
+    if (fields.length < 9 || !fields[0].startsWith("%")) continue;
     const numbers = fields.slice(1, 8).map(Number);
     if (numbers.some((value) => !Number.isFinite(value))) continue;
     const num = Number(fields[0].slice(1));
+    const [width, height, floating, left, top, windowWidth, windowHeight] = numbers;
     rows.push({
       id: fields[0],
       num: Number.isFinite(num) ? num : -1,
-      width: numbers[0],
-      height: numbers[1],
-      floating: numbers[2],
-      left: numbers[3],
-      top: numbers[4],
-      windowWidth: numbers[5],
-      windowHeight: numbers[6],
-      borderLines: fields[8] ?? "",
+      width,
+      height,
+      floating,
+      left,
+      top,
+      windowWidth,
+      windowHeight,
+      borderLines: fields[8],
       parent: fields[9] ?? "",
     });
   }
   return rows;
+}
+
+/** The placement listing of a caller's window, parsed into rows. */
+function listPlacementRows(caller: string): PaneRow[] {
+  return parsePaneRows(tmux(["list-panes", "-t", caller, "-F", PLACEMENT_FORMAT]));
+}
+
+/** The row with the highest pane number, or `undefined` when there is none. */
+function newestRow(rows: PaneRow[]): PaneRow | undefined {
+  return rows.reduce<PaneRow | undefined>(
+    (best, row) => (best === undefined || row.num > best.num ? row : best),
+    undefined,
+  );
+}
+
+/**
+ * The origin of a new float of `width` by `height` in a window of
+ * `windowWidth` by `windowHeight`. The first float sits two columns left of
+ * the right edge, its top border on row 1. The next one cascades one row down
+ * and two columns left from the newest pmux float, and wraps back to the first
+ * position when it would leave the window.
+ */
+function floatOrigin(
+  windowWidth: number,
+  windowHeight: number,
+  width: number,
+  height: number,
+  newest: PaneRow | undefined,
+): { x: number; y: number } {
+  const first = { x: windowWidth - width - 2, y: 1 };
+  if (newest === undefined) return first;
+  // With a border the outer corner sits one cell up and left of
+  // `pane_left`/`pane_top`; with `none` the content is the outer box.
+  const border = newest.borderLines === "none" ? 0 : 1;
+  const x = newest.left - border - 2;
+  const y = newest.top - border + 1;
+  return x >= 0 && y + height <= windowHeight ? { x, y } : first;
 }
 
 /** Side by side when the target is at least twice as wide as it is tall. */
@@ -191,17 +230,17 @@ function axisDirection(row: PaneRow): SplitDirection {
 /**
  * Create a new pane for a subagent and return its id.
  *
- * One `list-panes` call on the caller's window feeds every branch. `pane`
- * splits a target pane in that window without taking focus (`-d`): the target
- * is the newest living tiled pane this caller created there (tracked with the
- * `@pmux_parent` pane option), or the caller's own pane when there is none;
- * the axis comes from the target's shape. `float` opens a floating pane of
- * half the window's width and height (border included) with its top border on
- * row 1 and two columns of space to the window's right edge; when a pmux
- * float is already open, the new one cascades one row down and two columns
- * left from the newest of them, wrapping back to the first-float position
- * when it would leave the window. `tab` opens a new window in the caller's
- * session and restores focus to the caller's window afterwards.
+ * The `float` and `pane` branches each read one `list-panes` listing of the
+ * caller's window. `pane` splits a target pane in that window without taking
+ * focus (`-d`): the target is the newest living tiled pane this caller created
+ * there (tracked with the `@pmux_parent` pane option), or the caller's own pane
+ * when there is none; the axis comes from the target's shape. `float` opens a
+ * floating pane of half the window's width and height (border included) with
+ * its top border on row 1 and two columns of space to the window's right edge;
+ * when a pmux float is already open, the new one cascades one row down and two
+ * columns left from the newest of them, wrapping back to the first-float
+ * position when it would leave the window. `tab` opens a new window in the
+ * caller's session and restores focus to the caller's window afterwards.
  */
 export function createSurface(
   name: string,
@@ -228,41 +267,20 @@ export function createSurface(
     // it; without a row there is nothing to anchor on, so the spawn fails.
     let rows: PaneRow[];
     try {
-      rows = parsePaneRows(tmux(["list-panes", "-t", caller, "-F", PLACEMENT_FORMAT]));
+      rows = listPlacementRows(caller);
     } catch (error) {
       throw new Error("Cannot place a float: the window listing failed.", { cause: error });
     }
     if (rows.length === 0) {
       throw new Error(`Cannot place a float: no panes listed in ${caller}'s window.`);
     }
-    const windowWidth = rows[0].windowWidth;
-    const windowHeight = rows[0].windowHeight;
+    const { windowWidth, windowHeight } = rows[0];
     // Half the window, rounded down, border included.
     const width = Math.floor(windowWidth / 2);
     const height = Math.floor(windowHeight / 2);
-    // The first-float position: two columns of space to the right edge, the
-    // top border on row 1.
-    let x = windowWidth - width - 2;
-    let y = 1;
     // The newest pmux float of the window, from every caller.
-    const newest = rows.reduce<PaneRow | undefined>(
-      (best, row) =>
-        row.floating === 1 && row.parent !== "" && (best === undefined || row.num > best.num)
-          ? row
-          : best,
-      undefined,
-    );
-    if (newest) {
-      // With a border the outer corner sits one cell up and left of
-      // `pane_left`/`pane_top`; with `none` the content is the outer box.
-      const border = newest.borderLines === "none" ? 0 : 1;
-      const nextX = newest.left - border - 2;
-      const nextY = newest.top - border + 1;
-      if (nextX >= 0 && nextY + height <= windowHeight) {
-        x = nextX;
-        y = nextY;
-      }
-    }
+    const newest = newestRow(rows.filter((row) => row.floating === 1 && row.parent !== ""));
+    const { x, y } = floatOrigin(windowWidth, windowHeight, width, height, newest);
     surface = paneIdFrom(
       tmux([
         "new-pane",
@@ -287,17 +305,14 @@ export function createSurface(
     let target = caller;
     let direction: SplitDirection = "right";
     try {
-      const rows = parsePaneRows(tmux(["list-panes", "-t", caller, "-F", PLACEMENT_FORMAT]));
+      const rows = listPlacementRows(caller);
       // A candidate is a living tiled pane this caller created in this window;
       // the caller's own row carries its own parent (or none) and never
       // matches.
       const candidates = rows.filter(
         (row) => row.parent === caller && row.id !== caller && row.floating === 0,
       );
-      const newest = candidates.reduce<PaneRow | undefined>(
-        (best, row) => (best === undefined || row.num > best.num ? row : best),
-        undefined,
-      );
+      const newest = newestRow(candidates);
       // The newest child gives both the target and the shape; without one,
       // the caller's own row does — even when the caller itself floats.
       const targetRow = newest ?? rows.find((row) => row.id === caller);

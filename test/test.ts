@@ -1230,19 +1230,6 @@ describe("surface placement resolution", () => {
     assert.match(subagentsModule.resolveModeHint(false), /call the pmux_done tool/);
     assert.match(subagentsModule.resolveModeHint(undefined), /call the pmux_done tool/);
   });
-  it("narrows the in-memory default to the SurfaceDefault values", () => {
-    // `float` is not a compile-time member of SurfaceDefault; at runtime the
-    // stored default only ever comes from parseSurfaceDefault or setSurfaceDefault.
-    const saved = subagentsModule.getSurfaceDefault();
-    try {
-      subagentsModule.setSurfaceDefault("tab");
-      assert.equal(subagentsModule.getSurfaceDefault(), "tab");
-      subagentsModule.setSurfaceDefault("pane");
-      assert.equal(subagentsModule.getSurfaceDefault(), "pane");
-    } finally {
-      subagentsModule.setSurfaceDefault(saved);
-    }
-  });
 });
 
 describe("subagent discovery", () => {
@@ -2177,6 +2164,21 @@ describe("pmux-surface command", () => {
     return { command, notifications, ctx };
   }
 
+  function withSurfaceConfig(config: object, check: (configPath: string) => void) {
+    withTempDir((dir) => {
+      const configPath = join(dir, "config.json");
+      writeFileSync(configPath, JSON.stringify(config));
+      (subagentsModule as any).__surfaceTest__.setConfigPath(configPath);
+      const saved = subagentsModule.getSurfaceDefault();
+      try {
+        check(configPath);
+      } finally {
+        (subagentsModule as any).__surfaceTest__.setConfigPath(undefined);
+        subagentsModule.setSurfaceDefault(saved);
+      }
+    });
+  }
+
   it("shows the current default with no argument", () => {
     const { command, notifications, ctx } = loadCommand();
     command.handler("", ctx);
@@ -2185,77 +2187,51 @@ describe("pmux-surface command", () => {
   });
 
   it("reads the legacy down argument as pane and persists pane", () => {
-    withTempDir((dir) => {
-      const configPath = join(dir, "config.json");
-      writeFileSync(configPath, JSON.stringify({ status: { enabled: false } }));
-      (subagentsModule as any).__surfaceTest__.setConfigPath(configPath);
-      const saved = subagentsModule.getSurfaceDefault();
-      try {
-        const { command, notifications, ctx } = loadCommand();
-        command.handler("down", ctx);
+    withSurfaceConfig({ status: { enabled: false } }, (configPath) => {
+      const { command, notifications, ctx } = loadCommand();
+      command.handler("down", ctx);
 
-        assert.equal(subagentsModule.getSurfaceDefault(), "pane");
-        assert.equal(notifications[0].level, "info");
-        assert.match(notifications[0].message, /set to "pane" \(saved to config\.json\)/);
-        assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
-          status: { enabled: false },
-          surface: "pane",
-        });
-      } finally {
-        (subagentsModule as any).__surfaceTest__.setConfigPath(undefined);
-        subagentsModule.setSurfaceDefault(saved);
-      }
+      assert.equal(subagentsModule.getSurfaceDefault(), "pane");
+      assert.equal(notifications[0].level, "info");
+      assert.match(notifications[0].message, /set to "pane" \(saved to config\.json\)/);
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+        status: { enabled: false },
+        surface: "pane",
+      });
     });
   });
 
   it("sets a valid placement, persists it, and reports the new value", () => {
-    withTempDir((dir) => {
-      const configPath = join(dir, "config.json");
-      writeFileSync(configPath, JSON.stringify({ status: { enabled: false } }));
-      (subagentsModule as any).__surfaceTest__.setConfigPath(configPath);
-      const saved = subagentsModule.getSurfaceDefault();
-      try {
-        const { command, notifications, ctx } = loadCommand();
-        command.handler("tab", ctx);
+    withSurfaceConfig({ status: { enabled: false } }, (configPath) => {
+      const { command, notifications, ctx } = loadCommand();
+      command.handler("tab", ctx);
 
-        assert.equal(subagentsModule.getSurfaceDefault(), "tab");
-        assert.equal(notifications[0].level, "info");
-        assert.match(notifications[0].message, /set to "tab" \(saved to config\.json\)/);
-        assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
-          status: { enabled: false },
-          surface: "tab",
-        });
-      } finally {
-        (subagentsModule as any).__surfaceTest__.setConfigPath(undefined);
-        subagentsModule.setSurfaceDefault(saved);
-      }
+      assert.equal(subagentsModule.getSurfaceDefault(), "tab");
+      assert.equal(notifications[0].level, "info");
+      assert.match(notifications[0].message, /set to "tab" \(saved to config\.json\)/);
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+        status: { enabled: false },
+        surface: "tab",
+      });
     });
   });
 
   it("leaves the default and config.json unchanged for a float argument", () => {
-    withTempDir((dir) => {
-      const configPath = join(dir, "config.json");
-      writeFileSync(configPath, JSON.stringify({ status: { enabled: false }, surface: "tab" }));
-      (subagentsModule as any).__surfaceTest__.setConfigPath(configPath);
+    withSurfaceConfig({ status: { enabled: false }, surface: "tab" }, (configPath) => {
       const saved = subagentsModule.getSurfaceDefault();
-      try {
-        const { command, notifications, ctx } = loadCommand();
-        command.handler("float", ctx);
+      const { command, notifications, ctx } = loadCommand();
+      command.handler("float", ctx);
 
-        assert.equal(subagentsModule.getSurfaceDefault(), saved);
-        assert.equal(notifications[0].level, "warning");
-        assert.match(
-          notifications[0].message,
-          /Subagent surface: (pane|tab) \(accepted: pane, tab\)/,
-        );
-        assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
-          status: { enabled: false },
-          surface: "tab",
-        });
-      } finally {
-        (subagentsModule as any).__surfaceTest__.setConfigPath(undefined);
-        subagentsModule.setSurfaceDefault(saved);
-      }
+      assert.equal(subagentsModule.getSurfaceDefault(), saved);
+      assert.equal(notifications[0].level, "warning");
+      assert.match(
+        notifications[0].message,
+        /Subagent surface: (pane|tab) \(accepted: pane, tab\)/,
+      );
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+        status: { enabled: false },
+        surface: "tab",
+      });
     });
   });
 

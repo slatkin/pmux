@@ -37,7 +37,7 @@ import {
 import { runSpec } from "../pi-extension/pmux/run.ts";
 import { main } from "../pi-extension/pmux/cli.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
-import { placementRow, useTmuxPaneFake } from "./tmux-fakes.ts";
+import { argValue, placementRow, useTmuxPaneFake } from "./tmux-fakes.ts";
 import { main as shimMain } from "../skills/pmux/launch.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
@@ -500,6 +500,8 @@ describe("runSpec close on done", () => {
 
 const REPO_ROOT = resolve(TEST_DIR, "..");
 const CLI = join(REPO_ROOT, "pi-extension", "pmux", "cli.ts");
+// The first float over the default fake window (200x50), its caller at %21.
+const FIRST_FLOAT_CALL = "new-pane -d -t %21 -x 100 -y 25 -X 98 -Y 1 -P -F #{pane_id}";
 
 let workdir = "";
 let paneCalls: string[] = [];
@@ -586,11 +588,6 @@ function writeRole(cwd: string, name: string, frontmatter: string, body: string)
   const dir = join(cwd, ".pi", "agents");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `${name}.md`), `---\n${frontmatter}\n---\n\n${body}\n`);
-}
-
-function argValue(args: string[], flag: string): string | undefined {
-  const index = args.indexOf(flag);
-  return index >= 0 ? args[index + 1] : undefined;
 }
 
 interface StartCase {
@@ -1028,7 +1025,7 @@ describe("cli.ts start", () => {
     // The default fake listing is one tiled caller row in a 200x50 window, so
     // the float is half the window at the top right.
     assert.deepEqual(paneCalls, [
-      "new-pane -d -t %21 -x 100 -y 25 -X 98 -Y 1 -P -F #{pane_id}",
+      FIRST_FLOAT_CALL,
       "select-pane -t %24 -T scout-1",
       `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
       "send-keys -t %24 Enter",
@@ -1053,7 +1050,7 @@ describe("cli.ts start", () => {
     const res = await runStart({ cwd, role: "doer", surface: "float" });
 
     assert.equal(res.code, 0);
-    assert.deepEqual(paneCalls[0], "new-pane -d -t %21 -x 100 -y 25 -X 98 -Y 1 -P -F #{pane_id}");
+    assert.deepEqual(paneCalls[0], FIRST_FLOAT_CALL);
     assert.equal(res.spec.surface, undefined);
   });
 
@@ -1081,7 +1078,7 @@ describe("cli.ts start", () => {
     const res = await runStart({ cwd, role: "crlf-floater" });
 
     assert.equal(res.code, 0);
-    assert.deepEqual(paneCalls[0], "new-pane -d -t %21 -x 100 -y 25 -X 98 -Y 1 -P -F #{pane_id}");
+    assert.deepEqual(paneCalls[0], FIRST_FLOAT_CALL);
     assert.equal(res.spec.surface, "float");
   });
 
@@ -1237,7 +1234,7 @@ describe("cli.ts resume", () => {
     );
     assert.equal(res.code, 0);
     assert.deepEqual(paneCalls, [
-      "new-pane -d -t %21 -x 100 -y 25 -X 98 -Y 1 -P -F #{pane_id}",
+      FIRST_FLOAT_CALL,
       "select-pane -t %24 -T fix-7",
       `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
       "send-keys -t %24 Enter",

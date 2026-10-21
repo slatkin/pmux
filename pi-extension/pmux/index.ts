@@ -189,10 +189,7 @@ const statusConfig = loadStatusConfig();
 // the pane in the caller's window) or "tab" (own workspace tab), never
 // "float" — the SurfaceDefault type makes that a compile-time rule. Loaded
 // from the extension config (~/.pi/agent/extensions/pmux/config.json) and
-// changeable at runtime via /pmux-surface. This module no longer resolves the
-// placement: it parses the per-call `surface` value (invalid becomes absent)
-// and passes it with this default to the supervisor, which resolves
-// call > role > default after the role is loaded.
+// changeable at runtime via /pmux-surface.
 let surfaceDefault: SurfaceDefault = loadSurfaceConfig();
 
 export function getSurfaceDefault(): SurfaceDefault {

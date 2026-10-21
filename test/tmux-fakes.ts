@@ -57,6 +57,11 @@ export function placementRow(
   return `${id} ${width} ${height} ${floating} ${left} ${top} ${windowWidth} ${windowHeight} ${border} ${parent}`;
 }
 
+export function argValue(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
 /**
  * Install the standard fake and return the recorded calls. Reset `lines`
  * between tests; uninstall with `__setTmuxExecForTests__(null)`.

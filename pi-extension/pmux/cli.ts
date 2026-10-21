@@ -240,8 +240,7 @@ function startCommand(
     const rolePath = rolePaths.find(isFile) ?? rolePaths[0];
     throw new Error(`role '${role}' has an empty model (${rolePath})`);
   }
-  // The role is known only here, so the placement resolves here: the flag
-  // wins, then the role's `surface:`, then the configured default.
+  // The role is known only here, so the placement resolves here.
   const placement = resolvePlacement(
     surfaceFlag,
     definition.surface,
@@ -339,8 +338,7 @@ function resumeCommand(
   assertHostEnv(env);
 
   const spec = readLaunchSpec(launchPath);
-  // The placement resolves here too: the flag wins, then the role surface
-  // stored in the spec, then the configured default.
+  // The placement resolves here too, from the role surface stored in the spec.
   const placement = resolvePlacement(surfaceFlag, spec.surface, loadSurfaceConfig(deps.configPath));
   // A resume reuses the spec unchanged, so its session and close grace carry
   // over; only the prompt and the pane are new.

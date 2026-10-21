@@ -24,7 +24,7 @@ import {
   sendEscape,
   splitPane,
 } from "../pi-extension/pmux/tmux.ts";
-import { placementRow } from "./tmux-fakes.ts";
+import { argValue, placementRow } from "./tmux-fakes.ts";
 
 /** Record every tmux call and answer with `reply`. */
 function stub(reply: (args: string[]) => string): string[][] {
@@ -200,23 +200,8 @@ describe("tmux backend", () => {
       placementRow("%12", 98, 23, "%3", { floating: 1, left: 99, top: 2 }),
     ]);
     createSurface("Scout", "float", "%3");
-    assert.deepEqual(calls[1], [
-      "new-pane",
-      "-d",
-      "-t",
-      "%3",
-      "-x",
-      "100",
-      "-y",
-      "25",
-      "-X",
-      "96",
-      "-Y",
-      "2",
-      "-P",
-      "-F",
-      "#{pane_id}",
-    ]);
+    assert.equal(argValue(calls[1], "-X"), "96");
+    assert.equal(argValue(calls[1], "-Y"), "2");
   });
 
   it("cascades from the remaining newest float when the newest was closed", () => {
@@ -228,8 +213,8 @@ describe("tmux backend", () => {
       placementRow("%10", 98, 23, "%3", { floating: 1, left: 55, top: 7 }),
     ]);
     createSurface("Scout", "float", "%3");
-    assert.equal(calls[1][9], "52");
-    assert.equal(calls[1][11], "7");
+    assert.equal(argValue(calls[1], "-X"), "52");
+    assert.equal(argValue(calls[1], "-Y"), "7");
   });
 
   it("cascades from a moved float at its current position", () => {
@@ -238,8 +223,8 @@ describe("tmux backend", () => {
       placementRow("%12", 98, 23, "%3", { floating: 1, left: 41, top: 11 }),
     ]);
     createSurface("Scout", "float", "%3");
-    assert.equal(calls[1][9], "38");
-    assert.equal(calls[1][11], "11");
+    assert.equal(argValue(calls[1], "-X"), "38");
+    assert.equal(argValue(calls[1], "-Y"), "11");
   });
 
   it("takes a borderless float's pane_left and pane_top as the outer corner", () => {
@@ -248,8 +233,8 @@ describe("tmux backend", () => {
       placementRow("%12", 100, 25, "%3", { floating: 1, left: 41, top: 11, border: "none" }),
     ]);
     createSurface("Scout", "float", "%3");
-    assert.equal(calls[1][9], "39");
-    assert.equal(calls[1][11], "12");
+    assert.equal(argValue(calls[1], "-X"), "39");
+    assert.equal(argValue(calls[1], "-Y"), "12");
   });
 
   it("wraps to the first-float position when the cascade leaves the window", () => {
@@ -259,8 +244,8 @@ describe("tmux backend", () => {
       placementRow("%12", 98, 23, "%3", { floating: 1, left: 99, top: 30 }),
     ]);
     createSurface("Scout", "float", "%3");
-    assert.equal(bottom[1][9], "98");
-    assert.equal(bottom[1][11], "1");
+    assert.equal(argValue(bottom[1], "-X"), "98");
+    assert.equal(argValue(bottom[1], "-Y"), "1");
 
     // A next column past the left edge: 2 - 1 - 2 < 0.
     const left = stubPlacement([
@@ -268,8 +253,8 @@ describe("tmux backend", () => {
       placementRow("%12", 98, 23, "%3", { floating: 1, left: 2, top: 2 }),
     ]);
     createSurface("Scout", "float", "%3");
-    assert.equal(left[1][9], "98");
-    assert.equal(left[1][11], "1");
+    assert.equal(argValue(left[1], "-X"), "98");
+    assert.equal(argValue(left[1], "-Y"), "1");
   });
 
   it("ignores a float pmux did not open", () => {
@@ -278,8 +263,8 @@ describe("tmux backend", () => {
       placementRow("%12", 98, 23, "", { floating: 1, left: 99, top: 2 }),
     ]);
     createSurface("Scout", "float", "%3");
-    assert.equal(calls[1][9], "98");
-    assert.equal(calls[1][11], "1");
+    assert.equal(argValue(calls[1], "-X"), "98");
+    assert.equal(argValue(calls[1], "-Y"), "1");
   });
 
   it("cascades from a float another caller opened", () => {
@@ -288,8 +273,8 @@ describe("tmux backend", () => {
       placementRow("%12", 98, 23, "%4", { floating: 1, left: 99, top: 2 }),
     ]);
     createSurface("Scout", "float", "%3");
-    assert.equal(calls[1][9], "96");
-    assert.equal(calls[1][11], "2");
+    assert.equal(argValue(calls[1], "-X"), "96");
+    assert.equal(argValue(calls[1], "-Y"), "2");
   });
 
   it("tags the float with @pmux_parent and names it", () => {

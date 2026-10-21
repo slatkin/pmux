@@ -27,12 +27,7 @@ import {
 } from "./tmux.ts";
 import { exitSidecarPath, removeExitSidecar, type PollResult } from "./exit-sidecar.ts";
 import { removeChildStatus } from "./status-file.ts";
-import {
-  DEFAULT_SURFACE_PLACEMENT,
-  resolvePlacement,
-  type SurfaceDefault,
-  type SurfacePlacement,
-} from "./placement.ts";
+import { resolvePlacement, type SurfaceDefault, type SurfacePlacement } from "./placement.ts";
 import {
   buildSubagentToolAllowlist,
   getAgentConfigDir,
@@ -305,7 +300,7 @@ export interface Supervisor {
   resume(
     params: ResumeParams,
     ctx: SupervisorContext,
-    options?: Pick<SurfaceOptions, "callSurface" | "fallback">,
+    options?: SurfaceOptions,
   ): Promise<ResumeToolResult>;
   /** Send Escape to a running child's current turn. */
   interrupt(
@@ -1642,13 +1637,8 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     const backend = backendFor(agentDefs);
     const rolePrompt = backend.resolveRolePrompt(params, agentDefs);
 
-    // Resolve the placement after the role is loaded: the call's value wins,
-    // then the role's `surface:`, then the configured default.
-    const placement = resolvePlacement(
-      options?.callSurface,
-      agentDefs?.surface,
-      options?.fallback ?? DEFAULT_SURFACE_PLACEMENT,
-    );
+    // Resolve the placement after the role is loaded: its `surface:` is one input.
+    const placement = resolvePlacement(options?.callSurface, agentDefs?.surface, options?.fallback);
 
     // Resolve the agent defaults once and keep them in the launch record, so a
     // later resume starts the same role without reading the agent file again.
@@ -2013,7 +2003,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       const placement = resolvePlacement(
         options?.callSurface,
         storedRecord?.surface,
-        options?.fallback ?? DEFAULT_SURFACE_PLACEMENT,
+        options?.fallback,
       );
       const surface = deps.pmux.createSurface(name, placement);
       await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
