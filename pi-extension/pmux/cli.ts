@@ -8,16 +8,9 @@
  * arrays and typed modules — no shell anywhere.
  */
 import { randomBytes } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
   autoPrune,
@@ -58,13 +51,8 @@ import {
   type ChildStatus,
 } from "./status-file.ts";
 import { slugifyName } from "./slug.ts";
-import {
-  SUBAGENTS_CLI_PATH,
-  buildPiLaunch,
-  reportFooter,
-  resolveLaunchRecord,
-} from "./launch-build.ts";
-import { getLaunchRecordFile, writeLaunchRecord } from "./launch-record.ts";
+import { SUBAGENTS_CLI_PATH, buildPiLaunch, resolveLaunchRecord } from "./launch-build.ts";
+import { getLaunchRecordFile, readLaunchRecord, writeLaunchRecord } from "./launch-record.ts";
 
 /** Pane-side entry point; the pane runs this file with `node`. */
 const CLI_PATH = SUBAGENTS_CLI_PATH;
@@ -324,42 +312,89 @@ function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): num
   return 0;
 }
 
-/** `resume`: run an existing launch spec in a new pane with a new prompt. */
+/** `resume`: rebuild the launch spec from its record and run it in a new pane. */
 function resumeCommand(values: CliValues, deps: CliDeps): number {
   const env = deps.env ?? process.env;
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  try {
+    const launchPath = required("--launch", values.launch);
+    const promptPath = required("--prompt", values.prompt);
+    if (!isFile(launchPath)) throw new Error(`launch spec is not a file: ${launchPath}`);
+    if (!isFile(promptPath)) throw new Error(`prompt is not a file: ${promptPath}`);
+    assertHostEnv(env);
 
-  const launchPath = required("--launch", values.launch);
-  const promptPath = required("--prompt", values.prompt);
-  if (!isFile(launchPath)) throw new Error(`launch spec is not a file: ${launchPath}`);
-  if (!isFile(promptPath)) throw new Error(`prompt is not a file: ${promptPath}`);
-  assertHostEnv(env);
+    // The record holds the role values `start` resolved (design D6). A spec
+    // whose session file has no valid record came from an older version, and
+    // only `start` can write the record, so the resume refuses.
+    const spec = readLaunchSpec(launchPath);
+    const record = readLaunchRecord(getLaunchRecordFile(spec.sessionFile));
+    if (record === null) {
+      throw new Error(
+        `no launch record at ${getLaunchRecordFile(spec.sessionFile)}: this launch spec cannot be resumed; run start again`,
+      );
+    }
+    // The external footer names the parent, so the rebuilt spec needs one: a
+    // spec without a parent belongs to a pi parent, whose children resume
+    // through `pmux_resume`.
+    if (spec.parent === undefined) {
+      throw new Error(
+        "the launch spec holds no parent: a child of a pi parent is resumed with pmux_resume",
+      );
+    }
 
-  const spec = readLaunchSpec(launchPath);
-  // The placement resolves here too, from the role surface stored in the spec.
-  const placement = resolvePlacement(spec.surface, loadSurfaceConfig(deps.configPath));
-  // A resume reuses the spec unchanged, so its session and close grace carry
-  // over; only the prompt and the pane are new.
-  // `start` appends the parent-contact footer; a resume must too, or the child
-  // has no instruction to send its report (the orchestrator then never wakes).
-  let sentPrompt = promptPath;
-  if (spec.parent !== undefined) {
-    sentPrompt = `${promptPath}.resume.md`;
-    const footer = reportFooter(spec.parent, spec.report, callerPaneId(env));
-    writeFileSync(sentPrompt, `${readFileSync(promptPath, "utf8")}\n${footer}\n`);
+    // The artifact id is the one `start` used (designs D5 and D7). A record
+    // without the field (a non-external launch) falls back to the caller pane.
+    const scratch = dirname(launchPath);
+    const parentSessionId = record.parentSessionId ?? callerPaneId(env);
+    const artifactDir = join(scratch, "artifacts", parentSessionId);
+
+    // Per-run values are created again for every run, as the pi parent's
+    // resume does: a fresh child id and its own activity file.
+    const id = randomBytes(4).toString("hex");
+    const activityFile = join(scratch, `${scratchBase(record.name, id)}.activity.json`);
+
+    // The placement resolves from the record's role surface, else the
+    // configured default.
+    const placement = resolvePlacement(record.surface, loadSurfaceConfig(deps.configPath));
+
+    // The rebuilt spec (design D7): the same role values, the spec's parent,
+    // report mode and close grace, and the prompt text as the resume message.
+    // The builder writes the prompt file under `artifacts/<id>/pmux-resume/`
+    // and appends the report-mode footer, so the child receives the message
+    // and its report instructions as one artifact.
+    const message = readFileSync(promptPath, "utf8");
+    const rebuilt = buildPiLaunch({
+      record,
+      task: message,
+      localAgentDir: null,
+      artifactDir,
+      parentContact: {
+        kind: "external",
+        parent: spec.parent,
+        callerPane: callerPaneId(env),
+        report: spec.report,
+        closeGraceMs: record.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS,
+      },
+      resume: { message },
+      run: { id, sessionFile: spec.sessionFile, activityFile },
+    });
+    writeLaunchSpec(launchPath, rebuilt);
+
+    // The launch spec carries the session file; the status of the earlier run
+    // must not survive into this one, nor its exit.
+    removeChildStatus(spec.sessionFile);
+    removeExitSidecar(spec.sessionFile);
+
+    // `--name` renames the pane only; the rebuilt spec keeps the record's name.
+    const pane = createSurface(values.name ?? rebuilt.name, placement, callerPaneId(env));
+    runInPane(pane, paneCommandLine(CLI_PATH, launchPath));
+
+    write(JSON.stringify({ pane, launch: launchPath }) + "\n");
+    return 0;
+  } catch (error) {
+    return usageFailure(error, writeErr);
   }
-  const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);
-
-  // The launch spec carries the session file; the status of the earlier run
-  // must not survive into this one, nor its exit.
-  removeChildStatus(spec.sessionFile);
-  removeExitSidecar(spec.sessionFile);
-
-  const pane = createSurface(values.name ?? spec.name, placement, callerPaneId(env));
-  runInPane(pane, paneLine);
-
-  write(JSON.stringify({ pane, launch: launchPath }) + "\n");
-  return 0;
 }
 
 /**

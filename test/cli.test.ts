@@ -1575,40 +1575,108 @@ describe("cli.ts resume", () => {
     return started;
   }
 
-  it("splits a new pane, runs the same spec with the new prompt, and keeps the session and grace", async () => {
-    const started = await startNamedChild();
-    const followup = join(dirname(started.json.launch), "followup.md");
-    writeFileSync(followup, "Follow-up task.\n");
+  interface Resumed extends CliResult {
+    json: { pane: string; launch: string };
+    spec: LaunchSpec;
+    /** The prompt artifact the builder wrote under artifacts/<id>/pmux-resume/. */
+    promptPath: string;
+  }
 
-    const res = await runCli(
-      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
-      tmuxEnv(),
+  /** Resume a started child and return its JSON, rebuilt spec and prompt artifact. */
+  async function runResume(
+    started: Started,
+    options: { prompt?: string; name?: string } = {},
+  ): Promise<Resumed> {
+    const followup = options.prompt ?? join(dirname(started.json.launch), "followup.md");
+    if (options.prompt === undefined) writeFileSync(followup, "Follow-up task.\n");
+    const argv = ["resume", "--launch", started.json.launch, "--prompt", followup];
+    if (options.name !== undefined) argv.push("--name", options.name);
+    const res = await runCli(argv, tmuxEnv());
+    const json = JSON.parse(res.stdout) as Resumed["json"];
+    const spec = readLaunchSpec(json.launch);
+    // The prompt reaches pi as the `@<path>` operand inside the spec args
+    // (design D5); the pane line carries the spec path alone.
+    const promptOperand = spec.args[spec.args.length - 1];
+    assert.ok(
+      typeof promptOperand === "string" && promptOperand.startsWith("@") === true,
+      "expected the prompt operand at the end of the spec args",
     );
-    const json = JSON.parse(res.stdout) as { pane: string; launch: string };
+    const promptPath = promptOperand.slice(1);
+    assert.ok(existsSync(promptPath), `expected the resume prompt at ${promptPath}`);
+    return { ...res, json, spec, promptPath };
+  }
+
+  /** The prompt artifact's path shape: artifacts/<id>/pmux-resume/<name>-<19 chars>.md. */
+  function assertResumePromptPath(promptPath: string, id: string, name: string): void {
+    const segments = resolve(promptPath).split("/");
+    const file = segments[segments.length - 1] ?? "";
+    assert.deepEqual(segments.slice(-4), ["artifacts", id, "pmux-resume", file]);
+    assert.ok(file.startsWith(`${name}-`), `expected the file stem ${name}-…: ${file}`);
+    const timestamp = file.slice(name.length + 1, -3);
+    assert.equal(timestamp.length, 19);
+    assert.match(timestamp, /^[0-9T-]{19}$/);
+  }
+
+  it("rebuilds the spec over --launch, runs it in a new pane, and keeps the session and grace", async () => {
+    const started = await startNamedChild();
+    const before = readFileSync(started.json.launch, "utf8");
+    const res = await runResume(started, { name: "fix-7" });
+
     assert.equal(res.code, 0);
-    assert.equal(json.pane, "%24");
-    assert.equal(json.launch, started.json.launch);
+    // The rebuilt spec is written back over the same --launch path.
+    assert.equal(res.json.pane, "%24");
+    assert.equal(res.json.launch, started.json.launch);
+    assert.notEqual(readFileSync(started.json.launch, "utf8"), before);
+
+    // The session, close grace and name carry over from the record.
+    assert.equal(res.spec.sessionFile, started.json.session);
+    assert.equal(argValue(res.spec.args, "--session"), started.json.session);
+    assert.equal(res.spec.closeOnDone?.graceMs, 2500);
+    assert.equal(res.spec.name, "fix-7");
+    assert.equal(argValue(res.spec.args, "--name"), "fix-7");
+    assert.equal(res.spec.env.PI_PMUX_SESSION, started.json.session);
+    // The report mode is absent in last mode, like start's spec.
+    assert.equal(res.spec.report, undefined);
+    // Per-run values are fresh, as the pi parent's resume does.
+    assert.match(String(res.spec.env.PI_PMUX_ID), /^[0-9a-f]{8}$/);
+    assert.ok(String(res.spec.env.PI_PMUX_ACTIVITY_FILE).endsWith(".activity.json"));
+    // The title follows the follow-up message.
+    assert.equal(res.spec.title, "fix-7 — Follow-up task.");
+
+    // The pane line runs the spec alone: the prompt path travels inside the
+    // spec args (design D5), so the pane token rule never sees it.
     assert.deepEqual(paneCalls, [
       "split-window -d -h -t %21 -P -F #{pane_id}",
       "select-pane -t %24 -T fix-7",
-      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
 
-    // The resume prompt carries the parent-contact footer, as `start` does.
-    const sent = readFileSync(`${followup}.resume.md`, "utf8");
-    assert.match(sent, /^Follow-up task\./);
-    assert.match(sent, /Your last assistant message is the report the parent reads/);
-
-    // The spec is reused unchanged: pi resumes the same session, and the
-    // close grace carries over.
-    const spec = readLaunchSpec(started.json.launch);
-    assert.equal(spec.sessionFile, started.json.session);
-    assert.equal(argValue(spec.args, "--session"), started.json.session);
-    assert.equal(spec.closeOnDone?.graceMs, 2500);
+    // The prompt artifact sits under artifacts/<id>/pmux-resume/, with the id
+    // the start used (here the caller pane id: no @pane_session_id was set),
+    // and no `.resume.md` is written beside the follow-up any more.
+    assertResumePromptPath(res.promptPath, "%21", "fix-7");
+    const sent = readFileSync(res.promptPath, "utf8");
+    assert.ok(sent.startsWith("Follow-up task.\n"));
+    assert.ok(sent.includes("Your parent is a session named orch (pane %21)."));
+    assert.equal(
+      existsSync(`${join(dirname(started.json.launch), "followup.md")}.resume.md`),
+      false,
+    );
   });
 
-  it("appends the send footer to a resumed send-mode child", async () => {
+  it("keeps the close grace of --close-grace-ms 0 in the rebuilt spec", async () => {
+    const cwd = mkdtempSync(join(workdir, "resume-grace0-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low\nauto-exit: true", "Body.");
+    const started = await runStart({ cwd, role: "doer", child: "fix-7", closeGraceMs: 0 });
+    paneCalls.length = 0;
+
+    const res = await runResume(started);
+    assert.equal(res.code, 0);
+    assert.deepEqual(res.spec.closeOnDone, { graceMs: 0 });
+  });
+
+  it("appends the send footer bounded to the prompt tail, naming the spec's pane", async () => {
     const cwd = mkdtempSync(join(workdir, "resumesend-cwd-"));
     writeRole(cwd, "doer", "model: m\nthinking: low\nauto-exit: true", "Body.");
     const started = await runStart({
@@ -1619,34 +1687,104 @@ describe("cli.ts resume", () => {
       parent: "%12",
     });
     paneCalls.length = 0;
-    const followup = join(dirname(started.json.launch), "followup.md");
-    writeFileSync(followup, "Follow-up task.\n");
 
-    const res = await runCli(
-      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
-      tmuxEnv(),
-    );
+    const res = await runResume(started);
     assert.equal(res.code, 0);
-    const sent = readFileSync(`${followup}.resume.md`, "utf8");
+    // The rebuilt spec keeps the report mode and the parent.
+    assert.equal(res.spec.report, "send");
+    assert.equal(res.spec.parent, "%12");
+    // The follow-up message is the head; the send footer, with the parent's
+    // pane, is the tail — nothing follows it.
+    const sent = readFileSync(res.promptPath, "utf8");
     assert.ok(sent.startsWith("Follow-up task.\n"));
     assert.ok(sent.includes("Your parent is the tmux pane %12."));
-    assert.ok(sent.includes(`send --to %12 --text`));
+    assert.ok(sent.includes(`node ${CLI} send --to %12 --text`));
     assert.doesNotMatch(sent, /last assistant message is the report the parent reads/);
+    assert.ok(
+      sent.endsWith(
+        "If you are blocked, send your question with the send command and stop. The session closes; the parent resumes it with the answer. Do not try to reach the parent any other way.\n" +
+          "If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report with the send command first, then call pmux_done.\n",
+      ),
+    );
   });
 
-  it("appends the last footer to a resumed last-mode child", async () => {
+  it("appends the last footer bounded to the prompt tail", async () => {
+    const started = await startNamedChild();
+
+    const res = await runResume(started);
+    assert.equal(res.code, 0);
+    const sent = readFileSync(res.promptPath, "utf8");
+    assert.ok(sent.startsWith("Follow-up task.\n"));
+    assert.ok(sent.includes("Your parent is a session named orch (pane %21)."));
+    assert.ok(
+      sent.endsWith(
+        "If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.\n" +
+          "If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.\n",
+      ),
+    );
+  });
+
+  it("keeps the external-parent marker in the rebuilt spec", async () => {
+    const started = await startNamedChild();
+
+    const res = await runResume(started);
+    assert.equal(res.code, 0);
+    // The rebuild goes through the same builder as start, so the resumed
+    // child carries the marker too.
+    assert.equal(res.spec.env.PI_PMUX_EXTERNAL_PARENT, "1");
+  });
+
+  it("refuses a spec whose session file has no launch record, with exit 1 and no pane", async () => {
     const started = await startNamedChild();
     const followup = join(dirname(started.json.launch), "followup.md");
     writeFileSync(followup, "Follow-up task.\n");
+    const specBefore = readFileSync(started.json.launch, "utf8");
+    rmSync(getLaunchRecordFile(started.json.session));
 
     const res = await runCli(
-      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
+      ["resume", "--launch", started.json.launch, "--prompt", followup],
       tmuxEnv(),
     );
-    assert.equal(res.code, 0);
-    const sent = readFileSync(`${followup}.resume.md`, "utf8");
-    assert.ok(sent.includes("Your parent is a session named orch (pane %21)."));
-    assert.ok(sent.includes("Your last assistant message is the report the parent reads"));
+    // Usage error: nothing on stdout, the message names `start`, the spec is
+    // left untouched, and no pane is split.
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout, "");
+    assert.match(res.stderr, /no launch record/);
+    assert.match(res.stderr, /run start again/);
+    assert.equal(readFileSync(started.json.launch, "utf8"), specBefore);
+    assert.equal(
+      paneCalls.some((call) => call.startsWith("split-window")),
+      false,
+    );
+
+    // The direct entry reports the same refusal as exit 1.
+    const { status, stderr } = runNodeProcess(
+      [CLI, "resume", "--launch", started.json.launch, "--prompt", followup],
+      tmuxEnv(),
+    );
+    assert.equal(status, 1);
+    assert.match(stderr, /run start again/);
+  });
+
+  it("refuses a spec with a corrupt launch record the same way", async () => {
+    const started = await startNamedChild();
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up task.\n");
+    const specBefore = readFileSync(started.json.launch, "utf8");
+    writeFileSync(getLaunchRecordFile(started.json.session), "{ not json");
+
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout, "");
+    assert.match(res.stderr, /run start again/);
+    assert.equal(readFileSync(started.json.launch, "utf8"), specBefore);
+    assert.equal(
+      paneCalls.some((call) => call.startsWith("split-window")),
+      false,
+    );
   });
 
   it("rejects --report on resume without touching the stored mode", async () => {
@@ -1670,48 +1808,34 @@ describe("cli.ts resume", () => {
     assert.equal(readLaunchSpec(started.json.launch).report, undefined);
   });
 
-  it("keeps the external-parent marker in the spec after a resume", async () => {
-    const cwd = mkdtempSync(join(workdir, "external-cwd-"));
-    writeRole(cwd, "doer", "model: m\nthinking: low\nauto-exit: true", "Body.");
-    const started = await runStart({ cwd, role: "doer", child: "fix-7" });
-    const followup = join(dirname(started.json.launch), "followup.md");
-    writeFileSync(followup, "Follow-up task.\n");
-
-    const res = await runCli(
-      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
-      tmuxEnv(),
-    );
-    assert.equal(res.code, 0);
-
-    // `resume` reuses the launch spec unchanged, so the marker survives.
-    const spec = readLaunchSpec(started.json.launch);
-    assert.equal(spec.env.PI_PMUX_EXTERNAL_PARENT, "1");
-  });
-
   it("uses the spec name when --name is omitted", async () => {
     const started = await startNamedChild();
-    const followup = join(dirname(started.json.launch), "followup.md");
-    writeFileSync(followup, "Follow-up.\n");
 
-    await runCli(["resume", "--launch", started.json.launch, "--prompt", followup], tmuxEnv());
+    const res = await runResume(started);
+    assert.equal(res.code, 0);
     assert.deepEqual(paneCalls, [
       "split-window -d -h -t %21 -P -F #{pane_id}",
       "select-pane -t %24 -T fix-7",
-      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
   });
 
-  it("fails before splitting when the prompt path is unsafe", async () => {
+  it("reads a hostile prompt path and delivers the artifact as one spec argument", async () => {
     const started = await startNamedChild();
-    const unsafe = join(dirname(started.json.launch), "pro$mpt.md");
-    writeFileSync(unsafe, "Follow-up.\n");
-    await assert.rejects(
-      runCli(["resume", "--launch", started.json.launch, "--prompt", unsafe], tmuxEnv()),
-      /Unsafe pane command token/,
-    );
+    const hostile = join(dirname(started.json.launch), "pro$mpt.md");
+    writeFileSync(hostile, "Follow-up.\n");
+
+    // The prompt path is only read, never tokenized: the child receives the
+    // artifact path, which the builder made safe, as one argv entry.
+    const res = await runResume(started, { prompt: hostile });
+    assert.equal(res.code, 0);
+    assert.ok(existsSync(res.promptPath));
+    assert.ok(readFileSync(res.promptPath, "utf8").startsWith("Follow-up.\n"));
+    // The pane line carries the spec path alone, and no shell metacharacter.
+    assert.equal(paneCommandLine(CLI, started.json.launch).includes("$"), false);
     assert.equal(
-      paneCalls.some((call) => call.startsWith("split-window")),
+      paneCalls.some((call) => call.includes("pro$mpt")),
       false,
     );
   });
@@ -1722,13 +1846,8 @@ describe("cli.ts resume", () => {
     const started = await runStart({ cwd, role: "tabber", child: "fix-7" });
     assert.equal(started.spec.surface, "tab");
     paneCalls.length = 0;
-    const followup = join(dirname(started.json.launch), "followup.md");
-    writeFileSync(followup, "Follow-up.\n");
 
-    const res = await runCli(
-      ["resume", "--launch", started.json.launch, "--prompt", followup],
-      tmuxEnv(),
-    );
+    const res = await runResume(started);
     assert.equal(res.code, 0);
     assert.deepEqual(paneCalls, [
       "display-message -p -t %21 #{session_id}",
@@ -1736,7 +1855,7 @@ describe("cli.ts resume", () => {
       "display-message -p -t %21 #{window_id}",
       "select-window -t @4",
       "select-pane -t %24 -T fix-7",
-      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
   });
@@ -1748,17 +1867,12 @@ describe("cli.ts resume", () => {
     assert.equal(started.spec.surface, "float");
     paneCalls.length = 0;
 
-    const followup = join(dirname(started.json.launch), "followup.md");
-    writeFileSync(followup, "Follow-up.\n");
-    const res = await runCli(
-      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
-      tmuxEnv(),
-    );
+    const res = await runResume(started, { name: "fix-7" });
     assert.equal(res.code, 0);
     assert.deepEqual(paneCalls, [
       FIRST_FLOAT_CALL,
       "select-pane -t %24 -T fix-7",
-      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
   });
