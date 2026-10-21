@@ -232,10 +232,12 @@ function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): num
 
   // The role resolves once, into the record a resume reads (design D6): the
   // unknown-role and empty-model errors keep today's text and still happen
-  // before any file is written.
+  // before any file is written. The anchor is the launcher's own cwd, like
+  // the pi parent's; the raw per-call cwd resolves once against it, so a
+  // relative --cwd joins once instead of joining onto itself.
   const { record, definition } = resolveLaunchRecord({
     role,
-    anchor: cwd,
+    anchor: process.cwd(),
     overrides: { name, cwd },
     strict: true,
   });

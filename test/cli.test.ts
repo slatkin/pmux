@@ -873,6 +873,11 @@ interface StartCase {
   /** `@pane_session_id` the caller pane answers: a string, `null` for a
    * failed read; absent answers empty. */
   paneSessionId?: string | null;
+  /** The `PI_CODING_AGENT_DIR` value for the launch: the role file's config
+   * dir (holding `agents/`). Defaults to the case cwd's `.pi`, where
+   * `writeRole` writes; the search also reads the launcher process's own
+   * env, so the pin keeps the machine's real config out of the run. */
+  agentDir?: string;
 }
 
 interface Started extends CliResult {
@@ -914,7 +919,18 @@ async function runStartWith(entry: CliEntry, options: StartCase): Promise<Starte
     argv.push("--close-grace-ms", String(options.closeGraceMs));
   if (options.report !== undefined) argv.push("--report", options.report);
 
-  const result = await capture(entry, argv, env, options.configPath);
+  // The CLI's role search reads the process env, not the injected env, so
+  // the config dir is pinned around the call: without the pin a test role
+  // would resolve against the machine's own ~/.pi/agent.
+  const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = options.agentDir ?? join(options.cwd, ".pi");
+  let result: CliResult;
+  try {
+    result = await capture(entry, argv, env, options.configPath);
+  } finally {
+    if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+  }
   const json = JSON.parse(result.stdout) as Started["json"];
   const spec = readLaunchSpec(json.launch);
   // The prompt reaches pi as the `@<path>` operand inside the spec args
@@ -1295,6 +1311,29 @@ describe("cli.ts start", () => {
     assert.equal(record.cwd, cwd);
     assert.equal(record.parentSessionId, "abc");
     assert.equal(record.closeGraceMs, 0);
+  });
+
+  it("resolves a relative --cwd once, against the launcher's own cwd", async () => {
+    // The launcher's process cwd is the anchor (the pi parent's precedent):
+    // a relative --cwd joins onto it once. Anchoring on --cwd itself would
+    // make `--cwd sub` resolve to `sub/sub`.
+    const savedCwd = process.cwd();
+    process.chdir(REPO_ROOT);
+    try {
+      const agentDir = mkdtempSync(join(workdir, "relcwd-"));
+      mkdirSync(join(agentDir, "agents"), { recursive: true });
+      writeFileSync(
+        join(agentDir, "agents", "relworker.md"),
+        "---\nmodel: m\nthinking: low\n---\n\nBody.\n",
+      );
+      const res = await runStart({ role: "relworker", agentDir, cwd: "test" });
+      assert.equal(res.spec.cwd, resolve("test"));
+      const record = readLaunchRecord(getLaunchRecordFile(res.json.session));
+      assert.ok(record);
+      assert.equal(record.cwd, resolve("test"));
+    } finally {
+      process.chdir(savedCwd);
+    }
   });
 
   it("keeps the pane id's `%` out of the pane command line", async () => {

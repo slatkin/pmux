@@ -1,13 +1,15 @@
 /**
  * Age-based cleanup for the temporary scratch files the launcher writes.
  *
- * `start` writes one launch spec, two prompt files, a session file, an
- * activity file and later sidecars per child under `<tmp>/pmux`, including
- * the `.sent` report receipts a send-mode child leaves for its parent. Nothing
+ * `start` writes one launch spec, a launch record, a session file and an
+ * activity file per child under `<tmp>/pmux`; the prompt and role prompt
+ * files go under `artifacts/<parent id>/{context,pmux-resume}` (design D5),
+ * and later sidecars and the `.sent` report receipts join the session file. Nothing
  * deleted them, so heavy use filled the temporary folder. This module is the
  * single place that decides what is safe to delete: only files with known
- * launcher suffixes and only when their mtime is older than the retention.
- * Fresh files stay so running children and recent resumes keep working.
+ * launcher suffixes — the stamped prompt files under the artifact tree — and
+ * only when their mtime is older than the retention. Fresh files stay so
+ * running children and recent resumes keep working.
  */
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -98,9 +100,42 @@ function pruneDir(
   return result;
 }
 
-/** Delete old launcher files inside a scratch directory. */
+/**
+ * The artifact folders the launcher writes its prompt files into (design
+ * D4). Files elsewhere under an artifacts id are not launcher-written, so
+ * they are left alone.
+ */
+const LAUNCHER_ARTIFACT_FOLDERS = new Set(["context", "pmux-resume"]);
+
+/** A launcher prompt file: `<name>-<19-char timestamp>.md`, the stamp the
+ * shared writer (`writeRunContextFile`) puts on every file it creates. */
+const LAUNCHER_ARTIFACT_FILE = /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.md$/;
+
+/** The launcher-owned files under `artifacts/<id>/{context,pmux-resume}`. */
+function isManagedArtifactFile(name: string): boolean {
+  return LAUNCHER_ARTIFACT_FILE.test(name);
+}
+
+/** Delete old launcher files inside a scratch directory: the top level's
+ * managed suffixes (legacy files age out), plus the stamped prompt files of
+ * the artifact prompt folders. Anything else inside the tree — a foreign
+ * suffix, another folder name, another root — is never touched. */
 export function pruneScratch(dir: string, options: PruneOptions): PruneResult {
-  return pruneDir(dir, isManagedScratchFile, options);
+  const parts: PruneResult[] = [pruneDir(dir, isManagedScratchFile, options)];
+  try {
+    for (const id of readdirSync(join(dir, "artifacts"))) {
+      for (const folder of LAUNCHER_ARTIFACT_FOLDERS) {
+        parts.push(pruneDir(join(dir, "artifacts", id, folder), isManagedArtifactFile, options));
+      }
+    }
+  } catch {
+    // No artifacts tree (or an unreadable one): the top level still prunes.
+  }
+  return {
+    scanned: parts.reduce((n, part) => n + part.scanned, 0),
+    deleted: parts.flatMap((part) => part.deleted).sort((a, b) => a.localeCompare(b)),
+    deletedBytes: parts.reduce((n, part) => n + part.deletedBytes, 0),
+  };
 }
 
 /** Delete orphaned Claude sentinel files directly under the tmp root. */
