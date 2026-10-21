@@ -38,15 +38,14 @@ export function parseSurfaceDefault(value: unknown): SurfaceDefault | undefined 
 }
 
 /**
- * Resolve the placement for one launch: the per-call value wins, then the
- * role's value, then the configured default.
+ * Resolve the placement for one launch: the role's surface wins over the
+ * configured default. There is no per-call value.
  */
 export function resolvePlacement(
-  call: SurfacePlacement | undefined,
   role: SurfacePlacement | undefined,
   fallback: SurfaceDefault = DEFAULT_SURFACE_PLACEMENT,
 ): SurfacePlacement {
-  return call ?? role ?? fallback;
+  return role ?? fallback;
 }
 
 /** Split direction for `splitPane`: side by side (`right`) or stacked (`down`). */

@@ -613,7 +613,7 @@ describe("status.ts", () => {
     assert.equal(parseSurfaceConfig({}), "pane");
   });
 
-  it("parses the per-call surface values, accepting float", () => {
+  it("parses the surface values, accepting float", () => {
     assert.equal(parseSurfacePlacement("pane"), "pane");
     assert.equal(parseSurfacePlacement("tab"), "tab");
     assert.equal(parseSurfacePlacement("float"), "float");
@@ -631,10 +631,11 @@ describe("status.ts", () => {
     assert.equal(parseSurfaceDefault("junk"), undefined);
   });
 
-  it("resolves the placement: the call beats the role, the role beats the default", () => {
-    assert.equal(resolvePlacement("tab", "float", "pane"), "tab");
-    assert.equal(resolvePlacement(undefined, "float", "pane"), "float");
-    assert.equal(resolvePlacement(undefined, undefined, "pane"), "pane");
+  it("resolves the placement: the role beats the default, an invalid role falls back", () => {
+    assert.equal(resolvePlacement("float", "pane"), "float");
+    assert.equal(resolvePlacement("pane", "tab"), "pane");
+    assert.equal(resolvePlacement(undefined, "tab"), "tab");
+    assert.equal(resolvePlacement(parseSurfacePlacement("window"), "tab"), "tab");
   });
 
   it("loads the surface placement from a temp config file", () => {
@@ -2250,23 +2251,23 @@ describe("pmux-surface command", () => {
 });
 
 describe("tool registration", () => {
-  it("registers the optional surface parameter on pmux_spawn and pmux_resume", () => {
+  it("declares no surface parameter and names no surface value on pmux_spawn and pmux_resume", () => {
     const { api, registeredTools } = createMockExtensionApi();
     (subagentsModule as any).default(api);
 
     for (const toolName of ["pmux_spawn", "pmux_resume"]) {
       const tool = registeredTools.find((t: any) => t.name === toolName);
       assert.ok(tool, `expected ${toolName} to be registered`);
-      const surface = tool.parameters.properties.surface;
-      assert.ok(surface, `${toolName} should accept surface`);
-      const values = surface.anyOf.map((option: { const?: string }) => option.const);
-      assert.deepEqual(values.sort(), ["float", "pane", "tab"]);
-      // The description offers float and the role fallback.
-      assert.match(surface.description, /float/);
-      assert.match(surface.description, /role's surface/);
-      assert.match(surface.description, /top right/);
-      assert.doesNotMatch(tool.description, /\bright\b|\bdown\b/);
-      assert.doesNotMatch(tool.promptSnippet, /\bright\b|\bdown\b/);
+      assert.equal("surface" in tool.parameters.properties, false);
+      // No description text may name a surface value or ask the agent to
+      // choose a placement.
+      const texts = [tool.description, tool.promptSnippet];
+      for (const property of Object.values<Record<string, unknown>>(tool.parameters.properties)) {
+        if (typeof property.description === "string") texts.push(property.description);
+      }
+      for (const text of texts) {
+        assert.doesNotMatch(text, /\b(pane|tab|float)\b/);
+      }
     }
   });
 
@@ -2311,7 +2312,6 @@ describe("tool registration", () => {
       "autoExit",
       "message",
       "sessionPath",
-      "surface",
     ]);
     const autoExitSchema = resumeTool.parameters.properties.autoExit;
     assert.equal(autoExitSchema.type, "boolean");

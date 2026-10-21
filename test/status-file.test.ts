@@ -411,15 +411,12 @@ describe("cli resume removes a stale status", () => {
       // An earlier run's status must not survive into the resumed run.
       writeChildStatus(sessionFile, "done");
       writeFileSync(exitSidecarPath(sessionFile), JSON.stringify({ type: "done" }));
-      const code = await main(
-        ["resume", "--launch", launchPath, "--prompt", followup, "--surface", "right"],
-        {
-          env: tmuxEnv(),
-          stdout: () => {},
-          stderr: () => {},
-          sleep: async () => {},
-        },
-      );
+      const code = await main(["resume", "--launch", launchPath, "--prompt", followup], {
+        env: tmuxEnv(),
+        stdout: () => {},
+        stderr: () => {},
+        sleep: async () => {},
+      });
       assert.equal(code, 0);
       assert.equal(existsSync(statusFilePath(sessionFile)), false);
       // The earlier run's exit must not end the resumed one.

@@ -581,18 +581,18 @@ describe("surface precedence", () => {
     });
   });
 
-  it("lets the per-call pane beat the role's float", async () => {
+  it("ignores a stray surface parameter and keeps the role's float", async () => {
     await withHarness(async (h, env) => {
       writeAgentFile(agentsDir(env), "float-role", "surface: float", "You float.");
 
+      // A call may still carry a stray `surface` key; the supervisor must not
+      // read it, so the role's value decides and the record keeps it.
       const running = await h.supervisor.spawn(
-        { name: "Reviewer", task: "review it", agent: "float-role" },
+        { name: "Reviewer", task: "review it", agent: "float-role", surface: "pane" } as never,
         env.ctx,
-        { callSurface: "pane" },
       );
 
-      assert.deepEqual(h.surfaces, [{ name: "Reviewer", placement: "pane" }]);
-      // The record keeps the role's value, never the per-call one.
+      assert.deepEqual(h.surfaces, [{ name: "Reviewer", placement: "float" }]);
       const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
       assert.equal(record?.surface, "float");
     });
@@ -627,13 +627,28 @@ describe("surface precedence", () => {
     });
   });
 
-  it("floats an ad-hoc call surface and records no surface", async () => {
+  it("ignores a stray surface parameter with no role and uses the default", async () => {
+    await withHarness(async (h, env) => {
+      const running = await h.supervisor.spawn(
+        { name: "Scout", task: "look around", surface: "float" } as never,
+        env.ctx,
+        { fallback: "tab" },
+      );
+
+      assert.deepEqual(h.surfaces, [{ name: "Scout", placement: "tab" }]);
+      const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
+      assert.ok(record);
+      assert.equal("surface" in record, false);
+    });
+  });
+
+  it("uses the configured default when the spawn names no role surface", async () => {
     await withHarness(async (h, env) => {
       const running = await h.supervisor.spawn({ name: "Scout", task: "look around" }, env.ctx, {
-        callSurface: "float",
+        fallback: "tab",
       });
 
-      assert.deepEqual(h.surfaces, [{ name: "Scout", placement: "float" }]);
+      assert.deepEqual(h.surfaces, [{ name: "Scout", placement: "tab" }]);
       const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
       assert.ok(record);
       assert.equal("surface" in record, false);
@@ -694,22 +709,16 @@ describe("supervisor resume", () => {
     });
   });
 
-  it("restores the role's float surface, and lets the call beat it", async () => {
+  it("restores the role's float surface from the record", async () => {
     await withHarness(async (h, env) => {
       const sessionPath = join(env.dir, "child.jsonl");
       writePiSession(sessionPath);
       writeRecord(sessionPath, { surface: "float" });
 
       await h.supervisor.resume({ sessionPath, message: "Continue the work" }, env.ctx);
-      await h.supervisor.resume({ sessionPath, message: "And again" }, env.ctx, {
-        callSurface: "pane",
-      });
 
-      // The record's surface applies when the call gives none; the call wins.
-      assert.deepEqual(h.surfaces, [
-        { name: "Worker", placement: "float" },
-        { name: "Worker", placement: "pane" },
-      ]);
+      // The record's surface applies; there is no per-call value to beat it.
+      assert.deepEqual(h.surfaces, [{ name: "Worker", placement: "float" }]);
     });
   });
 
