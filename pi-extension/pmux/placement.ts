@@ -19,9 +19,9 @@ export type SurfaceDefault = "pane" | "tab";
 export const DEFAULT_SURFACE_PLACEMENT: SurfaceDefault = "pane";
 
 /**
- * Parse a per-call or role placement value. The legacy `right` and `down`
+ * Parse a role or config placement value. The legacy `right` and `down`
  * split choices map to `pane`: the axis now comes from the target pane's
- * shape, not from the caller's choice.
+ * shape, not from the value's name.
  */
 export function parseSurfacePlacement(value: unknown): SurfacePlacement | undefined {
   const mapped = value === "right" || value === "down" ? "pane" : value;

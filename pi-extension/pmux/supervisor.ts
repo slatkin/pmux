@@ -144,6 +144,12 @@ export interface SendOptions {
 /** How the supervisor injects messages into the parent session (pi.sendMessage). */
 export type SendFn = (message: SteerMessage, options: SendOptions) => void;
 
+/** Options of a launch call that name the surface. */
+export interface SurfaceOptions {
+  /** Configured default, used when the role names no surface. */
+  fallback?: SurfaceDefault;
+}
+
 /** Session context the supervisor needs from the tool call that starts a run. */
 export interface SupervisorContext {
   sessionManager: {
@@ -271,13 +277,13 @@ export interface Supervisor {
   spawn(
     params: Static<typeof SubagentParams>,
     ctx: SupervisorContext,
-    options?: { fallback?: SurfaceDefault },
+    options?: SurfaceOptions,
   ): Promise<RunningSubagent>;
   /** Resume a session (today's inline `pmux_resume` launch path). */
   resume(
     params: ResumeParams,
     ctx: SupervisorContext,
-    options?: { fallback?: SurfaceDefault },
+    options?: SurfaceOptions,
   ): Promise<ResumeToolResult>;
   /** Send Escape to a running child's current turn. */
   interrupt(
@@ -1565,7 +1571,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
   async function launchSubagent(
     params: Static<typeof SubagentParams>,
     ctx: SupervisorContext,
-    options?: { fallback?: SurfaceDefault },
+    options?: SurfaceOptions,
   ): Promise<RunningSubagent> {
     const startTime = Date.now();
     const id = Math.random().toString(16).slice(2, 10);

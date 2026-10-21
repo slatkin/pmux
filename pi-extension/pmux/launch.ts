@@ -38,7 +38,7 @@ export interface LaunchSpec {
   title?: string;
   /** Close the pane this long after a `done` sidecar (skill launches only). */
   closeOnDone?: { graceMs: number };
-  /** The role's `surface:`, when the role set a valid one. Never the per-call value. */
+  /** The role's `surface:`, when the role set a valid one. */
   surface?: SurfacePlacement;
   /** Parent's name, as the brief footer (and a future `pending --parent`
    * listing) present it to the child. */

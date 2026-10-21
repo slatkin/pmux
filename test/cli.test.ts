@@ -583,6 +583,27 @@ async function runCli(
   return capture(main, argv, env, configPath);
 }
 
+/**
+ * Run a node process and report how it exited. A non-zero exit is the case
+ * under test, so the status and stderr come back instead of throwing.
+ */
+function runNodeProcess(
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): { status: number; stderr: string } {
+  try {
+    execFileSync(process.execPath, args, {
+      ...(env === undefined ? {} : { env }),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { status: 0, stderr: "" };
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    return { status: failure.status ?? 1, stderr: String(failure.stderr ?? "") };
+  }
+}
+
 /** Write a role definition under the child cwd's `.pi/agents/`. */
 function writeRole(cwd: string, name: string, frontmatter: string, body: string): void {
   const dir = join(cwd, ".pi", "agents");
@@ -997,21 +1018,9 @@ describe("cli.ts start", () => {
     assert.deepEqual(paneCalls, []);
 
     // The direct entry turns the same parse failure into exit code 1.
-    let status = 0;
-    let stderr = "";
-    try {
-      execFileSync(process.execPath, [CLI, ...argv], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (error) {
-      const failure = error as { status?: number; stderr?: string };
-      status = failure.status ?? 1;
-      stderr = String(failure.stderr ?? "");
-    }
+    const { status, stderr } = runNodeProcess([CLI, ...argv]);
     assert.equal(status, 1);
     assert.match(stderr, /Unknown option '--surface'/);
-    assert.deepEqual(paneCalls, []);
   });
 
   it("opens a floating role with no flag as a float and records the role surface", async () => {
@@ -1453,19 +1462,10 @@ describe("skills/pmux/launch.ts", () => {
     assert.deepEqual(paneCalls, []);
 
     // The direct entry turns the same failure into a non-zero exit.
-    let status = 0;
-    let stderr = "";
-    try {
-      execFileSync(process.execPath, [copy, "help"], {
-        env: { HOME: home, PATH: process.env.PATH },
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (error) {
-      const failure = error as { status?: number; stderr?: string };
-      status = failure.status ?? 1;
-      stderr = String(failure.stderr ?? "");
-    }
+    const { status, stderr } = runNodeProcess([copy, "help"], {
+      HOME: home,
+      PATH: process.env.PATH,
+    });
     assert.equal(status, 1);
     assert.match(stderr, /launch\.ts: Cannot find the pmux extension/);
     assert.deepEqual(paneCalls, []);

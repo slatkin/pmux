@@ -627,26 +627,15 @@ describe("surface precedence", () => {
     });
   });
 
-  it("ignores a stray surface parameter with no role and uses the default", async () => {
+  it("ignores a stray surface parameter and uses the default when the role names none", async () => {
     await withHarness(async (h, env) => {
+      // A call may still carry a stray `surface` key; the supervisor must not
+      // read it, so the configured default decides and the record holds none.
       const running = await h.supervisor.spawn(
         { name: "Scout", task: "look around", surface: "float" } as never,
         env.ctx,
         { fallback: "tab" },
       );
-
-      assert.deepEqual(h.surfaces, [{ name: "Scout", placement: "tab" }]);
-      const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
-      assert.ok(record);
-      assert.equal("surface" in record, false);
-    });
-  });
-
-  it("uses the configured default when the spawn names no role surface", async () => {
-    await withHarness(async (h, env) => {
-      const running = await h.supervisor.spawn({ name: "Scout", task: "look around" }, env.ctx, {
-        fallback: "tab",
-      });
 
       assert.deepEqual(h.surfaces, [{ name: "Scout", placement: "tab" }]);
       const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
