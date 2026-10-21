@@ -165,8 +165,6 @@ export type SendFn = (message: SteerMessage, options: SendOptions) => void;
 
 /** Options of a launch call that name the surface. */
 export interface SurfaceOptions {
-  /** Pre-created pane id (parallel mode); skips `createSurface` when set. */
-  surface?: string;
   /** The call's parsed `surface` parameter; absent means unset. */
   callSurface?: SurfacePlacement;
   /** Configured default, used when neither the call nor the role names one. */
@@ -1674,13 +1672,10 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     };
     writeLaunchRecord(getLaunchRecordFile(subagentSessionFile), record);
 
-    // Use pre-created surface (parallel mode) or create a new one.
-    // For new surfaces, pause briefly so the shell is ready before sending the command.
-    const surfacePreCreated = !!options?.surface;
-    const surface = options?.surface ?? deps.pmux.createSurface(params.name, placement);
-    if (!surfacePreCreated) {
-      await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
-    }
+    // Create the surface, then pause briefly so the shell is ready before
+    // sending the command.
+    const surface = deps.pmux.createSurface(params.name, placement);
+    await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
 
     // A Claude Code child has no pi-style session file; seeding one would make
     // a resume path that no backend reads. The record still sits beside it.

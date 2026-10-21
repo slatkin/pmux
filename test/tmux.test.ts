@@ -220,14 +220,16 @@ describe("tmux backend", () => {
   });
 
   it("cascades from the remaining newest float when the newest was closed", () => {
-    // %12 (row 2) was closed; %10 (row 1) is now the newest pmux float.
+    // Unlike the second-float test above, the newest float (%12, the first
+    // one spawned) is absent from the listing because it was closed, so the
+    // cascade starts from the remaining newest one (%10) at its own position.
     const calls = stubPlacement([
       placementRow("%3", 200, 50),
-      placementRow("%10", 98, 23, "%3", { floating: 1, left: 99, top: 2 }),
+      placementRow("%10", 98, 23, "%3", { floating: 1, left: 55, top: 7 }),
     ]);
     createSurface("Scout", "float", "%3");
-    assert.equal(calls[1][9], "96");
-    assert.equal(calls[1][11], "2");
+    assert.equal(calls[1][9], "52");
+    assert.equal(calls[1][11], "7");
   });
 
   it("cascades from a moved float at its current position", () => {
