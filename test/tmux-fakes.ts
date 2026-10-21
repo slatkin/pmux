@@ -20,17 +20,41 @@ export interface TmuxPaneFake {
   /**
    * Replace the rows the placement listing answers, or `null` for the default
    * one wide caller row. Row format: `#{pane_id} #{pane_width} #{pane_height}
-   * #{@pmux_parent}` — an unset `@pmux_parent` prints as an empty field.
+   * #{pane_floating_flag} #{pane_left} #{pane_top} #{window_width}
+   * #{window_height} #{pane-border-lines} #{@pmux_parent}` — an unset
+   * `@pmux_parent` prints as an empty field.
    */
   placementRows: string | null;
 }
 
 /**
  * One row of the placement listing: `#{pane_id} #{pane_width} #{pane_height}
- * #{@pmux_parent}`. An unset `@pmux_parent` leaves the last field empty.
+ * #{pane_floating_flag} #{pane_left} #{pane_top} #{window_width}
+ * #{window_height} #{pane-border-lines} #{@pmux_parent}`. An unset
+ * `@pmux_parent` leaves the last field empty. The defaults describe a tiled
+ * pane of a 200x50 window with the default border.
  */
-export function placementRow(id: string, width: number, height: number, parent = ""): string {
-  return `${id} ${width} ${height} ${parent}`;
+export function placementRow(
+  id: string,
+  width: number,
+  height: number,
+  parent = "",
+  shape: {
+    floating?: number;
+    left?: number;
+    top?: number;
+    windowWidth?: number;
+    windowHeight?: number;
+    border?: string;
+  } = {},
+): string {
+  const floating = shape.floating ?? 0;
+  const left = shape.left ?? 0;
+  const top = shape.top ?? 0;
+  const windowWidth = shape.windowWidth ?? 200;
+  const windowHeight = shape.windowHeight ?? 50;
+  const border = shape.border ?? "single";
+  return `${id} ${width} ${height} ${floating} ${left} ${top} ${windowWidth} ${windowHeight} ${border} ${parent}`;
 }
 
 /**
@@ -49,12 +73,14 @@ export function useTmuxPaneFake(): TmuxPaneFake {
       const caller = at >= 0 ? (args[at + 1] ?? "%21") : "%21";
       if (fake.placementRows !== null) return fake.placementRows;
       // One row for the caller: unset `@pmux_parent` prints as an empty
-      // fourth field.
+      // last field.
       return `${placementRow(caller, 200, 50)}\n`;
     }
     if (args[0] === "set-option") return "";
     lines.push(joined);
-    if (args[0] === "split-window" || args[0] === "new-window") return "%24";
+    if (args[0] === "split-window" || args[0] === "new-window" || args[0] === "new-pane") {
+      return "%24";
+    }
     if (args[0] === "list-panes") return "%88 orch\n";
     if (args[0] === "display-message" && args.includes("#{session_id}")) return "$7";
     if (args[0] === "display-message" && args.includes("#{window_id}")) return "@4";

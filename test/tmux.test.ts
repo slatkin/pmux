@@ -65,7 +65,8 @@ describe("tmux backend", () => {
       "-t",
       "%3",
       "-F",
-      "#{pane_id} #{pane_width} #{pane_height} #{@pmux_parent}",
+      "#{pane_id} #{pane_width} #{pane_height} #{pane_floating_flag} #{pane_left} " +
+        "#{pane_top} #{window_width} #{window_height} #{pane-border-lines} #{@pmux_parent}",
     ]);
     assert.deepEqual(calls[1], ["split-window", "-d", "-h", "-t", "%3", "-P", "-F", "#{pane_id}"]);
     // The caller's pane id, not the new pane's, becomes the parent marker.
@@ -157,6 +158,174 @@ describe("tmux backend", () => {
         `unexpected re-tiling call: ${call.join(" ")}`,
       );
     }
+  });
+
+  it("does not split a floating child", () => {
+    const calls = stubPlacement([
+      placementRow("%3", 200, 50),
+      placementRow("%5", 100, 50, "%3"),
+      placementRow("%7", 98, 23, "%3", { floating: 1, left: 99, top: 2 }),
+    ]);
+    createSurface("Scout", "pane", "%3");
+    assert.deepEqual(calls[1], ["split-window", "-d", "-h", "-t", "%5", "-P", "-F", "#{pane_id}"]);
+  });
+
+  it("opens the first float half the window, two columns from the right edge", () => {
+    const calls = stubPlacement([placementRow("%3", 200, 50)]);
+    createSurface("Scout", "float", "%3");
+    assert.deepEqual(calls[1], [
+      "new-pane",
+      "-d",
+      "-t",
+      "%3",
+      "-x",
+      "100",
+      "-y",
+      "25",
+      "-X",
+      "98",
+      "-Y",
+      "1",
+      "-P",
+      "-F",
+      "#{pane_id}",
+    ]);
+  });
+
+  it("cascades the second float one row down and two columns left", () => {
+    // The first float's outer box (-x 100 -y 25 -X 98 -Y 1) shows up in the
+    // listing as pane_left 99, pane_top 2 with the default border.
+    const calls = stubPlacement([
+      placementRow("%3", 200, 50),
+      placementRow("%12", 98, 23, "%3", { floating: 1, left: 99, top: 2 }),
+    ]);
+    createSurface("Scout", "float", "%3");
+    assert.deepEqual(calls[1], [
+      "new-pane",
+      "-d",
+      "-t",
+      "%3",
+      "-x",
+      "100",
+      "-y",
+      "25",
+      "-X",
+      "96",
+      "-Y",
+      "2",
+      "-P",
+      "-F",
+      "#{pane_id}",
+    ]);
+  });
+
+  it("cascades from the remaining newest float when the newest was closed", () => {
+    // %12 (row 2) was closed; %10 (row 1) is now the newest pmux float.
+    const calls = stubPlacement([
+      placementRow("%3", 200, 50),
+      placementRow("%10", 98, 23, "%3", { floating: 1, left: 99, top: 2 }),
+    ]);
+    createSurface("Scout", "float", "%3");
+    assert.equal(calls[1][9], "96");
+    assert.equal(calls[1][11], "2");
+  });
+
+  it("cascades from a moved float at its current position", () => {
+    const calls = stubPlacement([
+      placementRow("%3", 200, 50),
+      placementRow("%12", 98, 23, "%3", { floating: 1, left: 41, top: 11 }),
+    ]);
+    createSurface("Scout", "float", "%3");
+    assert.equal(calls[1][9], "38");
+    assert.equal(calls[1][11], "11");
+  });
+
+  it("takes a borderless float's pane_left and pane_top as the outer corner", () => {
+    const calls = stubPlacement([
+      placementRow("%3", 200, 50),
+      placementRow("%12", 100, 25, "%3", { floating: 1, left: 41, top: 11, border: "none" }),
+    ]);
+    createSurface("Scout", "float", "%3");
+    assert.equal(calls[1][9], "39");
+    assert.equal(calls[1][11], "12");
+  });
+
+  it("wraps to the first-float position when the cascade leaves the window", () => {
+    // A bottom border past the last row: row 30 + height 25 > 50.
+    const bottom = stubPlacement([
+      placementRow("%3", 200, 50),
+      placementRow("%12", 98, 23, "%3", { floating: 1, left: 99, top: 30 }),
+    ]);
+    createSurface("Scout", "float", "%3");
+    assert.equal(bottom[1][9], "98");
+    assert.equal(bottom[1][11], "1");
+
+    // A next column past the left edge: 2 - 1 - 2 < 0.
+    const left = stubPlacement([
+      placementRow("%3", 200, 50),
+      placementRow("%12", 98, 23, "%3", { floating: 1, left: 2, top: 2 }),
+    ]);
+    createSurface("Scout", "float", "%3");
+    assert.equal(left[1][9], "98");
+    assert.equal(left[1][11], "1");
+  });
+
+  it("ignores a float pmux did not open", () => {
+    const calls = stubPlacement([
+      placementRow("%3", 200, 50),
+      placementRow("%12", 98, 23, "", { floating: 1, left: 99, top: 2 }),
+    ]);
+    createSurface("Scout", "float", "%3");
+    assert.equal(calls[1][9], "98");
+    assert.equal(calls[1][11], "1");
+  });
+
+  it("cascades from a float another caller opened", () => {
+    const calls = stubPlacement([
+      placementRow("%3", 200, 50),
+      placementRow("%12", 98, 23, "%4", { floating: 1, left: 99, top: 2 }),
+    ]);
+    createSurface("Scout", "float", "%3");
+    assert.equal(calls[1][9], "96");
+    assert.equal(calls[1][11], "2");
+  });
+
+  it("tags the float with @pmux_parent and names it", () => {
+    const calls = stubPlacement([placementRow("%3", 200, 50)]);
+    createSurface("Scout", "float", "%3");
+    assert.deepEqual(calls[2], ["set-option", "-p", "-t", "%9", "@pmux_parent", "%3"]);
+    assert.deepEqual(calls[3], ["select-pane", "-t", "%9", "-T", "Scout"]);
+  });
+
+  it("splits a floating caller for the pane placement", () => {
+    const calls = stubPlacement([
+      placementRow("%3", 100, 25, "", { floating: 1, left: 50, top: 10 }),
+    ]);
+    createSurface("Scout", "pane", "%3");
+    assert.deepEqual(calls[1], ["split-window", "-d", "-h", "-t", "%3", "-P", "-F", "#{pane_id}"]);
+  });
+
+  it("re-tiles nothing for a float: no layout, swap or resize call", () => {
+    const calls = stubPlacement([
+      placementRow("%3", 200, 50),
+      placementRow("%5", 100, 50, "%3"),
+      placementRow("%12", 98, 23, "%3", { floating: 1, left: 99, top: 2 }),
+    ]);
+    createSurface("Scout", "float", "%3");
+    for (const call of calls) {
+      assert.ok(
+        !["select-layout", "swap-pane", "resize-pane"].includes(call[0]),
+        `unexpected re-tiling call: ${call.join(" ")}`,
+      );
+    }
+  });
+
+  it("fails the float when the window listing fails", () => {
+    stub((args) => {
+      if (args[0] === "list-panes") throw new Error("tmux refused");
+      return "%9";
+    });
+    assert.throws(() => createSurface("Scout", "float", "%3"), /window listing failed/);
   });
 
   it("opens a window and restores focus for the tab placement", () => {

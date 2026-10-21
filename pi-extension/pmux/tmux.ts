@@ -126,6 +126,11 @@ export function paneExists(surface: string): boolean {
   }
 }
 
+/** The tmux format of the placement listing, shared by both branches. */
+const PLACEMENT_FORMAT =
+  "#{pane_id} #{pane_width} #{pane_height} #{pane_floating_flag} #{pane_left} " +
+  "#{pane_top} #{window_width} #{window_height} #{pane-border-lines} #{@pmux_parent}";
+
 /** One row of the placement listing: a window pane with its shape and parent. */
 interface PaneRow {
   id: string;
@@ -133,29 +138,44 @@ interface PaneRow {
   num: number;
   width: number;
   height: number;
+  /** 1 when the pane floats over the window's tiled panes. */
+  floating: number;
+  /** The pane's outer box, border included, in window cells. */
+  left: number;
+  top: number;
+  /** The outer size of the pane's window. */
+  windowWidth: number;
+  windowHeight: number;
+  /** The `pane-border-lines` style; `none` draws no border. */
+  borderLines: string;
   /** The `@pmux_parent` value; empty when the option is unset. */
   parent: string;
 }
 
 /**
- * Parse the placement listing. A line may carry 3 fields (`@pmux_parent`
- * unset prints as an empty field) or 4; malformed rows are skipped.
+ * Parse the placement listing. A row carries 8 fields (`@pmux_parent` unset
+ * prints as an empty trailing field) or 9; malformed rows are skipped.
  */
 function parsePaneRows(out: string): PaneRow[] {
   const rows: PaneRow[] = [];
   for (const line of out.split("\n")) {
     const fields = line.trim().split(/\s+/);
-    if (fields.length < 3 || !fields[0].startsWith("%")) continue;
-    const width = Number(fields[1]);
-    const height = Number(fields[2]);
-    if (!Number.isFinite(width) || !Number.isFinite(height)) continue;
+    if (fields.length < 8 || !fields[0].startsWith("%")) continue;
+    const numbers = fields.slice(1, 8).map(Number);
+    if (numbers.some((value) => !Number.isFinite(value))) continue;
     const num = Number(fields[0].slice(1));
     rows.push({
       id: fields[0],
       num: Number.isFinite(num) ? num : -1,
-      width,
-      height,
-      parent: fields[3] ?? "",
+      width: numbers[0],
+      height: numbers[1],
+      floating: numbers[2],
+      left: numbers[3],
+      top: numbers[4],
+      windowWidth: numbers[5],
+      windowHeight: numbers[6],
+      borderLines: fields[8] ?? "",
+      parent: fields[9] ?? "",
     });
   }
   return rows;
@@ -169,12 +189,17 @@ function axisDirection(row: PaneRow): SplitDirection {
 /**
  * Create a new pane for a subagent and return its id.
  *
- * `pane` splits a target pane in the caller's own window without taking
- * focus (`-d`). The target is the newest living pane this caller created in
- * that window (tracked with the `@pmux_parent` pane option), or the caller's
- * own pane when there is none; the axis comes from the target's shape. `tab`
- * opens a new window in the caller's session and restores focus to the
- * caller's window afterwards.
+ * One `list-panes` call on the caller's window feeds every branch. `pane`
+ * splits a target pane in that window without taking focus (`-d`): the target
+ * is the newest living tiled pane this caller created there (tracked with the
+ * `@pmux_parent` pane option), or the caller's own pane when there is none;
+ * the axis comes from the target's shape. `float` opens a floating pane of
+ * half the window's width and height (border included) with its top border on
+ * row 1 and two columns of space to the window's right edge; when a pmux
+ * float is already open, the new one cascades one row down and two columns
+ * left from the newest of them, wrapping back to the first-float position
+ * when it would leave the window. `tab` opens a new window in the caller's
+ * session and restores focus to the caller's window afterwards.
  */
 export function createSurface(
   name: string,
@@ -196,28 +221,83 @@ export function createSurface(
       // Focus restore is best effort; the new window exists either way.
     }
     surface = paneIdFrom(created);
+  } else if (placement === "float") {
+    // The float geometry needs the window size, and only the listing provides
+    // it; without a row there is nothing to anchor on, so the spawn fails.
+    let rows: PaneRow[];
+    try {
+      rows = parsePaneRows(tmux(["list-panes", "-t", caller, "-F", PLACEMENT_FORMAT]));
+    } catch (error) {
+      throw new Error("Cannot place a float: the window listing failed.", { cause: error });
+    }
+    if (rows.length === 0) {
+      throw new Error(`Cannot place a float: no panes listed in ${caller}'s window.`);
+    }
+    const windowWidth = rows[0].windowWidth;
+    const windowHeight = rows[0].windowHeight;
+    // Half the window, rounded down, border included.
+    const width = Math.floor(windowWidth / 2);
+    const height = Math.floor(windowHeight / 2);
+    // The first-float position: two columns of space to the right edge, the
+    // top border on row 1.
+    let x = windowWidth - width - 2;
+    let y = 1;
+    // The newest pmux float of the window, from every caller.
+    const newest = rows.reduce<PaneRow | undefined>(
+      (best, row) =>
+        row.floating === 1 && row.parent !== "" && (best === undefined || row.num > best.num)
+          ? row
+          : best,
+      undefined,
+    );
+    if (newest) {
+      // With a border the outer corner sits one cell up and left of
+      // `pane_left`/`pane_top`; with `none` the content is the outer box.
+      const border = newest.borderLines === "none" ? 0 : 1;
+      const nextX = newest.left - border - 2;
+      const nextY = newest.top - border + 1;
+      if (nextX >= 0 && nextY + height <= windowHeight) {
+        x = nextX;
+        y = nextY;
+      }
+    }
+    surface = paneIdFrom(
+      tmux([
+        "new-pane",
+        "-d",
+        "-t",
+        caller,
+        "-x",
+        String(width),
+        "-y",
+        String(height),
+        "-X",
+        String(x),
+        "-Y",
+        String(y),
+        "-P",
+        "-F",
+        "#{pane_id}",
+      ]),
+    );
+    setParentOption(surface, caller);
   } else {
     let target = caller;
     let direction: SplitDirection = "right";
     try {
-      const rows = parsePaneRows(
-        tmux([
-          "list-panes",
-          "-t",
-          caller,
-          "-F",
-          "#{pane_id} #{pane_width} #{pane_height} #{@pmux_parent}",
-        ]),
+      const rows = parsePaneRows(tmux(["list-panes", "-t", caller, "-F", PLACEMENT_FORMAT]));
+      // A candidate is a living tiled pane this caller created in this window;
+      // the caller's own row carries its own parent (or none) and never
+      // matches.
+      const candidates = rows.filter(
+        (row) => row.parent === caller && row.id !== caller && row.floating === 0,
       );
-      // A candidate is a living pane this caller created in this window; the
-      // caller's own row carries its own parent (or none) and never matches.
-      const candidates = rows.filter((row) => row.parent === caller && row.id !== caller);
       const newest = candidates.reduce<PaneRow | undefined>(
         (best, row) => (best === undefined || row.num > best.num ? row : best),
         undefined,
       );
       // The newest child gives both the target and the shape; without one,
-      // the caller's own row does.
+      // the caller's own row does — even when the caller itself floats.
       const targetRow = newest ?? rows.find((row) => row.id === caller);
       if (targetRow) {
         target = targetRow.id;
@@ -228,12 +308,7 @@ export function createSurface(
       // rather than failing the spawn.
     }
     surface = splitWindow(target, direction);
-    try {
-      tmux(["set-option", "-p", "-t", surface, "@pmux_parent", caller]);
-    } catch {
-      // The parentage marker is best effort; the pane still works without it,
-      // it just cannot become a later spawn's target.
-    }
+    setParentOption(surface, caller);
   }
 
   try {
@@ -242,6 +317,16 @@ export function createSurface(
     // Naming is cosmetic — the pane works unnamed.
   }
   return surface;
+}
+
+/** Tag a new pane with its caller. Best effort: without the marker the pane
+ * works, it just cannot become a later spawn's target or cascade step. */
+function setParentOption(surface: string, caller: string): void {
+  try {
+    tmux(["set-option", "-p", "-t", surface, "@pmux_parent", caller]);
+  } catch {
+    // The parentage marker is best effort.
+  }
 }
 
 /**
