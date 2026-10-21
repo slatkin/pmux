@@ -553,6 +553,39 @@ describe("supervisor launch", () => {
       assert.equal(record.systemPromptMode, undefined);
     });
   });
+
+  it("resolves the spawn role and a relative cwd against the process cwd", async () => {
+    const roleFile = join(process.cwd(), ".pi", "agents", "anchor-pi-anchor.md");
+    writeAgentFile(
+      join(process.cwd(), ".pi", "agents"),
+      "anchor-pi-anchor",
+      "model: process-model",
+      "You anchor at the process cwd.",
+    );
+    try {
+      await withHarness(async (h, env) => {
+        // ctx.cwd is a temp dir that differs from process.cwd(); the role
+        // file exists only under the process cwd's `.pi/agents`, so a
+        // session-cwd anchor would leave the role unknown.
+        const running = await h.supervisor.spawn(
+          { name: "Anchor", task: "do it", agent: "anchor-pi-anchor", cwd: "relative-cwd" },
+          env.ctx,
+          { fallback: "pane" },
+        );
+
+        const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
+        assert.ok(record);
+        assert.equal(record.agent, "anchor-pi-anchor");
+        assert.equal(record.model, "process-model");
+        assert.equal(record.rolePrompt, "You anchor at the process cwd.");
+        // The relative per-call cwd resolves against the same anchor.
+        assert.equal(record.cwd, join(process.cwd(), "relative-cwd"));
+        assert.equal(h.runs.length, 1);
+      });
+    } finally {
+      rmSync(roleFile, { force: true });
+    }
+  });
 });
 
 function readFileNames(dir: string): string[] {

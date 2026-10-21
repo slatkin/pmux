@@ -1340,7 +1340,11 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     // and the pane opens after that, so nothing is written on a thrown error.
     const resolved = resolveLaunchRecord({
       role: params.agent,
-      cwd: ctx.cwd,
+      // The pi parent resolves roles and relative cwds against the process
+      // cwd, exactly pre-change. The context type names a `cwd` field, but
+      // setting it is not a guarantee: `pmux_resume` accepts a session file
+      // of another cwd, and the tool context does not verify it.
+      anchor: process.cwd(),
       overrides: {
         name: params.name,
         model: params.model,

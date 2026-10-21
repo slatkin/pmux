@@ -9,7 +9,7 @@
  * test/supervisor.test.ts covers end to end through the supervisor.
  */
 import "./host-env.ts";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -391,6 +391,20 @@ function writeRoleFile(agentsDir: string, name: string, frontmatter: string, bod
   return file;
 }
 
+/** A role written under the process cwd's `.pi/agents` — the anchor a pi
+ * parent resolves at. `.pi/` is gitignored, so the file leaves no VCS trace,
+ * and the returned cleanup removes it.
+ */
+function processCwdRole(
+  name: string,
+  frontmatter: string,
+  body = "You are a test agent.",
+): () => void {
+  writeRoleFile(join(process.cwd(), ".pi", "agents"), name, frontmatter, body);
+  const file = join(process.cwd(), ".pi", "agents", `${name}.md`);
+  return () => rmSync(file, { force: true });
+}
+
 describe("resolveLaunchRecord (design D6)", () => {
   it("raises the external-path errors before anything writes a file", () => {
     withTempDir((dir) => {
@@ -399,7 +413,7 @@ describe("resolveLaunchRecord (design D6)", () => {
         () =>
           resolveLaunchRecord({
             role: "ghost-role",
-            cwd: dir,
+            anchor: dir,
             overrides: { name: "Ghost" },
             strict: true,
           }),
@@ -411,7 +425,7 @@ describe("resolveLaunchRecord (design D6)", () => {
         () =>
           resolveLaunchRecord({
             role: "no-model-role",
-            cwd: dir,
+            anchor: dir,
             overrides: { name: "NM" },
             strict: true,
           }),
@@ -422,7 +436,7 @@ describe("resolveLaunchRecord (design D6)", () => {
       // the same role resolves instead of throwing.
       const filled = resolveLaunchRecord({
         role: "no-model-role",
-        cwd: dir,
+        anchor: dir,
         overrides: { name: "NM", model: "task-model" },
         strict: true,
       });
@@ -431,7 +445,7 @@ describe("resolveLaunchRecord (design D6)", () => {
       // A pi parent's miss reads as a task-only launch: no throw.
       const lenient = resolveLaunchRecord({
         role: "ghost-role",
-        cwd: dir,
+        anchor: dir,
         overrides: { name: "Ghost" },
       });
       assert.equal(lenient.definition, null);
@@ -459,7 +473,7 @@ describe("resolveLaunchRecord (design D6)", () => {
 
       const resolved = resolveLaunchRecord({
         role: "worker-role",
-        cwd: dir,
+        anchor: dir,
         overrides: { name: "W1" },
       });
       assert.equal(resolved.definition?.model, "test-model");
@@ -488,7 +502,7 @@ describe("resolveLaunchRecord (design D6)", () => {
   it("resolves a call-only launch with no role name", () => {
     withTempDir((dir) => {
       const resolved = resolveLaunchRecord({
-        cwd: dir,
+        anchor: dir,
         overrides: { name: "Helper", model: "task-model", interactive: false },
       });
       assert.equal(resolved.definition, null);
@@ -517,7 +531,7 @@ describe("resolveLaunchRecord (design D6)", () => {
       // No override: the record holds the role's values...
       const fromRole = resolveLaunchRecord({
         role: "auto-role",
-        cwd: dir,
+        anchor: dir,
         overrides: { name: "R" },
       });
       assert.equal(fromRole.record.model, "role-model");
@@ -526,7 +540,7 @@ describe("resolveLaunchRecord (design D6)", () => {
 
       const perCall = resolveLaunchRecord({
         role: "auto-role",
-        cwd: dir,
+        anchor: dir,
         overrides: { name: "R", model: "call-model", interactive: false, skills: "b" },
       });
       assert.equal(perCall.record.model, "call-model");
@@ -541,7 +555,7 @@ describe("resolveLaunchRecord (design D6)", () => {
       mkdirSync(localAgentDir, { recursive: true });
 
       const resolved = resolveLaunchRecord({
-        cwd: dir,
+        anchor: dir,
         overrides: { name: "R", cwd: "repo" },
       });
       assert.equal(resolved.record.cwd, join(dir, "repo"));
@@ -561,11 +575,39 @@ describe("resolveLaunchRecord (design D6)", () => {
 
       const resolved = resolveLaunchRecord({
         role: "cc-role",
-        cwd: dir,
+        anchor: dir,
         overrides: { name: "CC" },
       });
       assert.equal(resolved.record.backend, "claude");
       assert.equal(resolved.record.rolePrompt, "You are Claude.");
+    });
+  });
+
+  it("anchors a relative per-call cwd and the role search at the given anchor", () => {
+    withTempDir((dir) => {
+      // A session cwd that is not the anchor: neither value may resolve there.
+      const other = join(dir, "elsewhere");
+      mkdirSync(other, { recursive: true });
+
+      const cleanup = processCwdRole("anchor-role", "model: process-model");
+      try {
+        const resolved = resolveLaunchRecord({
+          role: "anchor-role",
+          anchor: process.cwd(),
+          overrides: { name: "A", cwd: "relative-dir" },
+        });
+        assert.equal(resolved.definition?.model, "process-model");
+        assert.equal(resolved.record.cwd, join(process.cwd(), "relative-dir"));
+
+        const rooted = resolveLaunchRecord({
+          role: "ghost-role",
+          anchor: other,
+          overrides: { name: "A" },
+        });
+        assert.equal(rooted.definition, null);
+      } finally {
+        cleanup();
+      }
     });
   });
 });

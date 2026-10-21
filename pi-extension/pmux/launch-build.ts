@@ -109,8 +109,8 @@ export interface LaunchRecordOverrides {
   model?: string;
   tools?: string;
   skills?: string;
-  /** Per-call cwd; a relative value resolves against the call's cwd, then
-   * the role's own `cwd:` (the resolveSubagentPaths rule). */
+  /** Per-call cwd; a relative value resolves against the launch's anchor
+   * (the resolveSubagentPaths rule). */
   cwd?: string;
   /** Explicit per-call value; `null` leaves the role value to decide. */
   interactive?: boolean | null;
@@ -142,9 +142,9 @@ function isFilePath(path: string): boolean {
 }
 
 /** Resolve the launch's cwd values: a per-call cwd wins over the role's own
- * `cwd:`, and a relative one resolves against the call's cwd when it came from
- * the call, else against the global agent config dir when it came from the
- * role (both paths stay byte-identical today).
+ * `cwd:`, and a relative one resolves against the anchor the caller chose —
+ * the two launch paths never shared one: the pi parent anchors at
+ * `process.cwd()`, the external path at its `--cwd` value.
  */
 export function resolveSubagentPaths(
   cwd: string | undefined,
@@ -182,19 +182,22 @@ export function resolveInteractiveDefault(definition: AgentDefaults | null): boo
  */
 export function resolveLaunchRecord(params: {
   role?: string;
-  /** The launch's cwd: the role search anchor and the base a relative
-   * per-call cwd resolves against. */
-  cwd: string;
+  /** The cwd role resolution and a relative per-call cwd resolve against:
+   * the pi parent passes `process.cwd()`, the external path its `--cwd`
+   * value. Exactly one caller-chosen anchor, so neither path can change
+   * what the other resolves.
+   */
+  anchor: string;
   /** The per-call values on top of the role's. */
   overrides: LaunchRecordOverrides;
   /** Fail loudly on an unknown role or an empty effective model. */
   strict?: boolean;
 }): ResolvedLaunchRole {
   const overrides = params.overrides;
-  const definition = params.role ? loadAgentDefaults(params.role, params.cwd) : null;
+  const definition = params.role ? loadAgentDefaults(params.role, params.anchor) : null;
 
   if (params.strict && params.role) {
-    const rolePaths = agentDefinitionPaths(params.role, params.cwd);
+    const rolePaths = agentDefinitionPaths(params.role, params.anchor);
     if (definition === null) {
       throw new Error(`unknown role '${params.role}' (searched: ${rolePaths.join(" ")})`);
     }
@@ -204,7 +207,7 @@ export function resolveLaunchRecord(params: {
     }
   }
 
-  const paths = resolveSubagentPaths(overrides.cwd, definition, params.cwd);
+  const paths = resolveSubagentPaths(overrides.cwd, definition, params.anchor);
   // The role body is the role; the call's system prompt only fills a gap, and
   // for a Claude Code child it wins (that backend kept the old precedence).
   const rolePrompt =
