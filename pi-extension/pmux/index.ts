@@ -274,7 +274,7 @@ export function resolveMessageTarget(params: {
       return {
         error:
           "Your parent is an external orchestrator; it does not read subagent messages. " +
-          "Your report is your last assistant message, which the orchestrator reads from the session file. " +
+          "Report the way the parent-contact footer at the end of your brief says. " +
           "To ask a question, use `caller_ping`.",
       };
     }

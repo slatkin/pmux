@@ -2810,8 +2810,9 @@ describe("subagent messaging", () => {
       to: "parent",
     });
     assert.match(result.error, /external orchestrator/);
-    assert.match(result.error, /last assistant message/);
+    assert.match(result.error, /parent-contact footer at the end of your brief/);
     assert.match(result.error, /`caller_ping`/);
+    assert.doesNotMatch(result.error, /last assistant message/);
   });
 
   it("omits parent from the reachable list for a child with an external parent", () => {
