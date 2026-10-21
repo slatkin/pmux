@@ -97,26 +97,24 @@ function splitFlag(direction: SplitDirection): string {
   return direction === "down" ? "-v" : "-h";
 }
 
+/** The pane id in a tmux command's output, or a throw when there is none. */
+function paneIdFrom(out: string): string {
+  const surface = out.trim();
+  if (!surface.startsWith("%")) {
+    throw new Error(`Unexpected tmux split result (no pane id): ${surface}`);
+  }
+  return surface;
+}
+
 /**
  * Split a pane without taking focus and return the new pane id. The target
  * pane is passed in rather than read from the environment, because callers
  * may carry it in an injected environment.
  */
 function splitWindow(target: string, direction: SplitDirection): string {
-  const surface = tmux([
-    "split-window",
-    "-d",
-    splitFlag(direction),
-    "-t",
-    target,
-    "-P",
-    "-F",
-    "#{pane_id}",
-  ]).trim();
-  if (!surface.startsWith("%")) {
-    throw new Error(`Unexpected tmux split result (no pane id): ${surface}`);
-  }
-  return surface;
+  return paneIdFrom(
+    tmux(["split-window", "-d", splitFlag(direction), "-t", target, "-P", "-F", "#{pane_id}"]),
+  );
 }
 
 /** True when the pane still exists. A closed pane fails the lookup. */
@@ -131,6 +129,8 @@ export function paneExists(surface: string): boolean {
 /** One row of the placement listing: a window pane with its shape and parent. */
 interface PaneRow {
   id: string;
+  /** The numeric part of the pane id (`%10` -> 10); `-1` when malformed. */
+  num: number;
   width: number;
   height: number;
   /** The `@pmux_parent` value; empty when the option is unset. */
@@ -149,15 +149,16 @@ function parsePaneRows(out: string): PaneRow[] {
     const width = Number(fields[1]);
     const height = Number(fields[2]);
     if (!Number.isFinite(width) || !Number.isFinite(height)) continue;
-    rows.push({ id: fields[0], width, height, parent: fields[3] ?? "" });
+    const num = Number(fields[0].slice(1));
+    rows.push({
+      id: fields[0],
+      num: Number.isFinite(num) ? num : -1,
+      width,
+      height,
+      parent: fields[3] ?? "",
+    });
   }
   return rows;
-}
-
-/** The numeric part of a tmux pane id (`%10` -> 10); `-1` when malformed. */
-function paneIdNumber(id: string): number {
-  const n = Number(id.slice(1));
-  return Number.isFinite(n) ? n : -1;
 }
 
 /** Side by side when the target is at least twice as wide as it is tall. */
@@ -187,13 +188,14 @@ export function createSurface(
   let surface: string;
   if (placement === "tab") {
     const session = tmux(["display-message", "-p", "-t", caller, "#{session_id}"]).trim();
-    surface = tmux(["new-window", "-d", "-t", session, "-P", "-F", "#{pane_id}"]).trim();
+    const created = tmux(["new-window", "-d", "-t", session, "-P", "-F", "#{pane_id}"]);
     const callerWindow = tmux(["display-message", "-p", "-t", caller, "#{window_id}"]).trim();
     try {
       tmux(["select-window", "-t", callerWindow]);
     } catch {
       // Focus restore is best effort; the new window exists either way.
     }
+    surface = paneIdFrom(created);
   } else {
     let target = caller;
     let direction: SplitDirection = "right";
@@ -211,14 +213,15 @@ export function createSurface(
       // caller's own row carries its own parent (or none) and never matches.
       const candidates = rows.filter((row) => row.parent === caller && row.id !== caller);
       const newest = candidates.reduce<PaneRow | undefined>(
-        (best, row) =>
-          best === undefined || paneIdNumber(row.id) > paneIdNumber(best.id) ? row : best,
+        (best, row) => (best === undefined || row.num > best.num ? row : best),
         undefined,
       );
-      const shapeRow = newest ?? rows.find((row) => row.id === caller);
-      if (shapeRow) {
-        if (newest) target = newest.id;
-        direction = axisDirection(shapeRow);
+      // The newest child gives both the target and the shape; without one,
+      // the caller's own row does.
+      const targetRow = newest ?? rows.find((row) => row.id === caller);
+      if (targetRow) {
+        target = targetRow.id;
+        direction = axisDirection(targetRow);
       }
     } catch {
       // The listing failed: fall back to splitting the caller side by side
@@ -231,10 +234,6 @@ export function createSurface(
       // The parentage marker is best effort; the pane still works without it,
       // it just cannot become a later spawn's target.
     }
-  }
-
-  if (!surface.startsWith("%")) {
-    throw new Error(`Unexpected tmux split result (no pane id): ${surface}`);
   }
 
   try {

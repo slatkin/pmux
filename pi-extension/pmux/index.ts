@@ -24,6 +24,7 @@ import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import {
   createSupervisor,
   SubagentParams,
+  SurfaceParam,
   borderLine,
   buildLaunchMessagingHint,
   buildPiPromptArgs,
@@ -849,12 +850,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             description: "Message to send after the resume, for example follow-up instructions.",
           }),
         ),
-        surface: Type.Optional(
-          Type.Union([Type.Literal("pane"), Type.Literal("tab")], {
-            description:
-              '"pane" (default): place the pane automatically. "tab": open a window. Overrides the configured default.',
-          }),
-        ),
+        surface: SurfaceParam,
         autoExit: Type.Optional(
           Type.Boolean({
             description:

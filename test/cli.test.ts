@@ -37,7 +37,7 @@ import {
 import { runSpec } from "../pi-extension/pmux/run.ts";
 import { main } from "../pi-extension/pmux/cli.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
-import { useTmuxPaneFake } from "./tmux-fakes.ts";
+import { placementRow, useTmuxPaneFake } from "./tmux-fakes.ts";
 import { main as shimMain } from "../skills/pmux/launch.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
@@ -1028,7 +1028,7 @@ describe("cli.ts start", () => {
 
     // The first child's pane is alive and carries the caller's parent marker.
     paneCalls.length = 0;
-    paneFake.placementRows = "%21 200 50 \n%24 100 50 %21\n";
+    paneFake.placementRows = `${placementRow("%21", 200, 50)}\n${placementRow("%24", 100, 50, "%21")}\n`;
     try {
       const second = await runStart({ cwd, role: "doer", child: "fix-8" });
       assert.equal(second.code, 0);

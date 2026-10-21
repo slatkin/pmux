@@ -26,6 +26,14 @@ export interface TmuxPaneFake {
 }
 
 /**
+ * One row of the placement listing: `#{pane_id} #{pane_width} #{pane_height}
+ * #{@pmux_parent}`. An unset `@pmux_parent` leaves the last field empty.
+ */
+export function placementRow(id: string, width: number, height: number, parent = ""): string {
+  return `${id} ${width} ${height} ${parent}`;
+}
+
+/**
  * Install the standard fake and return the recorded calls. Reset `lines`
  * between tests; uninstall with `__setTmuxExecForTests__(null)`.
  */
@@ -42,7 +50,7 @@ export function useTmuxPaneFake(): TmuxPaneFake {
       if (fake.placementRows !== null) return fake.placementRows;
       // One row for the caller: unset `@pmux_parent` prints as an empty
       // fourth field.
-      return `${caller} 200 50 \n`;
+      return `${placementRow(caller, 200, 50)}\n`;
     }
     if (args[0] === "set-option") return "";
     lines.push(joined);

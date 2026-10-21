@@ -24,6 +24,7 @@ import {
   sendEscape,
   splitPane,
 } from "../pi-extension/pmux/tmux.ts";
+import { placementRow } from "./tmux-fakes.ts";
 
 /** Record every tmux call and answer with `reply`. */
 function stub(reply: (args: string[]) => string): string[][] {
@@ -44,27 +45,19 @@ describe("tmux backend", () => {
     assert.equal(isTmuxAvailable({ TMUX_PANE: "%3" }), false);
   });
 
-  /** One placement-listing row; an unset `@pmux_parent` leaves an empty field. */
-  function row(id: string, width: number, height: number, parent = ""): string {
-    return `${id} ${width} ${height} ${parent}`;
-  }
-
-  /** Stub the placement listing with `rows`; splits yield `newPane`. */
-  function stubPlacement(
-    rows: string[],
-    options: { newPane?: string; setOptionThrows?: boolean } = {},
-  ): string[][] {
+  /** Stub the placement listing with `rows`; splits yield `%9`. */
+  function stubPlacement(rows: string[], options: { setOptionThrows?: boolean } = {}): string[][] {
     return stub((args) => {
       if (args[0] === "list-panes") return `${rows.join("\n")}\n`;
       if (args[0] === "set-option" && options.setOptionThrows) {
         throw new Error("no such option");
       }
-      return options.newPane ?? "%9";
+      return "%9";
     });
   }
 
   it("splits the caller's own pane when it has no living child", () => {
-    const calls = stubPlacement([row("%3", 200, 50)]);
+    const calls = stubPlacement([placementRow("%3", 200, 50)]);
     const pane = createSurface("Scout", "pane", "%3");
     assert.equal(pane, "%9");
     assert.deepEqual(calls[0], [
@@ -83,9 +76,9 @@ describe("tmux backend", () => {
 
   it("a later child splits the newest living child", () => {
     const calls = stubPlacement([
-      row("%3", 200, 50),
-      row("%5", 100, 50, "%3"),
-      row("%7", 100, 25, "%3"),
+      placementRow("%3", 200, 50),
+      placementRow("%5", 100, 50, "%3"),
+      placementRow("%7", 100, 25, "%3"),
     ]);
     createSurface("Scout", "pane", "%3");
     assert.deepEqual(calls[1], ["split-window", "-d", "-h", "-t", "%7", "-P", "-F", "#{pane_id}"]);
@@ -93,9 +86,9 @@ describe("tmux backend", () => {
 
   it("orders children by numeric pane id, so %10 is newer than %9", () => {
     const calls = stubPlacement([
-      row("%3", 200, 50),
-      row("%9", 100, 50, "%3"),
-      row("%10", 100, 25, "%3"),
+      placementRow("%3", 200, 50),
+      placementRow("%9", 100, 50, "%3"),
+      placementRow("%10", 100, 25, "%3"),
     ]);
     createSurface("Scout", "pane", "%3");
     assert.deepEqual(calls[1], ["split-window", "-d", "-h", "-t", "%10", "-P", "-F", "#{pane_id}"]);
@@ -103,35 +96,35 @@ describe("tmux backend", () => {
 
   it("splits the next newest child when the newest is absent from the listing", () => {
     // %7 was closed or moved to another window, so only %5 is listed.
-    const calls = stubPlacement([row("%3", 200, 50), row("%5", 100, 50, "%3")]);
+    const calls = stubPlacement([placementRow("%3", 200, 50), placementRow("%5", 100, 50, "%3")]);
     createSurface("Scout", "pane", "%3");
     assert.deepEqual(calls[1], ["split-window", "-d", "-h", "-t", "%5", "-P", "-F", "#{pane_id}"]);
   });
 
   it("ignores a grandchild row whose @pmux_parent is another pane", () => {
     const calls = stubPlacement([
-      row("%3", 200, 50),
-      row("%5", 100, 50, "%3"),
-      row("%8", 50, 25, "%5"),
+      placementRow("%3", 200, 50),
+      placementRow("%5", 100, 50, "%3"),
+      placementRow("%8", 50, 25, "%5"),
     ]);
     createSurface("Scout", "pane", "%3");
     assert.deepEqual(calls[1], ["split-window", "-d", "-h", "-t", "%5", "-P", "-F", "#{pane_id}"]);
   });
 
   it("stacks below a tall target", () => {
-    const calls = stubPlacement([row("%3", 49, 50)]);
+    const calls = stubPlacement([placementRow("%3", 49, 50)]);
     createSurface("Scout", "pane", "%3");
     assert.equal(calls[1][2], "-v");
   });
 
   it("splits an exact 2:1 target side by side", () => {
-    const calls = stubPlacement([row("%3", 100, 50)]);
+    const calls = stubPlacement([placementRow("%3", 100, 50)]);
     createSurface("Scout", "pane", "%3");
     assert.equal(calls[1][2], "-h");
   });
 
   it("takes the axis from a child target's own shape", () => {
-    const calls = stubPlacement([row("%3", 200, 50), row("%5", 49, 50, "%3")]);
+    const calls = stubPlacement([placementRow("%3", 200, 50), placementRow("%5", 49, 50, "%3")]);
     createSurface("Scout", "pane", "%3");
     assert.deepEqual(calls[1], ["split-window", "-d", "-v", "-t", "%5", "-P", "-F", "#{pane_id}"]);
   });
@@ -147,7 +140,7 @@ describe("tmux backend", () => {
   });
 
   it("keeps the new pane when the parentage marker fails", () => {
-    const calls = stubPlacement([row("%3", 200, 50)], { setOptionThrows: true });
+    const calls = stubPlacement([placementRow("%3", 200, 50)], { setOptionThrows: true });
     const pane = createSurface("Scout", "pane", "%3");
     assert.equal(pane, "%9");
     assert.deepEqual(calls[2], ["set-option", "-p", "-t", "%9", "@pmux_parent", "%3"]);
@@ -156,7 +149,7 @@ describe("tmux backend", () => {
   });
 
   it("re-tiles nothing: no layout, swap or resize call", () => {
-    const calls = stubPlacement([row("%3", 200, 50), row("%5", 100, 50, "%3")]);
+    const calls = stubPlacement([placementRow("%3", 200, 50), placementRow("%5", 100, 50, "%3")]);
     createSurface("Scout", "pane", "%3");
     for (const call of calls) {
       assert.ok(
