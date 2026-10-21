@@ -8,7 +8,14 @@
  * arrays and typed modules — no shell anywhere.
  */
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -34,7 +41,7 @@ import {
   writeLaunchSpec,
   type LaunchSpec,
 } from "./launch.ts";
-import { createSurface, runInPane, callerPaneId } from "./tmux.ts";
+import { agentPrompt, createSurface, runInPane, callerPaneId } from "./tmux.ts";
 import { removeExitSidecar } from "./exit-sidecar.ts";
 import { resolvePlacement } from "./placement.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
@@ -74,6 +81,7 @@ const MIN_NODE: readonly [number, number] = [22, 18];
 const USAGE = [
   "Usage:",
   "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--report last|send]",
+  "  node cli.ts send --to <pane> --text <text>",
   "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>]",
   "  node cli.ts run <spec> [<prompt>]",
   "  node cli.ts last-message --session <file>",
@@ -90,6 +98,8 @@ const CLI_OPTIONS = {
   scratch: { type: "string" },
   "close-grace-ms": { type: "string" },
   report: { type: "string" },
+  to: { type: "string" },
+  text: { type: "string" },
   launch: { type: "string" },
   prompt: { type: "string" },
   session: { type: "string" },
@@ -109,6 +119,8 @@ interface CliValues {
   scratch?: string;
   "close-grace-ms"?: string;
   report?: string;
+  to?: string;
+  text?: string;
   launch?: string;
   prompt?: string;
   session?: string;
@@ -465,6 +477,46 @@ function pruneCommand(values: CliValues, deps: CliDeps): number {
   return 0;
 }
 
+/**
+ * Best-effort report receipt. Inside a child the environment carries
+ * `PI_PMUX_SESSION`, so every delivered report appends one JSON line to
+ * `<session>.sent`; the pane-side wrapper counts those lines to decide
+ * whether it must wake the parent. The count is form-independent — it does
+ * not care how the child quoted or built the send invocation. A failed
+ * receipt write never fails the send; losing one only risks a spurious
+ * wake-up.
+ */
+function writeReportReceipt(env: NodeJS.ProcessEnv, to: string, text: string): void {
+  const session = env.PI_PMUX_SESSION;
+  if (!session) return;
+  try {
+    appendFileSync(
+      `${session}.sent`,
+      `${JSON.stringify({ at: new Date().toISOString(), to, bytes: text.length })}\n`,
+    );
+  } catch {
+    // Best effort; the delivery already happened.
+  }
+}
+
+/** `send`: deliver one report line into a pane (paste, then Enter). */
+function sendCommand(values: CliValues, deps: CliDeps): number {
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  try {
+    const to = required("--to", values.to);
+    const text = required("--text", values.text);
+    agentPrompt(to, text);
+    writeReportReceipt(deps.env ?? process.env, to, text);
+    return 0;
+  } catch (error) {
+    // A usage error must leave stdout empty and stay out of the entry
+    // wrapper, so it is caught here instead of bubbling up.
+    const message = error instanceof Error ? error.message : String(error);
+    writeErr(`cli.ts: ${message}\n`);
+    return 1;
+  }
+}
+
 /** `last-message`: print a session's last assistant message. */
 function lastMessageCommand(values: CliValues, deps: CliDeps): number {
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
@@ -589,6 +641,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     return report === null ? 2 : startCommand(values as CliValues, deps, report);
   }
   if (command === "run") return runCommand(positionals.slice(1), deps);
+  if (command === "send") return sendCommand(values as CliValues, deps);
   if (command === "last-message") return lastMessageCommand(values as CliValues, deps);
   if (command === "wait") return await waitCommand(values as CliValues, deps);
   if (command === "prune") return pruneCommand(values as CliValues, deps);

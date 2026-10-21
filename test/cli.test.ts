@@ -1567,6 +1567,86 @@ describe("cli.ts last-message", () => {
   });
 });
 
+// ─── cli.ts send ───────────────────────────────────────────────────────
+
+describe("cli.ts send", () => {
+  it("pastes the text into the target pane and presses Enter", async () => {
+    // No PI_PMUX_SESSION: the orchestrator's own send writes no receipt.
+    const res = await runCli(
+      ["send", "--to", "%3", "--text", "worker done: commit abc"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 0);
+    assert.equal(res.stdout, "");
+    assert.deepEqual(paneCalls, [
+      "send-keys -t %3 -l worker done: commit abc",
+      "send-keys -t %3 Enter",
+    ]);
+  });
+
+  // A multiline report must arrive as one paste: every tmux call is one argv
+  // array, so the newlines ride inside the single literal text.
+  it("keeps multiline text in one paste", async () => {
+    const res = await runCli(["send", "--to", "%3", "--text", "line one\nline two"], tmuxEnv());
+    assert.equal(res.code, 0);
+    assert.deepEqual(paneCalls, ["send-keys -t %3 -l line one\nline two", "send-keys -t %3 Enter"]);
+  });
+
+  it("requires --to and --text", async () => {
+    const noTo = await runCli(["send", "--text", "hi"], tmuxEnv());
+    assert.equal(noTo.code, 1);
+    assert.match(noTo.stderr, /missing --to/);
+    assert.equal(noTo.stdout, "");
+    assert.deepEqual(paneCalls, []);
+    const noText = await runCli(["send", "--to", "%3"], tmuxEnv());
+    assert.equal(noText.code, 1);
+    assert.match(noText.stderr, /missing --text/);
+    assert.equal(noText.stdout, "");
+    assert.deepEqual(paneCalls, []);
+  });
+
+  it("writes a receipt only when PI_PMUX_SESSION is set", async () => {
+    await withTempDirAsync(async (dir) => {
+      // The orchestrator's own send (no session env) writes nothing.
+      const res = await runCli(["send", "--to", "%3", "--text", "hi"], tmuxEnv());
+      assert.equal(res.code, 0);
+      assert.deepEqual(
+        readdirSync(dir).filter((name) => name.endsWith(".sent")),
+        [],
+      );
+
+      // Inside a child the env carries PI_PMUX_SESSION, so one JSON line
+      // lands in `<session>.sent`, carrying the target pane.
+      const sessionFile = join(dir, "session.jsonl");
+      const text = "line one\nline two";
+      const child = await runCli(["send", "--to", "%3", "--text", text], {
+        ...tmuxEnv(),
+        PI_PMUX_SESSION: sessionFile,
+      });
+      assert.equal(child.code, 0);
+      const lines = readFileSync(`${sessionFile}.sent`, "utf8").trimEnd().split("\n");
+      assert.equal(lines.length, 1);
+      const receipt = JSON.parse(lines[0]) as { at: string; to: string; bytes: number };
+      assert.equal(receipt.to, "%3");
+      assert.equal(receipt.bytes, text.length);
+      assert.match(receipt.at, /^\d{4}-\d{2}-\d{2}T/);
+    });
+  });
+
+  it("still delivers when the receipt path is in a missing directory", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "missing", "session.jsonl");
+      const res = await runCli(["send", "--to", "%3", "--text", "hi"], {
+        ...tmuxEnv(),
+        PI_PMUX_SESSION: sessionFile,
+      });
+      assert.equal(res.code, 0);
+      assert.deepEqual(paneCalls, ["send-keys -t %3 -l hi", "send-keys -t %3 Enter"]);
+      assert.equal(existsSync(`${sessionFile}.sent`), false);
+    });
+  });
+});
+
 // ─── skills/pmux/launch.ts ──────────────────────────────────────────
 
 const SHIM = join(REPO_ROOT, "skills", "pmux", "launch.ts");
