@@ -59,6 +59,16 @@ describe("pruneScratch", () => {
     assert.equal(result.deletedBytes, 32);
   });
 
+  it("prunes a report receipt past the retention and keeps it within it", () => {
+    const dir = mkdtempSync(join(workdir, "receipt-"));
+    const old = seed(dir, "scout-deadbeef.sent", 8 * DAY_MS);
+    const fresh = seed(dir, "scout-cafe0001.sent", 1000);
+    const result = pruneScratch(dir, { maxAgeMs: 7 * DAY_MS });
+    assert.equal(result.scanned, 2);
+    assert.deepEqual(result.deleted, [old]);
+    assert.equal(existsSync(fresh), true);
+  });
+
   it("lists without deleting on dry run", () => {
     const dir = mkdtempSync(join(workdir, "dry-"));
     const old = seed(dir, "scout-deadbeef.jsonl", 8 * DAY_MS);
