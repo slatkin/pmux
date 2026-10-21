@@ -3,7 +3,6 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type, type Static } from "@sinclair/typebox";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
@@ -29,7 +28,6 @@ import { exitSidecarPath, removeExitSidecar, type PollResult } from "./exit-side
 import { removeChildStatus } from "./status-file.ts";
 import { resolvePlacement, type SurfaceDefault } from "./placement.ts";
 import {
-  buildSubagentToolAllowlist,
   getAgentConfigDir,
   loadAgentDefaults,
   type AgentDefaults,
@@ -51,6 +49,7 @@ import {
   type LaunchBackendName,
   type LaunchRecord,
 } from "./launch-record.ts";
+import { SUBAGENTS_DIR, buildPiLaunch, type PiLaunchRequest } from "./launch-build.ts";
 import { findLastAssistantMessage, getNewEntries, seedSubagentSessionFile } from "./session.ts";
 import { slugifyName } from "./slug.ts";
 import {
@@ -74,7 +73,7 @@ import {
   type ActivityReadResult,
   type SubagentActivityState,
 } from "./activity.ts";
-import { decodeChildEnv, encodeChildEnv, resolveDenyTools } from "./child-env.ts";
+import { decodeChildEnv, resolveDenyTools } from "./child-env.ts";
 import { capSummary, SCREEN_SUMMARY_CHARS } from "./report-cap.ts";
 import {
   IDLE_NUDGE_TEXT,
@@ -83,11 +82,19 @@ import {
   type IdleWatchState,
 } from "./idle-watchdog.ts";
 
-/** Absolute path to `pi-extension/pmux`. https://github.com/nodejs/node/issues/37845 */
-const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
-
 /** Pane-side entry point every pi-parent launch spec runs through. */
 const SUBAGENTS_CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
+
+// The shared launch builder lives in launch-build.ts (design D1); the moved
+// names are re-exported so the tests and the extension keep their import path.
+export {
+  buildLaunchMessagingHint,
+  buildPiPromptArgs,
+  buildSpawnEnvParts,
+  buildSubagentTaskPrompt,
+  resolveModeHint,
+  writeRunContextFile,
+} from "./launch-build.ts";
 
 export const SubagentParams = Type.Object({
   name: Type.String({ description: "Display name." }),
@@ -446,89 +453,6 @@ export function getParentMessageFile(sessionFile: string): string {
   return `${sessionFile}.msg`;
 }
 
-/** Env for a freshly spawned pi subagent, in launch-spec form. */
-export function buildSpawnEnvParts(params: {
-  name: string;
-  agent?: string;
-  autoExit?: boolean;
-  subagentSessionFile: string;
-  id: string;
-  activityFile: string;
-  surface: string;
-  codingAgentDir?: string;
-  denySet: Set<string>;
-  parentRosterFile?: string;
-}): Record<string, string> {
-  const env = encodeChildEnv({
-    name: params.name,
-    agent: params.agent,
-    autoExit: params.autoExit === true,
-    sessionFile: params.subagentSessionFile,
-    id: params.id,
-    activityFile: params.activityFile,
-    surface: params.surface,
-    denyTools: [...params.denySet],
-    parentRosterFile: params.parentRosterFile,
-  });
-  if (params.codingAgentDir) env.PI_CODING_AGENT_DIR = params.codingAgentDir;
-  return env;
-}
-
-/** Task hint shown to the child: auto-exit agents are now told to exit explicitly too. */
-export function resolveModeHint(autoExit?: boolean): string {
-  return autoExit
-    ? "Complete your task autonomously. Call pmux_done when finished."
-    : "Complete your task. When finished, call the pmux_done tool. The user can interact with you at any time.";
-}
-
-export function buildSubagentTaskPrompt(params: {
-  task: string;
-  roleBlock: string;
-  modeHint: string;
-  summaryInstruction: string;
-  messagingHint: string;
-  inheritsConversationContext: boolean;
-}): string {
-  return params.inheritsConversationContext
-    ? `${params.task}\n\n${params.messagingHint}`
-    : `${params.roleBlock}\n\n${params.modeHint}\n\n${params.messagingHint}\n\n${params.task}\n\n${params.summaryInstruction}`;
-}
-
-/** The launch-prompt line naming the peers a fresh subagent can message. */
-export function buildLaunchMessagingHint(siblingNames: string[]): string {
-  const names = [...new Set(["parent", ...siblingNames])];
-  const list = names.map((name) => `\`${name}\``).join(", ");
-  return `You can message ${list} with pmux_message; it does not end your session.`;
-}
-
-/**
- * Build the positional prompt args for a Pi CLI subagent launch.
- *
- * In artifact-backed launches (lineage-only, standalone), Pi's buildInitialMessage()
- * concatenates @file content with messages[0] into one initial prompt. That breaks
- * /skill: expansion because the message no longer starts with "/skill:". Only
- * messages[1..] are sent as separate follow-up prompts where /skill: is recognized.
- *
- * When there are skill prompts AND artifact-backed delivery, we prepend an empty
- * first positional message so that /skill: args land in messages[1..] and arrive
- * as standalone prompts in the child session.
- */
-export function buildPiPromptArgs(params: {
-  effectiveSkills?: string;
-  taskDelivery: "direct" | "artifact";
-  taskArg: string;
-}): string[] {
-  const skillPrompts = (params.effectiveSkills ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((skill) => `/skill:${skill}`);
-
-  const needsSeparator = params.taskDelivery === "artifact" && skillPrompts.length > 0;
-
-  return [...(needsSeparator ? [""] : []), ...skillPrompts, params.taskArg];
-}
-
 /**
  * Read complete JSON lines from a child's message file, starting at byte
  * `offset`. A trailing line without its newline is left for the next call.
@@ -869,30 +793,12 @@ export function requestSubagentInterrupt(
 }
 
 /** One spawn resolution plus its per-run binding, so a backend builds one run. */
-export interface BackendLaunchRequest {
-  /** Role values the spawn resolved once (design D3). */
-  record: LaunchRecord;
-  /** The spawning task, which the record does not keep. */
-  task: string;
-  /** Skill prompts for this spawn, which the record does not keep. */
-  skills?: string;
+export interface BackendLaunchRequest extends PiLaunchRequest {
   /** Spawn-only: how the task reaches the child. */
   launchBehavior?: LaunchBehavior;
-  /** The target cwd's `.pi/agent` directory, when it has one. */
-  localAgentDir: string | null;
-  artifactDir: string;
-  /** Names the child can reach with `pmux_message` at spawn time. */
-  siblingNames: string[];
-  parentRosterFile?: string;
-  /** Set when the run continues an existing session (design D5). */
-  resume?: {
-    /** The follow-up message; the session keeps the spawn task and role. */
-    message?: string;
-  };
   /** Values that change for every run; the record does not keep them (design D3). */
   run: {
     id: string;
-    surface: string;
     startTime: number;
     /** Child session file (pi), or the record-adjacent path (Claude Code). */
     sessionFile: string;
@@ -902,7 +808,6 @@ export interface BackendLaunchRequest {
     entryCountBefore: number;
   };
 }
-
 /** What a backend builds for one run: its launch spec and its running entry. */
 export interface BackendLaunch {
   spec: LaunchSpec;
@@ -951,158 +856,22 @@ interface SubagentBackend {
   afterExit: BackendAfterExit;
 }
 
-/** Write one run's context file under the artifact directory and return its path. */
-function writeRunContextFile(
-  artifactDir: string,
-  folder: string,
-  stem: string,
-  content: string,
-): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const file = join(artifactDir, folder, `${stem}-${timestamp}.md`);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, content, "utf8");
-  return file;
-}
-
-function buildPiLaunch(request: BackendLaunchRequest): BackendLaunch {
-  const { record, run } = request;
-  const resume = request.resume;
-
-  const identity = record.rolePrompt ?? null;
-  const systemPromptMode = record.systemPromptMode;
-
-  // Build pi argv (no shell: every value stays exactly one argument).
-  const piArgs: string[] = ["--session", run.sessionFile];
-
-  const subagentDonePath = join(SUBAGENTS_DIR, "pmux-done.ts");
-  piArgs.push("-e", subagentDonePath);
-
-  if (record.model) {
-    const model = record.thinking ? `${record.model}:${record.thinking}` : record.model;
-    piArgs.push("--model", model);
-  }
-
-  // Pass the role prompt as a system prompt via file to avoid shell escaping
-  // issues with multiline content. Pi's --append-system-prompt and
-  // --system-prompt auto-detect file paths and read their contents. A pi
-  // session does not store these flags, so a resume writes the file again.
-  if (systemPromptMode && identity) {
-    const flag = systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt";
-    const syspromptPath = writeRunContextFile(
-      request.artifactDir,
-      "context",
-      `${slugifyName(record.name, { hyphenate: false }) || "subagent"}-sysprompt`,
-      identity,
-    );
-    piArgs.push(flag, syspromptPath);
-  }
-
-  const toolAllowlist = buildSubagentToolAllowlist(record.tools);
-  if (toolAllowlist) {
-    piArgs.push("--tools", toolAllowlist);
-  }
-
-  // Env: denied tools + subagent identity + config dir propagation.
-  // If the target cwd has its own .pi/agent/, that wins; else propagate the
-  // current/global agent dir.
-  const codingAgentDir =
-    request.localAgentDir && existsSync(request.localAgentDir)
-      ? request.localAgentDir
-      : process.env.PI_CODING_AGENT_DIR;
-  const spawnEnv = buildSpawnEnvParts({
-    name: record.name,
-    agent: record.agent,
-    autoExit: record.autoExit,
-    subagentSessionFile: run.sessionFile,
-    id: run.id,
-    activityFile: run.activityFile,
-    surface: run.surface,
-    codingAgentDir,
-    denySet: new Set(record.denyTools),
-    parentRosterFile: request.parentRosterFile,
-  });
-
-  if (resume) {
-    // The session keeps the spawn task and role. A resume adds only the follow-up
-    // message, behind the peers the child can reach at resume time.
-    if (resume.message) {
-      const promptPath = writeRunContextFile(
-        request.artifactDir,
-        "pmux-resume",
-        slugifyName(record.name, { hyphenate: false }) || "resume",
-        `${buildLaunchMessagingHint(request.siblingNames)}\n\n${resume.message}`,
-      );
-      piArgs.push(`@${promptPath}`);
-    }
-  } else {
-    const launchBehavior = request.launchBehavior;
-    if (!launchBehavior) throw new Error("A spawn launch needs a launch behavior");
-
-    // Only full-context fork mode inherits prior conversation state.
-    // Blank-session modes need the wrapper instructions and artifact-backed handoff.
-    const identityInSystemPrompt = systemPromptMode && identity;
-    const roleBlock = identity && !identityInSystemPrompt ? `\n\n${identity}` : "";
-    const fullTask = buildSubagentTaskPrompt({
-      task: request.task,
-      roleBlock,
-      modeHint: resolveModeHint(record.autoExit),
-      summaryInstruction: record.autoExit
-        ? "Your FINAL assistant message should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one."
-        : "Your FINAL assistant message (before calling pmux_done or before the user exits) should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one.",
-      messagingHint: buildLaunchMessagingHint(request.siblingNames),
-      inheritsConversationContext: launchBehavior.inheritsConversationContext,
-    });
-
-    // Pass task and skill prompts to the sub-agent.
-    // Only full-context fork mode gets a direct task argument because it already
-    // inherits the parent conversation. Blank-session modes use artifact-backed
-    // handoff so the wrapper instructions arrive as the initial user message.
-    let taskArg: string;
-    if (launchBehavior.taskDelivery === "direct") {
-      taskArg = fullTask;
-    } else {
-      const artifactPath = writeRunContextFile(
-        request.artifactDir,
-        "context",
-        slugifyName(record.name, { hyphenate: false }) || "subagent",
-        fullTask,
-      );
-      taskArg = `@${artifactPath}`;
-    }
-
-    piArgs.push(
-      ...buildPiPromptArgs({
-        effectiveSkills: request.skills,
-        taskDelivery: launchBehavior.taskDelivery,
-        taskArg,
-      }),
-    );
-  }
-
+function buildPiBackendLaunch(request: BackendLaunchRequest): BackendLaunch {
+  const { run } = request;
   return {
-    spec: {
-      version: LAUNCH_SPEC_VERSION,
-      name: record.name,
-      ...(record.cwd ? { cwd: record.cwd } : {}),
-      env: spawnEnv,
-      command: "pi",
-      args: piArgs,
-      sessionFile: run.sessionFile,
-      title: buildPaneTitle(record.name, resume?.message ?? request.task),
-    },
+    spec: buildPiLaunch(request),
     running: {
       id: run.id,
-      name: record.name,
+      name: request.record.name,
       task: request.task,
-      agent: record.agent,
-      surface: run.surface,
+      agent: request.record.agent,
+      surface: request.surface,
       startTime: run.startTime,
       sessionFile: run.sessionFile,
       launchScriptFile: run.launchScriptFile,
       activityFile: run.activityFile,
       entryCountBefore: run.entryCountBefore,
-      interactive: record.interactive,
+      interactive: request.record.interactive,
       statusState: createStatusState({
         source: "pi",
         startTimeMs: run.startTime,
@@ -1158,7 +927,7 @@ function buildClaudeLaunch(request: BackendLaunchRequest): BackendLaunch {
       name: record.name,
       task: request.task,
       agent: record.agent,
-      surface: run.surface,
+      surface: request.surface,
       startTime: run.startTime,
       sessionFile: run.sessionFile,
       launchScriptFile: run.launchScriptFile,
@@ -1278,7 +1047,7 @@ const BACKENDS: Record<LaunchBackendName, SubagentBackend> = {
     observes: true,
     // The agent body is the role; an explicit parameter only fills a gap.
     resolveRolePrompt: (params, agentDefs) => agentDefs?.body ?? params.systemPrompt,
-    buildLaunch: buildPiLaunch,
+    buildLaunch: buildPiBackendLaunch,
     interrupt: () => null,
     extractResult: extractPiResult,
     afterExit: () => ({}),
@@ -1555,7 +1324,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     // A new run must not read the status of an earlier run, nor its exit.
     removeChildStatus(request.run.sessionFile);
     removeExitSidecar(request.run.sessionFile);
-    deps.pmux.runInPane(request.run.surface, paneLine);
+    deps.pmux.runInPane(request.surface, paneLine);
 
     runningSubagents.set(running.id, running);
     writeRoster();
@@ -1674,11 +1443,11 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
         launchBehavior,
         localAgentDir,
         artifactDir,
+        surface,
         siblingNames: Array.from(runningSubagents.values(), (agent) => agent.name),
         parentRosterFile: rosterContext?.file,
         run: {
           id,
-          surface,
           startTime,
           sessionFile: subagentSessionFile,
           launchScriptFile,
@@ -1998,12 +1767,12 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
           task: params.message ?? "resumed session",
           localAgentDir,
           artifactDir,
+          surface,
           siblingNames: Array.from(runningSubagents.values(), (agent) => agent.name),
           parentRosterFile: rosterContext?.file,
           resume: { message: params.message },
           run: {
             id,
-            surface,
             startTime,
             sessionFile: params.sessionPath,
             launchScriptFile,
