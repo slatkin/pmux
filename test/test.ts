@@ -621,7 +621,7 @@ describe("status.ts", () => {
     });
   });
 
-  it("persists the pane placement while keeping other config keys", () => {
+  it("persists both surface placements while keeping other config keys", () => {
     withTempDir((dir) => {
       const configPath = join(dir, "config.json");
       const examplePath = join(dir, "config.json.example");
@@ -629,21 +629,13 @@ describe("status.ts", () => {
 
       writeSurfaceConfig("pane", configPath, examplePath);
 
-      const saved = JSON.parse(readFileSync(configPath, "utf8"));
+      let saved = JSON.parse(readFileSync(configPath, "utf8"));
       assert.deepEqual(saved, { status: { enabled: false }, surface: "pane" });
       assert.equal(loadSurfaceConfig(configPath, examplePath), "pane");
-    });
-  });
-
-  it("persists the surface placement while keeping other config keys", () => {
-    withTempDir((dir) => {
-      const configPath = join(dir, "config.json");
-      const examplePath = join(dir, "config.json.example");
-      writeFileSync(configPath, JSON.stringify({ status: { enabled: false } }, null, 2) + "\n");
 
       writeSurfaceConfig("tab", configPath, examplePath);
 
-      const saved = JSON.parse(readFileSync(configPath, "utf8"));
+      saved = JSON.parse(readFileSync(configPath, "utf8"));
       assert.deepEqual(saved, { status: { enabled: false }, surface: "tab" });
       assert.equal(loadSurfaceConfig(configPath, examplePath), "tab");
     });

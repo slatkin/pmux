@@ -118,12 +118,6 @@ describe("tmux backend", () => {
     assert.deepEqual(calls[1], ["split-window", "-d", "-h", "-t", "%5", "-P", "-F", "#{pane_id}"]);
   });
 
-  it("splits a wide target side by side", () => {
-    const calls = stubPlacement([row("%3", 200, 50)]);
-    createSurface("Scout", "pane", "%3");
-    assert.equal(calls[1][2], "-h");
-  });
-
   it("stacks below a tall target", () => {
     const calls = stubPlacement([row("%3", 49, 50)]);
     createSurface("Scout", "pane", "%3");
