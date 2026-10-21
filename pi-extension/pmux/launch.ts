@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { cleanTitleText, cutPromptTitle } from "./live-title.ts";
+import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 
 /** Launch spec version written by `writeLaunchSpec`; readers reject others. */
 export const LAUNCH_SPEC_VERSION = 1;
@@ -37,6 +38,8 @@ export interface LaunchSpec {
   title?: string;
   /** Close the pane this long after a `done` sidecar (skill launches only). */
   closeOnDone?: { graceMs: number };
+  /** The role's `surface:`, when the role set a valid one. Never the per-call value. */
+  surface?: SurfacePlacement;
   /** Parent's name, as the brief footer (and a future `pending --parent`
    * listing) present it to the child. */
   parent?: string;
@@ -85,6 +88,10 @@ export function validateLaunchSpec(data: unknown): LaunchSpec {
   const title = optionalString(spec.title, "title");
   const parent = optionalString(spec.parent, "parent");
 
+  // The stored surface is parsed, not validated: an unknown value is dropped
+  // and does not make the file invalid, matching the role key's treatment.
+  const surface = parseSurfacePlacement(spec.surface);
+
   let graceMs: number | undefined;
   if (spec.closeOnDone !== undefined) {
     const closeOnDone = spec.closeOnDone;
@@ -107,6 +114,7 @@ export function validateLaunchSpec(data: unknown): LaunchSpec {
     ...(parent !== undefined ? { parent } : {}),
     ...(sessionFile !== undefined ? { sessionFile } : {}),
     ...(title !== undefined ? { title } : {}),
+    ...(surface !== undefined ? { surface } : {}),
     ...(graceMs !== undefined ? { closeOnDone: { graceMs } } : {}),
   };
 }

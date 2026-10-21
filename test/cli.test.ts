@@ -987,7 +987,7 @@ describe("cli.ts start", () => {
     ]);
   });
 
-  it("rejects an unknown --surface value with exit code 2 and no pane", async () => {
+  it("rejects --surface window with exit code 2, naming pane, tab and float, with no pane", async () => {
     const cwd = mkdtempSync(join(workdir, "badsurface-cwd-"));
     writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
     const dir = mkdtempSync(join(workdir, "badsurface-"));
@@ -1010,13 +1010,79 @@ describe("cli.ts start", () => {
         "--scratch",
         join(dir, "scratch"),
         "--surface",
-        "sideways",
+        "window",
       ],
       tmuxEnv(),
     );
     assert.equal(res.code, 2);
-    assert.match(res.stderr, /invalid --surface value: sideways \(expected pane or tab\)/);
+    assert.match(res.stderr, /invalid --surface value: window \(expected pane, tab or float\)/);
     assert.deepEqual(paneCalls, []);
+  });
+
+  it("opens a floating role with no flag as a float and records the role surface", async () => {
+    const cwd = mkdtempSync(join(workdir, "floatrole-cwd-"));
+    writeRole(cwd, "floater", "model: m\nthinking: low\nsurface: float", "Body.");
+    const res = await runStart({ cwd, role: "floater" });
+
+    assert.equal(res.code, 0);
+    // The default fake listing is one tiled caller row in a 200x50 window, so
+    // the float is half the window at the top right.
+    assert.deepEqual(paneCalls, [
+      "new-pane -d -t %21 -x 100 -y 25 -X 98 -Y 1 -P -F #{pane_id}",
+      "select-pane -t %24 -T scout-1",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      "send-keys -t %24 Enter",
+    ]);
+    assert.equal(res.spec.surface, "float");
+  });
+
+  it("places --surface pane ahead of the role's float, and still records the role surface", async () => {
+    const cwd = mkdtempSync(join(workdir, "flagbeatsrole-cwd-"));
+    writeRole(cwd, "floater", "model: m\nthinking: low\nsurface: float", "Body.");
+    const res = await runStart({ cwd, role: "floater", surface: "pane" });
+
+    assert.equal(res.code, 0);
+    assert.deepEqual(paneCalls[0], "split-window -d -h -t %21 -P -F #{pane_id}");
+    // The spec carries the role's surface, never the per-call value.
+    assert.equal(res.spec.surface, "float");
+  });
+
+  it("opens --surface float for a role with no surface, and records no surface", async () => {
+    const cwd = mkdtempSync(join(workdir, "adhocfloat-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const res = await runStart({ cwd, role: "doer", surface: "float" });
+
+    assert.equal(res.code, 0);
+    assert.deepEqual(paneCalls[0], "new-pane -d -t %21 -x 100 -y 25 -X 98 -Y 1 -P -F #{pane_id}");
+    assert.equal(res.spec.surface, undefined);
+  });
+
+  it("records the role's tab surface in the spec and opens a tab", async () => {
+    const cwd = mkdtempSync(join(workdir, "roletab-cwd-"));
+    writeRole(cwd, "tabber", "model: m\nthinking: low\nsurface: tab", "Body.");
+    const res = await runStart({ cwd, role: "tabber" });
+
+    assert.equal(res.code, 0);
+    assert.equal(res.spec.surface, "tab");
+    assert.deepEqual(paneCalls.slice(0, 4), [
+      "display-message -p -t %21 #{session_id}",
+      "new-window -d -t $7 -P -F #{pane_id}",
+      "display-message -p -t %21 #{window_id}",
+      "select-window -t @4",
+    ]);
+  });
+
+  it("parses a CRLF role with surface: float like the LF role", async () => {
+    const cwd = mkdtempSync(join(workdir, "crlffloat-cwd-"));
+    const dir = join(cwd, ".pi", "agents");
+    mkdirSync(dir, { recursive: true });
+    const lf = "---\nmodel: m\nthinking: low\nsurface: float\n---\n\nBody.\n";
+    writeFileSync(join(dir, "crlf-floater.md"), lf.replace(/\n/g, "\r\n"));
+    const res = await runStart({ cwd, role: "crlf-floater" });
+
+    assert.equal(res.code, 0);
+    assert.deepEqual(paneCalls[0], "new-pane -d -t %21 -x 100 -y 25 -X 98 -Y 1 -P -F #{pane_id}");
+    assert.equal(res.spec.surface, "float");
   });
 
   it("splits the first child's pane on a second start from the same caller", async () => {
@@ -1153,6 +1219,54 @@ describe("cli.ts resume", () => {
       "select-pane -t %24 -T fix-7",
       `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
       "send-keys -t %24 Enter",
+    ]);
+  });
+
+  it("keeps the spec's role surface: a float role resumes as a float with no flag", async () => {
+    const cwd = mkdtempSync(join(workdir, "resumefloat-cwd-"));
+    writeRole(cwd, "floater", "model: m\nthinking: low\nsurface: float", "Body.");
+    const started = await runStart({ cwd, role: "floater", child: "fix-7" });
+    assert.equal(started.spec.surface, "float");
+    paneCalls.length = 0;
+
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up.\n");
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 0);
+    assert.deepEqual(paneCalls, [
+      "new-pane -d -t %21 -x 100 -y 25 -X 98 -Y 1 -P -F #{pane_id}",
+      "select-pane -t %24 -T fix-7",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch, `${followup}.resume.md`)}`,
+      "send-keys -t %24 Enter",
+    ]);
+  });
+
+  it("falls back to config.json when the spec holds no surface", async () => {
+    const cwd = mkdtempSync(join(workdir, "resumecfg-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    // A tab default distinguishes the config read from the pane fallback.
+    const configPath = join(mkdtempSync(join(workdir, "resume-config-")), "config.json");
+    writeFileSync(configPath, JSON.stringify({ surface: "tab" }));
+    const started = await runStart({ cwd, role: "doer", child: "fix-7", configPath });
+    assert.equal(started.spec.surface, undefined);
+    paneCalls.length = 0;
+
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up.\n");
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
+      tmuxEnv(),
+      configPath,
+    );
+    assert.equal(res.code, 0);
+    assert.deepEqual(paneCalls.slice(0, 4), [
+      "display-message -p -t %21 #{session_id}",
+      "new-window -d -t $7 -P -F #{pane_id}",
+      "display-message -p -t %21 #{window_id}",
+      "select-window -t @4",
     ]);
   });
 });
