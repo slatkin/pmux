@@ -1,7 +1,7 @@
 /**
  * Pane-side run wrapper: start a child from a launch spec with no shell,
- * report its exit, and (skill launches only) close the pane after a `done`
- * or `handoff` sidecar.
+ * report its exit, wake the parent when a send-mode child left no report, and
+ * (skill launches only) close the pane after a `done` or `handoff` sidecar.
  *
  * This is the body of the CLI's `run` subcommand. `runSpec` returns the
  * child's exit code, so the CLI can exit with it.
@@ -11,8 +11,10 @@ import { existsSync } from "node:fs";
 import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildPaneTitle, type LaunchSpec } from "./launch.ts";
-import { closeSurface } from "./tmux.ts";
+import { agentPrompt, closeSurface } from "./tmux.ts";
 import { exitSidecarPath, readExitSidecar, writeExitSidecar } from "./exit-sidecar.ts";
+import { encodePaneText } from "./pane-input.ts";
+import { countReportsTo } from "./report-receipt.ts";
 import { isTerminalChildStatus, readChildStatus, writeChildStatus } from "./status-file.ts";
 
 /**
@@ -37,6 +39,10 @@ export interface RunSpecDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Pane close; defaults to the tmux backend. */
   closePane?: (pane: string) => void;
+  /** Parent wake-up; defaults to the tmux pane-input primitive. */
+  sendToParent?: (parent: string, text: string) => void;
+  /** The CLI path the send-mode wake-up message names for reading the session. */
+  cliPath?: string;
 }
 
 interface ChildOutcome {
@@ -88,6 +94,14 @@ export async function runSpec(
   // The spec is pane-independent: whichever pane runs it becomes the child's
   // surface.
   if (pane) env.PI_PMUX_SURFACE = pane;
+
+  // Only a send-mode spec with a parent may contact the parent. In `last`
+  // mode, and for any spec without a parent, the wrapper contacts nobody: the
+  // orchestrator's wake is the `wait` command, as before.
+  const parent = spec.report === "send" ? spec.parent : undefined;
+  // The baseline matters because `resume` reuses the session file: receipts
+  // from earlier runs must not suppress the wake-up of this run.
+  const reportsBefore = parent === undefined ? 0 : countReportsTo(spec.sessionFile, parent);
 
   const args = prompt ? [...spec.args, `@${prompt}`] : [...spec.args];
 
@@ -157,12 +171,40 @@ export async function runSpec(
     }
   }
 
+  // The child's final sidecar, read once: the wake-up and the close-on-done
+  // step below both look at it.
+  const sidecar = spec.sessionFile ? readExitSidecar(spec.sessionFile) : undefined;
+
+  // A send-mode child that exits without a report leaves the parent asleep
+  // forever; wake it with the exit state so it can read the session. A ping
+  // sidecar carries the question, so the wake-up quotes it directly.
+  if (parent !== undefined && countReportsTo(spec.sessionFile, parent) <= reportsBefore) {
+    const cliHint = deps.cliPath ?? "<pmux-cli>";
+    let wake: string;
+    if (sidecar?.type === "ping" && typeof sidecar.message === "string") {
+      wake = `${spec.name} pinged: ${sidecar.message}`;
+    } else {
+      const state = sidecar?.type ?? (code === 0 ? "exited" : `crashed (code ${code})`);
+      wake = `${spec.name} ${state} without sending a report. Read its last message: node ${cliHint} last-message --session ${spec.sessionFile ?? "<session>"}`;
+    }
+    try {
+      // The ping question is the child's own text and can span lines, so it
+      // is encoded like a report: the parent reads the question as one
+      // input.
+      (deps.sendToParent ?? agentPrompt)(parent, encodePaneText(wake));
+    } catch (error) {
+      writeErr(
+        `Failed to wake parent ${parent}: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+  }
+
   if (spec.closeOnDone && spec.sessionFile && pane) {
     // Read the sidecar directly rather than through `interpretExitSidecar`:
     // that function maps unknown payloads to `done`, which would close panes
     // on malformed sidecars. `handoff` closes like `done` — the child ended
     // cleanly and its result lives in the sidecar and its session file.
-    const sidecarType = readExitSidecar(spec.sessionFile)?.type;
+    const sidecarType = sidecar?.type;
     if (sidecarType === "done" || sidecarType === "handoff") {
       if (spec.closeOnDone.graceMs > 0) await sleep(spec.closeOnDone.graceMs);
       closePane(pane);

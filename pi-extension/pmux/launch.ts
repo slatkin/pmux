@@ -16,6 +16,14 @@ import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 /** Launch spec version written by `writeLaunchSpec`; readers reject others. */
 export const LAUNCH_SPEC_VERSION = 1;
 
+/** The report modes a launch spec may hold. */
+export type ReportMode = "last" | "send";
+
+/** True when the value names a report mode. */
+export function isReportMode(value: unknown): value is ReportMode {
+  return value === "last" || value === "send";
+}
+
 /**
  * Everything a pane needs to start one child: the executable and argv (no
  * shell), the env delta, and the optional close-on-done rule.
@@ -40,9 +48,13 @@ export interface LaunchSpec {
   closeOnDone?: { graceMs: number };
   /** The role's `surface:`, when the role set a valid one. */
   surface?: SurfacePlacement;
-  /** Parent's name, as the brief footer (and a future `pending --parent`
-   * listing) present it to the child. */
+  /** The parent's tmux pane id, from `--parent`. Send mode types the report
+   * into this pane; last mode names it in the footer as the parent. A
+   * `pending --parent` listing (future) keys on it too. */
   parent?: string;
+  /** Report mode. Written only for `send`; an absent field reads as `last`,
+   * where the report is the child's last assistant message. */
+  report?: ReportMode;
 }
 
 function invalid(message: string): never {
@@ -88,6 +100,12 @@ export function validateLaunchSpec(data: unknown): LaunchSpec {
   const title = optionalString(spec.title, "title");
   const parent = optionalString(spec.parent, "parent");
 
+  const report = spec.report;
+  if (report !== undefined && !isReportMode(report)) {
+    invalid("report must be last or send");
+  }
+  const reportMode = isReportMode(report) ? report : undefined;
+
   // The stored surface is parsed, not validated: an unknown value is dropped
   // and does not make the file invalid, matching the role key's treatment.
   const surface = parseSurfacePlacement(spec.surface);
@@ -112,6 +130,7 @@ export function validateLaunchSpec(data: unknown): LaunchSpec {
     args: args as string[],
     ...(cwd !== undefined ? { cwd } : {}),
     ...(parent !== undefined ? { parent } : {}),
+    ...(reportMode !== undefined ? { report: reportMode } : {}),
     ...(sessionFile !== undefined ? { sessionFile } : {}),
     ...(title !== undefined ? { title } : {}),
     ...(surface !== undefined ? { surface } : {}),

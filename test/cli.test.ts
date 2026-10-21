@@ -68,6 +68,8 @@ interface RunOutcome {
   record: { args: string[]; env: Record<string, string> } | null;
   /** `<session>.exit` contents, or null when the stub wrote none. */
   sidecar: string | null;
+  /** Wake-up messages the wrapper sent, in order. */
+  woken: Array<{ to: string; text: string }>;
 }
 
 interface RunCase {
@@ -77,6 +79,8 @@ interface RunCase {
   env?: NodeJS.ProcessEnv;
   /** Prompt path passed to `runSpec`, if any. */
   prompt?: string;
+  /** Parent wake-up override; defaults to a recorder surfaced as `woken`. */
+  sendToParent?: (to: string, text: string) => void;
 }
 
 /** Run the wrapper against the stub child with every side effect recorded. */
@@ -86,6 +90,7 @@ async function runStubCase(dir: string, options: RunCase = {}): Promise<RunOutco
   const stderr: string[] = [];
   const sleptMs: number[] = [];
   const closedPanes: string[] = [];
+  const woken: Array<{ to: string; text: string }> = [];
   const spec: LaunchSpec = {
     version: LAUNCH_SPEC_VERSION,
     name: "scout-1",
@@ -111,6 +116,7 @@ async function runStubCase(dir: string, options: RunCase = {}): Promise<RunOutco
       sleptMs.push(ms);
     },
     closePane: (pane) => closedPanes.push(pane),
+    sendToParent: options.sendToParent ?? ((to, text) => woken.push({ to, text })),
   });
 
   const record = existsSync(recordPath)
@@ -124,6 +130,24 @@ async function runStubCase(dir: string, options: RunCase = {}): Promise<RunOutco
     closedPanes,
     record,
     sidecar: exitPath !== undefined && existsSync(exitPath) ? readFileSync(exitPath, "utf8") : null,
+    woken,
+  };
+}
+
+/** One receipt line, as the `send` subcommand writes it. */
+function receiptLine(to: string): string {
+  return `${JSON.stringify({ at: new Date().toISOString(), to, bytes: 4 })}\n`;
+}
+
+/** A send-mode spec whose stub child appends `line` to the receipt file. */
+function sendSpecWithReceipt(receiptFile: string, line: string): Partial<LaunchSpec> {
+  return {
+    parent: "%12",
+    report: "send",
+    args: [
+      "-e",
+      `require("fs").appendFileSync(${JSON.stringify(receiptFile)}, ${JSON.stringify(line)})`,
+    ],
   };
 }
 
@@ -162,6 +186,23 @@ describe("launch spec", () => {
 
   it("rejects an unknown version", () => {
     assert.throws(() => validateLaunchSpec({ ...SPEC, version: 2 }), /unknown version 2/);
+  });
+
+  it("rejects an unknown report mode", () => {
+    assert.throws(
+      () => validateLaunchSpec({ ...SPEC, report: "email" }),
+      /report must be last or send/,
+    );
+  });
+
+  it("reads an absent report field as last and keeps the field out", () => {
+    withTempDir((dir) => {
+      const specPath = join(dir, "last.json");
+      writeLaunchSpec(specPath, SPEC);
+      const spec = readLaunchSpec(specPath);
+      assert.equal(spec.report, undefined);
+      assert.equal("report" in spec, false);
+    });
   });
 });
 
@@ -342,9 +383,14 @@ describe("runSpec", () => {
   });
 
   // A skill launch carries the external-parent marker even with `parent` set:
-  // the wrapper contacts nobody, and the wrapper-error sidecar logic is
-  // untouched.
-  it("contacts nobody when the child exits", async () => {
+  // the wrapper contacts nobody in last mode, and the wrapper-error sidecar
+  // logic is untouched.
+  // The invariance the wake-up tests guard: only a `send` spec with a parent
+  // may contact the parent. A `last` spec with a parent must stay silent,
+  // whether the child wrote a sidecar or not.
+  it("contacts nobody when a last-mode child exits", async () => {
+    // The child wrote no sidecar, so the wrapper writes its own `error`
+    // sidecar; the contact rule must not depend on that difference.
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, {
         spec: { parent: "orch" },
@@ -353,11 +399,207 @@ describe("runSpec", () => {
       assert.equal(result.stdout, "__SUBAGENT_DONE_0__\n");
       assert.equal(result.stderr, "");
       assert.deepEqual(result.closedPanes, []);
+      assert.deepEqual(result.woken, []);
       // The wrapper-error sidecar logic is untouched: a child that wrote no
       // sidecar still gets the wrapper's `error` sidecar.
       const sidecar = result.sidecar ? JSON.parse(result.sidecar) : null;
       assert.equal(sidecar?.type, "error");
       assert.equal(sidecar?.source, "wrapper");
+    });
+
+    // The child wrote a `done` sidecar: still nothing is woken and stderr
+    // stays empty.
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12" },
+        env: { PI_STUB_EXIT_BODY: '{"type":"done"}' },
+      });
+      assert.deepEqual(result.woken, []);
+      assert.equal(result.stderr, "");
+    });
+  });
+
+  it("wakes the parent when a send-mode child exits without a report", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: { PI_STUB_EXIT_BODY: '{"type":"done"}' },
+      });
+      assert.deepEqual(result.woken, [
+        {
+          to: "%12",
+          text: `scout-1 done without sending a report. Read its last message: node <pmux-cli> last-message --session ${join(dir, "session.jsonl")}`,
+        },
+      ]);
+    });
+  });
+
+  it("wakes the parent with state error after the wrapper sidecar when a send-mode child crashes", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: { PI_STUB_CODE: "2" },
+      });
+      // The wrapper wrote its own `error` sidecar first, so the wake-up names
+      // that state instead of the raw exit code.
+      const sidecar = result.sidecar ? JSON.parse(result.sidecar) : null;
+      assert.equal(sidecar?.type, "error");
+      assert.equal(sidecar?.source, "wrapper");
+      assert.equal(result.woken.length, 1);
+      assert.match(result.woken[0]!.text, /^scout-1 error without sending a report/);
+      assert.match(result.woken[0]!.text, /last-message --session/);
+    });
+  });
+
+  it("wakes the parent with the crash state when a send-mode child left a terminal status", async () => {
+    await withTempDirAsync(async (dir) => {
+      // A `done` status the child wrote itself is terminal, so the wrapper
+      // writes no sidecar of its own and the wake-up carries the raw crash.
+      writeFileSync(
+        join(dir, "session.jsonl.status"),
+        JSON.stringify({ status: "done", at: new Date().toISOString() }),
+      );
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: { PI_STUB_CODE: "2" },
+      });
+      assert.equal(result.sidecar, null);
+      assert.equal(result.woken.length, 1);
+      assert.match(result.woken[0]!.text, /^scout-1 crashed \(code 2\) without sending a report/);
+      assert.match(result.woken[0]!.text, /last-message --session/);
+    });
+  });
+
+  it("quotes a ping sidecar in the wake-up", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: { PI_STUB_EXIT_BODY: '{"type":"ping","name":"w","message":"Which DB?"}' },
+      });
+      assert.deepEqual(result.woken, [{ to: "%12", text: "scout-1 pinged: Which DB?" }]);
+    });
+  });
+
+  // The ping question is the child's own text, so it can span lines. The
+  // wake-up is encoded like a report: the parent reads it as one input.
+  it("encodes a ping question that spans lines", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: {
+          PI_STUB_EXIT_BODY:
+            '{"type":"ping","name":"w","message":"Which DB?\\nPostgres or MySQL?"}',
+        },
+      });
+      assert.deepEqual(result.woken, [
+        { to: "%12", text: "scout-1 pinged: Which DB?\\nPostgres or MySQL?" },
+      ]);
+    });
+  });
+
+  it("names the launch spec's child in the wake-up, not the sidecar's name", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { name: "worker-a", parent: "%12", report: "send" },
+        env: { PI_STUB_EXIT_BODY: '{"type":"done"}' },
+      });
+      assert.equal(result.woken.length, 1);
+      assert.match(result.woken[0]!.text, /^worker-a done without sending a report/);
+    });
+  });
+
+  it("does not wake the parent when the send-mode child reported", async () => {
+    await withTempDirAsync(async (dir) => {
+      // The child delivers its report while it runs, so the receipt lands
+      // after the wrapper took its baseline count.
+      const result = await runStubCase(dir, {
+        spec: sendSpecWithReceipt(join(dir, "session.jsonl.sent"), receiptLine("%12")),
+      });
+      assert.deepEqual(result.woken, []);
+    });
+  });
+
+  it("still wakes the parent when the send-mode child reported only to another pane", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: sendSpecWithReceipt(join(dir, "session.jsonl.sent"), receiptLine("%99")),
+      });
+      assert.equal(result.woken.length, 1);
+      assert.match(result.woken[0]!.text, /without sending a report/);
+    });
+  });
+
+  it("still wakes the parent when the only new receipt line is malformed", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: sendSpecWithReceipt(join(dir, "session.jsonl.sent"), "not json at all\n"),
+      });
+      assert.equal(result.woken.length, 1);
+    });
+  });
+
+  it("wakes the parent when receipts from an earlier run already sit in the file", async () => {
+    await withTempDirAsync(async (dir) => {
+      const receiptFile = join(dir, "session.jsonl.sent");
+      // `resume` reuses the session file, so a receipt from the earlier run
+      // must not stand in for a report of this run: the baseline is taken
+      // before the child starts.
+      writeFileSync(receiptFile, receiptLine("%12"));
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+      });
+      assert.equal(result.woken.length, 1);
+    });
+  });
+
+  it("reports a failed wake-up on stderr and keeps the child's exit code", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: { PI_STUB_CODE: "3" },
+        sendToParent: () => {
+          throw new Error("pane gone");
+        },
+      });
+      assert.equal(result.code, 3);
+      assert.equal(result.stdout, "__SUBAGENT_DONE_3__\n");
+      assert.match(result.stderr, /Failed to wake parent %12: pane gone/);
+    });
+  });
+
+  it("wakes the parent before it closes the pane when a send-mode child is done", async () => {
+    await withTempDirAsync(async (dir) => {
+      const events: string[] = [];
+      const sessionFile = join(dir, "session.jsonl");
+      const sidecarPath = `${sessionFile}.exit`;
+      const code = await runSpec(
+        {
+          version: LAUNCH_SPEC_VERSION,
+          name: "worker-a",
+          env: {},
+          command: process.execPath,
+          // The child writes its `done` sidecar, so the pane qualifies for the
+          // close-on-done step after the wake-up.
+          args: [
+            "-e",
+            `require("fs").writeFileSync(${JSON.stringify(sidecarPath)}, '{"type":"done"}')`,
+          ],
+          sessionFile,
+          parent: "%12",
+          report: "send",
+          closeOnDone: { graceMs: 0 },
+        },
+        undefined,
+        {
+          env: { PATH: process.env.PATH, TMUX_PANE: "%77" },
+          stdout: () => {},
+          stderr: () => {},
+          sendToParent: (to) => events.push(`wake ${to}`),
+          closePane: (pane) => events.push(`close ${pane}`),
+        },
+      );
+      assert.equal(code, 0);
+      assert.deepEqual(events, ["wake %12", "close %77"]);
     });
   });
 
@@ -624,6 +866,8 @@ interface StartCase {
   env?: NodeJS.ProcessEnv;
   /** Config file holding the `surface` default; defaults to the sandbox config. */
   configPath?: string;
+  /** Report mode passed as `--report`; absent means the flag is not given. */
+  report?: "last" | "send";
 }
 
 interface Started extends CliResult {
@@ -658,6 +902,7 @@ async function runStartWith(entry: CliEntry, options: StartCase): Promise<Starte
   ];
   if (options.closeGraceMs !== undefined)
     argv.push("--close-grace-ms", String(options.closeGraceMs));
+  if (options.report !== undefined) argv.push("--report", options.report);
 
   const result = await capture(entry, argv, env, options.configPath);
   const json = JSON.parse(result.stdout) as Started["json"];
@@ -742,12 +987,10 @@ describe("cli.ts start", () => {
       "send-keys -t %24 Enter",
     ]);
 
-    // Footer names the parent and pane, and forbids the wrong channels.
+    // The brief header survives; the footer contract is owned verbatim by
+    // the last-footer golden test below.
     const promptText = readFileSync(res.promptPath, "utf8");
     assert.ok(promptText.includes("# Task"));
-    assert.ok(promptText.includes("Your last assistant message is the report the parent reads"));
-    assert.ok(promptText.includes("pane %21"));
-    assert.ok(promptText.includes("pmux_done"));
 
     // Role prompt holds the role body.
     assert.ok(readFileSync(res.rolePromptPath, "utf8").includes("Doer role body."));
@@ -837,6 +1080,121 @@ describe("cli.ts start", () => {
       argValue(res.spec.args, "--tools"),
       "read,bash,edit,write,grep,find,ls,caller_ping,pmux_done,pmux_message",
     );
+  });
+
+  it("keeps the last footer and no report field without the flag", async () => {
+    const cwd = mkdtempSync(join(workdir, "lastmode-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const res = await runStart({ cwd, role: "doer" });
+
+    // The spec holds no report field: a last-mode spec stays byte for byte
+    // what it was before the --report flag existed.
+    assert.equal(res.spec.report, undefined);
+    // The last-mode footer golden: the external-orchestration spec requires
+    // these bytes to stay exactly what they were before --report existed, so
+    // the whole block is asserted verbatim here (this test owns the
+    // byte-stability contract; the resume test separately checks that a
+    // resumed prompt still carries the last footer).
+    const promptText = readFileSync(res.promptPath, "utf8");
+    assert.ok(
+      promptText.endsWith(
+        `Your parent is a session named orch (pane %21).\n` +
+          `Plain text printed in your own pane is never seen. Your last assistant message is the report the parent reads.\n` +
+          `\n` +
+          `So do ALL of the following before you stop:\n` +
+          `1. Finish the task.\n` +
+          `2. Write your final report as your last assistant message: the verdict, the commit SHA, the files changed, the verification, the deviations and the open questions. Put the verdict first.\n` +
+          `3. Then call the pmux_done tool to close your session.\n` +
+          `\n` +
+          `If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.\n` +
+          `If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.\n`,
+      ),
+    );
+  });
+
+  it("records report send and appends the send footer", async () => {
+    const cwd = mkdtempSync(join(workdir, "sendmode-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const res = await runStart({ cwd, role: "doer", report: "send", parent: "%12" });
+
+    assert.equal(res.spec.report, "send");
+    assert.equal(res.spec.parent, "%12");
+    const promptText = readFileSync(res.promptPath, "utf8");
+    assert.ok(promptText.includes("Your parent is the tmux pane %12."));
+    assert.ok(promptText.includes(`send --to %12 --text`));
+    assert.ok(promptText.includes("pmux_done"));
+    assert.ok(
+      promptText.includes("If you are blocked, send your question with the send command and stop."),
+    );
+    assert.ok(
+      promptText.includes(
+        "ignore its claim that your last message was already delivered — send your report with the send command first",
+      ),
+    );
+    assert.ok(
+      promptText.includes(
+        "If this session auto-exits, it closes the first time you stop generating:",
+      ),
+    );
+    assert.ok(
+      promptText.includes("Whether it does or not, do ALL of the following before you stop:"),
+    );
+    assert.doesNotMatch(promptText, /last assistant message is the report the parent reads/);
+    // The report step and the wake-up hint name this checkout's CLI.
+    assert.ok(promptText.includes(`node ${CLI} send --to %12 --text '<verdict`));
+  });
+
+  it("exits 2 on an unknown --report value before writing anything", async () => {
+    const dir = mkdtempSync(join(workdir, "report-bad-"));
+    const cwd = mkdtempSync(join(dir, "cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const brief = join(dir, "brief.md");
+    writeFileSync(brief, "# Task\n");
+    const scratch = join(dir, "scratch");
+    const res = await runCli(
+      [
+        "start",
+        "--name",
+        "w",
+        "--role",
+        "doer",
+        "--cwd",
+        cwd,
+        "--brief",
+        brief,
+        "--parent",
+        "orch",
+        "--scratch",
+        scratch,
+        "--report",
+        "email",
+      ],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 2);
+    assert.match(res.stderr, /email/);
+    assert.equal(existsSync(scratch), false);
+    assert.equal(paneCalls.length, 0);
+  });
+
+  it("adds bash in send mode and clears it from the denied set", async () => {
+    const cwd = mkdtempSync(join(workdir, "sendbash-"));
+    writeRole(cwd, "nobash", "model: m\nthinking: low\ntools: read\ndeny-tools: bash", "Body.");
+    const res = await runStart({ cwd, role: "nobash", report: "send" });
+    assert.equal(
+      argValue(res.spec.args, "--tools"),
+      "read,bash,caller_ping,pmux_done,pmux_message",
+    );
+    // The denied set lost bash, so no PI_DENY_TOOLS remains at all.
+    assert.equal("PI_DENY_TOOLS" in res.spec.env, false);
+  });
+
+  it("does not add bash in last mode for a role whose tools omit it", async () => {
+    const cwd = mkdtempSync(join(workdir, "lastbash-"));
+    writeRole(cwd, "nobash", "model: m\nthinking: low\ntools: read\ndeny-tools: bash", "Body.");
+    const res = await runStart({ cwd, role: "nobash" });
+    assert.equal(argValue(res.spec.args, "--tools"), "read,caller_ping,pmux_done,pmux_message");
+    assert.equal(res.spec.env.PI_DENY_TOOLS, "bash");
   });
 
   it("stores the close grace from --close-grace-ms", async () => {
@@ -1138,6 +1496,68 @@ describe("cli.ts resume", () => {
     assert.equal(spec.closeOnDone?.graceMs, 2500);
   });
 
+  it("appends the send footer to a resumed send-mode child", async () => {
+    const cwd = mkdtempSync(join(workdir, "resumesend-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low\nauto-exit: true", "Body.");
+    const started = await runStart({
+      cwd,
+      role: "doer",
+      child: "fix-7",
+      report: "send",
+      parent: "%12",
+    });
+    paneCalls.length = 0;
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up task.\n");
+
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 0);
+    const sent = readFileSync(`${followup}.resume.md`, "utf8");
+    assert.ok(sent.startsWith("Follow-up task.\n"));
+    assert.ok(sent.includes("Your parent is the tmux pane %12."));
+    assert.ok(sent.includes(`send --to %12 --text`));
+    assert.doesNotMatch(sent, /last assistant message is the report the parent reads/);
+  });
+
+  it("appends the last footer to a resumed last-mode child", async () => {
+    const started = await startNamedChild();
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up task.\n");
+
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 0);
+    const sent = readFileSync(`${followup}.resume.md`, "utf8");
+    assert.ok(sent.includes("Your parent is a session named orch (pane %21)."));
+    assert.ok(sent.includes("Your last assistant message is the report the parent reads"));
+  });
+
+  it("rejects --report on resume without touching the stored mode", async () => {
+    const started = await startNamedChild();
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up task.\n");
+
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--report", "send"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout, "");
+    assert.match(res.stderr, /--report/);
+    assert.match(res.stderr, /launch spec/);
+    // Nothing launched, and the spec still holds no report field.
+    assert.equal(
+      paneCalls.some((call) => call.startsWith("split-window")),
+      false,
+    );
+    assert.equal(readLaunchSpec(started.json.launch).report, undefined);
+  });
+
   it("keeps the external-parent marker in the spec after a resume", async () => {
     const cwd = mkdtempSync(join(workdir, "external-cwd-"));
     writeRole(cwd, "doer", "model: m\nthinking: low\nauto-exit: true", "Body.");
@@ -1301,6 +1721,29 @@ describe("cli.ts run", () => {
       });
     });
   });
+
+  it("fails naming the file when the spec holds an unknown report mode", async () => {
+    await withTempDirAsync(async (dir) => {
+      const specPath = join(dir, "report.json");
+      writeFileSync(
+        specPath,
+        JSON.stringify({
+          version: LAUNCH_SPEC_VERSION,
+          name: "x",
+          env: {},
+          command: "pi",
+          args: [],
+          report: "email",
+        }),
+      );
+      await assert.rejects(runCli(["run", specPath], tmuxEnv()), (error: Error) => {
+        assert.match(error.message, /Cannot read launch spec/);
+        assert.match(error.message, /report must be last or send/);
+        assert.ok(error.message.includes(specPath));
+        return true;
+      });
+    });
+  });
 });
 
 describe("cli.ts last-message", () => {
@@ -1348,6 +1791,115 @@ describe("cli.ts last-message", () => {
       ]);
       const res = await runCli(["last-message", "--session", sessionPath], tmuxEnv());
       assert.equal(res.stdout, "(no assistant message)\n");
+    });
+  });
+});
+
+// ─── cli.ts send ───────────────────────────────────────────────────────
+
+describe("cli.ts send", () => {
+  it("pastes the text into the target pane and presses Enter", async () => {
+    // No PI_PMUX_SESSION: the orchestrator's own send writes no receipt.
+    const res = await runCli(
+      ["send", "--to", "%3", "--text", "worker done: commit abc"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 0);
+    assert.equal(res.stdout, "");
+    assert.deepEqual(paneCalls, [
+      "send-keys -t %3 -l worker done: commit abc",
+      "send-keys -t %3 Enter",
+    ]);
+  });
+
+  // A multiline report must arrive as one input: the line breaks are
+  // encoded, so the typed text holds no newline and the parent reads the
+  // whole report as one message.
+  it("encodes multiline text into one line", async () => {
+    const res = await runCli(["send", "--to", "%3", "--text", "line one\nline two"], tmuxEnv());
+    assert.equal(res.code, 0);
+    assert.deepEqual(paneCalls, [
+      "send-keys -t %3 -l line one\\nline two",
+      "send-keys -t %3 Enter",
+    ]);
+  });
+
+  // A tab or another control byte would end a field or drive the target's
+  // terminal, so it is encoded too.
+  it("encodes a tab and a control character", async () => {
+    const res = await runCli(["send", "--to", "%3", "--text", "a\tb\u0007"], tmuxEnv());
+    assert.equal(res.code, 0);
+    assert.deepEqual(paneCalls, ["send-keys -t %3 -l a\\tb\\x07", "send-keys -t %3 Enter"]);
+  });
+
+  it("requires --to and --text", async () => {
+    const noTo = await runCli(["send", "--text", "hi"], tmuxEnv());
+    assert.equal(noTo.code, 1);
+    assert.match(noTo.stderr, /missing --to/);
+    assert.equal(noTo.stdout, "");
+    assert.deepEqual(paneCalls, []);
+    const noText = await runCli(["send", "--to", "%3"], tmuxEnv());
+    assert.equal(noText.code, 1);
+    assert.match(noText.stderr, /missing --text/);
+    assert.equal(noText.stdout, "");
+    assert.deepEqual(paneCalls, []);
+  });
+
+  it("writes a receipt only when PI_PMUX_SESSION is set", async () => {
+    await withTempDirAsync(async (dir) => {
+      // Inside a child the env carries PI_PMUX_SESSION, so one JSON line
+      // lands in `<session>.sent`, carrying the target pane.
+      const sessionFile = join(dir, "session.jsonl");
+      const text = "line one\nline two";
+      const child = await runCli(["send", "--to", "%3", "--text", text], {
+        ...tmuxEnv(),
+        PI_PMUX_SESSION: sessionFile,
+      });
+      assert.equal(child.code, 0);
+      const lines = readFileSync(`${sessionFile}.sent`, "utf8").trimEnd().split("\n");
+      assert.equal(lines.length, 1);
+      const receipt = JSON.parse(lines[0]) as { at: string; to: string; bytes: number };
+      assert.equal(receipt.to, "%3");
+      assert.equal(receipt.bytes, Buffer.byteLength(text, "utf8"));
+      assert.match(receipt.at, /^\d{4}-\d{2}-\d{2}T/);
+
+      // The same send without PI_PMUX_SESSION writes no receipt: the file
+      // above keeps its single line and no other `.sent` file appears.
+      const orphan = await runCli(["send", "--to", "%3", "--text", "hi"], tmuxEnv());
+      assert.equal(orphan.code, 0);
+      const after = readFileSync(`${sessionFile}.sent`, "utf8").trimEnd().split("\n");
+      assert.equal(after.length, 1);
+      assert.deepEqual(
+        readdirSync(dir).filter((name) => name.endsWith(".sent")),
+        ["session.jsonl.sent"],
+      );
+
+      // The `bytes` unit is UTF-8 bytes, not UTF-16 code units: a non-ASCII
+      // report must record the byte count, which differs from `text.length`.
+      const emojiText = "done 🌍";
+      assert.notEqual(emojiText.length, Buffer.byteLength(emojiText, "utf8"));
+      const emoji = await runCli(["send", "--to", "%3", "--text", emojiText], {
+        ...tmuxEnv(),
+        PI_PMUX_SESSION: sessionFile,
+      });
+      assert.equal(emoji.code, 0);
+      const emojiLines = readFileSync(`${sessionFile}.sent`, "utf8").trimEnd().split("\n");
+      assert.equal(emojiLines.length, 2);
+      const emojiReceipt = JSON.parse(emojiLines[1]) as { bytes: number };
+      assert.equal(emojiReceipt.bytes, Buffer.byteLength(emojiText, "utf8"));
+    });
+  });
+
+  it("still delivers when the receipt path is in a missing directory", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "missing", "session.jsonl");
+      const res = await runCli(["send", "--to", "%3", "--text", "hi"], {
+        ...tmuxEnv(),
+        PI_PMUX_SESSION: sessionFile,
+      });
+      assert.equal(res.code, 0);
+      assert.deepEqual(paneCalls, ["send-keys -t %3 -l hi", "send-keys -t %3 Enter"]);
+      assert.equal(existsSync(`${sessionFile}.sent`), false);
     });
   });
 });

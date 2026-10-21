@@ -2,7 +2,8 @@
  * Age-based cleanup for the temporary scratch files the launcher writes.
  *
  * `start` writes one launch spec, two prompt files, a session file, an
- * activity file and later sidecars per child under `<tmp>/pmux`. Nothing
+ * activity file and later sidecars per child under `<tmp>/pmux`, including
+ * the `.sent` report receipts a send-mode child leaves for its parent. Nothing
  * deleted them, so heavy use filled the temporary folder. This module is the
  * single place that decides what is safe to delete: only files with known
  * launcher suffixes and only when their mtime is older than the retention.
@@ -11,6 +12,7 @@
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { REPORT_RECEIPT_SUFFIX } from "./report-receipt.ts";
 
 /** Default retention for scratch files: a week keeps recent resumes working. */
 export const DEFAULT_PRUNE_MAX_AGE_DAYS = 7;
@@ -42,7 +44,8 @@ function isManagedScratchFile(name: string): boolean {
     name.endsWith(".resume.md") ||
     name.endsWith(".exit") ||
     name.endsWith(".msg") ||
-    name.endsWith(".report.md")
+    name.endsWith(".report.md") ||
+    name.endsWith(REPORT_RECEIPT_SUFFIX)
   );
 }
 

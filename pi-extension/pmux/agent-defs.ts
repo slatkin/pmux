@@ -138,13 +138,19 @@ export function loadAgentDefaults(agentName: string, cwd = process.cwd()): Agent
  * manually resumed or user-touched subagent unable to call pmux_done.
  * A role without a `tools` line falls back to DEFAULT_SUBAGENT_TOOLS.
  */
-export function buildSubagentToolAllowlist(effectiveTools?: string): string {
+export function buildSubagentToolAllowlist(
+  effectiveTools?: string,
+  extraTools: readonly string[] = [],
+): string {
   const requested = (effectiveTools ?? "")
     .split(",")
     .map((tool) => tool.trim())
     .filter(Boolean);
 
   const allow = new Set(requested.length > 0 ? requested : DEFAULT_SUBAGENT_TOOLS.split(","));
+  for (const tool of extraTools) {
+    allow.add(tool);
+  }
   for (const tool of SUBAGENT_CONTROL_TOOLS) {
     allow.add(tool);
   }

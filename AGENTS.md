@@ -32,17 +32,19 @@ Both paths end in the same pane command: `node pi-extension/pmux/cli.ts run <spe
 - **pi parent.** The `pmux_spawn`, `pmux_resume`, `pmux_message`, `pmux_interrupt` and `pmux_list` tools in `index.ts` call `supervisor.ts`. The supervisor resolves the role, writes a launch spec, creates and names the pane, runs the pane command, and polls for exit. It also owns the status widget, the idle watchdog and message delivery.
 - **External orchestrator (Claude Code).** `skills/pmux/launch.ts` finds the package and passes its argv to `cli.ts start` or `cli.ts resume`. The CLI does the same steps: role resolution, parent footer, pane split, launch spec.
 
-The pane runs `cli.ts run`. It starts the child from the spec with no shell, reports the exit code, and, for skill launches only, closes the pane after a `done` or `handoff` sidecar.
+The pane runs `cli.ts run`. It starts the child from the spec with no shell, reports the exit code, wakes the parent when a send-mode child exits without a delivered report, and, for skill launches only, closes the pane after a `done` or `handoff` sidecar.
 
 ### tmux backend
 
-- `tmux.ts` is the only pane backend. It requires `TMUX` and `TMUX_PANE`; without them the tools refuse with a message that names tmux. `placement.ts`, `exit-sidecar.ts`, `status-file.ts` and `surface-types.ts` hold the host-independent parts.
+- `tmux.ts` is the only pane backend. It requires `TMUX` and `TMUX_PANE`; without them the tools refuse with a message that names tmux. `placement.ts`, `exit-sidecar.ts`, `status-file.ts`, `surface-types.ts`, `pane-input.ts` and `report-receipt.ts` hold the host-independent parts.
 - Every split anchors on a pane in the caller's own window: the caller's newest living child pane, tracked by the `@pmux_parent` pane option, or the caller's own pane (`TMUX_PANE`) when it has none. Never use a "current" pane, and never an untargeted window. tmux resolves an untargeted command against the server's most recently used window, so another client can move the split.
 - A pane starts empty, and the launch command goes in afterwards. The pane therefore outlives the child, so the parent can read it and close it.
 
 ### Completion and env contracts
 
 - A child writes `<session file>.exit` when it finishes: `done`, `ping`, `handoff` or `error`. The parent polls that file. The terminal sentinel is only a fallback. Decoding lives in `exit-sidecar.ts`.
+- A send-mode child appends a report receipt to `<session file>.sent` (`report-receipt.ts`) for every delivered report. The run wrapper counts the receipts addressed to the parent to decide whether it must wake the parent.
+- A pane input is one line: the text is typed, then one Enter keypress submits it. The report channel encodes the text before typing it (`pane-input.ts`), so a line break arrives as `\n` and a report cannot be split across inputs. `pmux_message` types its text as it is.
 - The parent writes the child's env with `encodeChildEnv` (`child-env.ts`), and the child reads it with `decodeChildEnv`. The keys are `PI_PMUX_*` and `PI_DENY_TOOLS`.
 - The child loads `pmux-done.ts` (`pi -e`). That file provides `pmux_done`, `caller_ping`, the completion nudge, auto-exit and the sidecar writes. The role's `tools` list does not remove the control tools, and `pmux_done` is never denied.
 
@@ -57,6 +59,8 @@ The pane runs `cli.ts run`. It starts the child from the spec with no shell, rep
 ### Agent roles
 
 `agents/*.md` define roles: frontmatter, then a system prompt body. `agent-defs.ts` resolves a role in this order: `.pi/agents/` in the child's cwd, then `$PI_CODING_AGENT_DIR` (or `~/.pi/agent`) plus `/agents/`, then the package's `agents/`. `spawning: false` and `deny-tools` become `PI_DENY_TOOLS`.
+
+Send mode (`start --report send`) is the one exemption: the child runs the report as a `send` command, which needs the `bash` tool, so send mode adds `bash` to the tool allowlist and removes it from `PI_DENY_TOOLS` (`PI_DENY_TOOLS` otherwise wins over `--tools`). A role that denies `bash` therefore does not keep that denial in send mode — the caller opts in knowingly by passing `--report send`. `last` mode, the default, is untouched.
 
 ### Files with extra constraints
 

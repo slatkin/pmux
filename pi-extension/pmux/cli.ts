@@ -8,7 +8,14 @@
  * arrays and typed modules — no shell anywhere.
  */
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -28,15 +35,24 @@ import {
 import {
   LAUNCH_SPEC_VERSION,
   buildPaneTitle,
+  isReportMode,
   paneCommandLine,
   readLaunchSpec,
   resolvePiCommand,
   writeLaunchSpec,
   type LaunchSpec,
+  type ReportMode,
 } from "./launch.ts";
-import { createSurface, runInPane, callerPaneId } from "./tmux.ts";
-import { removeExitSidecar } from "./exit-sidecar.ts";
+import { agentPrompt, createSurface, runInPane, callerPaneId } from "./tmux.ts";
+import {
+  exitSidecarPath,
+  interpretExitSidecar,
+  readExitSidecar,
+  removeExitSidecar,
+} from "./exit-sidecar.ts";
 import { resolvePlacement } from "./placement.ts";
+import { encodePaneText } from "./pane-input.ts";
+import { appendReportReceipt } from "./report-receipt.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
@@ -73,11 +89,12 @@ const MIN_NODE: readonly [number, number] = [22, 18];
 
 const USAGE = [
   "Usage:",
-  "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>]",
+  "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--report last|send]",
+  "  node cli.ts send --to <pane> --text <text>",
   "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>]",
   "  node cli.ts run <spec> [<prompt>]",
   "  node cli.ts last-message --session <file>",
-  "  node cli.ts wait --session <file> [--status <list>] [--timeout <seconds>]",
+  "  node cli.ts wait --session <file> [--signal status|sidecar] [--status <list>] [--timeout <seconds>] (--status with --signal sidecar is a usage error)",
   "  node cli.ts prune [--scratch <dir>] [--max-age-days <n>] [--dry-run]",
 ].join("\n");
 
@@ -89,9 +106,13 @@ const CLI_OPTIONS = {
   parent: { type: "string" },
   scratch: { type: "string" },
   "close-grace-ms": { type: "string" },
+  report: { type: "string" },
+  to: { type: "string" },
+  text: { type: "string" },
   launch: { type: "string" },
   prompt: { type: "string" },
   session: { type: "string" },
+  signal: { type: "string" },
   status: { type: "string" },
   timeout: { type: "string" },
   "max-age-days": { type: "string" },
@@ -107,9 +128,13 @@ interface CliValues {
   parent?: string;
   scratch?: string;
   "close-grace-ms"?: string;
+  report?: string;
+  to?: string;
+  text?: string;
   launch?: string;
   prompt?: string;
   session?: string;
+  signal?: string;
   status?: string;
   timeout?: string;
   "max-age-days"?: string;
@@ -199,6 +224,39 @@ If you are blocked, write your question as your last assistant message and stop.
 If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.`;
 }
 
+/**
+ * The send-mode parent-contact footer: the report is typed into the parent's
+ * pane with the `send` command. The auto-exit claim is conditional because a
+ * role without `auto-exit: true` keeps running and gets the completion nudge.
+ */
+function sendFooter(parent: string, cliPath: string): string {
+  return `Your parent is the tmux pane ${parent}.
+Plain text printed in your own pane is never seen. The only way to reach it is bash: node ${cliPath} send --to ${parent} --text '<text>'.
+
+If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of the following before you stop:
+1. Finish the task.
+2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
+   This is what wakes the orchestrator with your report — without it, it only learns that you exited.
+   The report text may be long, may contain quotes and may span several lines — reading it from a file into the argument is fine; only the target pane matters. A line break arrives as the two characters \\n, so the orchestrator still reads the whole report as one message.
+3. Then call the pmux_done tool to close your session.
+
+If you are blocked, send your question with the send command and stop. The session closes; the parent resumes it with the answer. Do not try to reach the parent any other way.
+If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report with the send command first, then call pmux_done.`;
+}
+
+/**
+ * The parent-contact footer of a report mode. `last` mode points the child at
+ * its last assistant message; `send` mode teaches it the `send` command. An
+ * absent mode reads as `last`.
+ */
+function reportFooter(
+  parent: string,
+  report: ReportMode | undefined,
+  env: NodeJS.ProcessEnv,
+): string {
+  return report === "send" ? sendFooter(parent, CLI_PATH) : parentFooter(parent, callerPaneId(env));
+}
+
 /** Parse `--close-grace-ms`, defaulting to `DEFAULT_CLOSE_GRACE_MS`. */
 function closeGraceMs(value: string | undefined): number {
   if (value === undefined) return DEFAULT_CLOSE_GRACE_MS;
@@ -209,8 +267,23 @@ function closeGraceMs(value: string | undefined): number {
   return grace;
 }
 
+/**
+ * The `--report` flag of `start`. A missing flag means the default `last`
+ * mode; an unknown value is a usage error (the caller exits 2 and the
+ * message goes to stderr).
+ */
+function reportMode(
+  value: string | undefined,
+  writeErr: (text: string) => void,
+): ReportMode | null {
+  if (value === undefined) return "last";
+  if (isReportMode(value)) return value;
+  writeErr(`invalid --report value: ${value} (expected last or send)\n`);
+  return null;
+}
+
 /** `start`: resolve a role, write the launch spec and run it in a new pane. */
-function startCommand(values: CliValues, deps: CliDeps): number {
+function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): number {
   const env = deps.env ?? process.env;
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
 
@@ -262,7 +335,13 @@ function startCommand(values: CliValues, deps: CliDeps): number {
   }
   const briefText = readFileSync(brief, "utf8");
   writeFileSync(rolePromptPath, definition.body ? `${definition.body}\n` : "");
-  writeFileSync(promptPath, `${briefText}\n${parentFooter(parent, callerPaneId(env))}\n`);
+  writeFileSync(promptPath, `${briefText}\n${reportFooter(parent, report, env)}\n`);
+  // In send mode the report is a bash command, so the child must keep the
+  // bash tool on both sides: the allowlist gains it and the denied set loses
+  // it (`PI_DENY_TOOLS` wins over `--tools`).
+  const sendMode = report === "send";
+  const denied = resolveDenyTools(definition);
+  if (sendMode) denied.delete("bash");
   const specEnv = encodeChildEnv({
     name,
     agent: role,
@@ -271,7 +350,7 @@ function startCommand(values: CliValues, deps: CliDeps): number {
     activityFile: join(scratch, `${base}.activity.json`),
     externalParent: true,
     autoExit: definition.autoExit === true,
-    denyTools: [...resolveDenyTools(definition)],
+    denyTools: [...denied],
   });
 
   const spec: LaunchSpec = {
@@ -290,7 +369,7 @@ function startCommand(values: CliValues, deps: CliDeps): number {
       "--append-system-prompt",
       rolePromptPath,
       "--tools",
-      buildSubagentToolAllowlist(definition.tools),
+      buildSubagentToolAllowlist(definition.tools, sendMode ? ["bash"] : []),
       "--name",
       name,
     ],
@@ -298,6 +377,7 @@ function startCommand(values: CliValues, deps: CliDeps): number {
     title: buildPaneTitle(name, briefText),
     closeOnDone: { graceMs },
     parent,
+    ...(sendMode ? { report: "send" as const } : {}),
     ...(definition.surface !== undefined ? { surface: definition.surface } : {}),
   };
   writeLaunchSpec(specPath, spec);
@@ -334,10 +414,8 @@ function resumeCommand(values: CliValues, deps: CliDeps): number {
   let sentPrompt = promptPath;
   if (spec.parent !== undefined) {
     sentPrompt = `${promptPath}.resume.md`;
-    writeFileSync(
-      sentPrompt,
-      `${readFileSync(promptPath, "utf8")}\n${parentFooter(spec.parent, callerPaneId(env))}\n`,
-    );
+    const footer = reportFooter(spec.parent, spec.report, env);
+    writeFileSync(sentPrompt, `${readFileSync(promptPath, "utf8")}\n${footer}\n`);
   }
   const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);
 
@@ -371,6 +449,8 @@ async function runCommand(positionals: string[], deps: CliDeps): Promise<number>
     stdout: deps.stdout,
     stderr: deps.stderr,
     sleep: deps.sleep,
+    // The send-mode wake-up names this CLI for reading the child's session.
+    cliPath: CLI_PATH,
   };
   return runSpec(
     { ...spec, command, args: [...resolved.slice(1), ...spec.args] },
@@ -421,6 +501,54 @@ function pruneCommand(values: CliValues, deps: CliDeps): number {
   return 0;
 }
 
+/**
+ * Best-effort report receipt. Inside a child the environment carries
+ * `PI_PMUX_SESSION`, so every delivered report appends one JSON line to
+ * `<session>.sent`; the pane-side wrapper counts those lines to decide
+ * whether it must wake the parent. The count is form-independent — it does
+ * not care how the child quoted or built the send invocation. A failed
+ * receipt write never fails the send; losing one only risks a spurious
+ * wake-up.
+ */
+function writeReportReceipt(env: NodeJS.ProcessEnv, to: string, text: string): void {
+  const session = env.PI_PMUX_SESSION;
+  if (!session) return;
+  appendReportReceipt(session, {
+    at: new Date().toISOString(),
+    to,
+    bytes: Buffer.byteLength(text, "utf8"),
+  });
+}
+
+/**
+ * Report one command failure on stderr and return the usage-error exit code.
+ *
+ * A usage error must leave stdout empty and stay out of the entry wrapper,
+ * so each command catches it instead of letting it bubble up.
+ */
+function usageFailure(error: unknown, writeErr: (text: string) => void): number {
+  const message = error instanceof Error ? error.message : String(error);
+  writeErr(`cli.ts: ${message}\n`);
+  return 1;
+}
+
+/** `send`: deliver one report into a pane as one input (type it, then Enter). */
+function sendCommand(values: CliValues, deps: CliDeps): number {
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  try {
+    const to = required("--to", values.to);
+    const text = required("--text", values.text);
+    // The report is encoded so it reaches the parent as one input: a raw
+    // newline would end the line in the parent's pane, and the rest of the
+    // report would arrive as separate input.
+    agentPrompt(to, encodePaneText(text));
+    writeReportReceipt(deps.env ?? process.env, to, text);
+    return 0;
+  } catch (error) {
+    return usageFailure(error, writeErr);
+  }
+}
+
 /** `last-message`: print a session's last assistant message. */
 function lastMessageCommand(values: CliValues, deps: CliDeps): number {
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
@@ -443,6 +571,13 @@ function waitStatuses(value: string | undefined): ChildStatus[] {
   return statuses;
 }
 
+/** Parse `--signal`, defaulting to `status`. */
+function waitSignal(value: string | undefined): "status" | "sidecar" {
+  if (value === undefined) return "status";
+  if (value === "status" || value === "sidecar") return value;
+  throw new Error(`invalid --signal value: ${value} (expected status or sidecar)`);
+}
+
 /** Parse `--timeout` as a positive number of seconds. */
 function waitTimeoutSeconds(value: string | undefined): number {
   if (value === undefined) return DEFAULT_WAIT_TIMEOUT_S;
@@ -454,57 +589,147 @@ function waitTimeoutSeconds(value: string | undefined): number {
 }
 
 /**
- * `wait`: poll `<session>.status` until it holds one of the wanted statuses.
- * A missing file counts as no status yet. Exit 0 prints the status line,
- * exit 2 is a timeout (it prints the last line seen, or `{"status":null}`),
- * exit 1 is a usage error. The loop reads a file only; no host is involved.
+ * Sleep until the next poll, or until the deadline passes. Returns false when
+ * the deadline passed, so the caller stops polling.
+ */
+async function waitForNextPoll(
+  deadline: number,
+  sleep: (ms: number) => Promise<void>,
+): Promise<boolean> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return false;
+  await sleep(Math.min(WAIT_POLL_MS, remaining));
+  return true;
+}
+
+/** The sinks and the timer a wait command uses. */
+interface WaitDeps {
+  write: (text: string) => void;
+  writeErr: (text: string) => void;
+  sleep: (ms: number) => Promise<void>;
+}
+
+/** The timeout a wait command runs under. */
+interface WaitTimeout {
+  /** The moment the wait gives up. */
+  deadline: number;
+  /** The timeout in seconds, for the timeout message. */
+  seconds: number;
+}
+
+/** Resolve the wait sinks from the injected deps. */
+function resolveWaitDeps(deps: CliDeps): WaitDeps {
+  return {
+    write: deps.stdout ?? ((text: string) => process.stdout.write(text)),
+    writeErr: deps.stderr ?? ((text: string) => process.stderr.write(text)),
+    sleep: deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms))),
+  };
+}
+
+/**
+ * `wait --signal sidecar`: poll `<session>.exit` until the file appears. The
+ * file's presence alone is the signal, so a malformed sidecar still counts
+ * and `interpretExitSidecar` maps an unknown payload to `done`. The sidecar
+ * is never removed: the wrapper (`cli.ts run`) reads the same file after the
+ * child exits.
+ */
+async function waitForSidecar(
+  sessionPath: string,
+  timeout: WaitTimeout,
+  deps: WaitDeps,
+): Promise<number> {
+  const sidecarPath = exitSidecarPath(sessionPath);
+  const sidecarAbsPath = resolve(sidecarPath);
+  for (;;) {
+    if (existsSync(sidecarPath)) {
+      const result = interpretExitSidecar(readExitSidecar(sessionPath));
+      deps.write(JSON.stringify({ ...result, sidecar: sidecarAbsPath }) + "\n");
+      return 0;
+    }
+    if (!(await waitForNextPoll(timeout.deadline, deps.sleep))) break;
+  }
+  deps.write(`${JSON.stringify({ sidecar: null })}\n`);
+  deps.writeErr(
+    `timeout after ${timeout.seconds}s: no exit sidecar was seen (a sidecar, if any, would have been printed; wait never removes it)\n`,
+  );
+  return 2;
+}
+
+/**
+ * `wait --signal status`: poll `<session>.status` until it holds one of the
+ * wanted statuses. A missing file counts as no status yet.
+ */
+async function waitForStatus(
+  sessionPath: string,
+  wanted: Set<ChildStatus>,
+  timeout: WaitTimeout,
+  deps: WaitDeps,
+): Promise<number> {
+  const statusPath = statusFilePath(sessionPath);
+  let last: string | null = null;
+  for (;;) {
+    try {
+      last = readFileSync(statusPath, "utf8");
+    } catch {
+      // A missing file is no status yet.
+    }
+    if (last !== null) {
+      // Parse the buffer that was read, not a second read of the file: the
+      // child can flip the status between two reads, and the printed line
+      // must be the one that matched.
+      const record = parseChildStatus(last);
+      if (record && wanted.has(record.status)) {
+        deps.write(`${last}\n`);
+        return 0;
+      }
+    }
+    if (!(await waitForNextPoll(timeout.deadline, deps.sleep))) break;
+  }
+  deps.write(`${last ?? JSON.stringify({ status: null })}\n`);
+  deps.writeErr(
+    last === null
+      ? `timeout after ${timeout.seconds}s: no status was seen\n`
+      : `timeout after ${timeout.seconds}s: last status was ${rawChildStatusName(last)}\n`,
+  );
+  return 2;
+}
+
+/**
+ * `wait`: poll a session's completion signal until it holds the wanted exit.
+ * The two signals live in `waitForStatus` and `waitForSidecar`.
+ *
+ * Waiting is strictly read-only: the sidecar is never removed here. The
+ * wrapper (`cli.ts run`) reads the same file after the child exits, so a
+ * waiting parent that deleted it would break the close-on-done block.
+ *
+ * Exit 0 prints one JSON line (with the signal file's absolute path), exit 2
+ * is a timeout, exit 1 is a usage error. The loop reads files only; no host
+ * is involved.
  */
 async function waitCommand(values: CliValues, deps: CliDeps): Promise<number> {
-  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
-  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
-  const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const wait = resolveWaitDeps(deps);
   try {
     const sessionPath = required("--session", values.session);
-    const wanted = new Set(waitStatuses(values.status));
-    const timeoutSeconds = waitTimeoutSeconds(values.timeout);
-
-    const statusPath = statusFilePath(sessionPath);
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    let last: string | null = null;
-    for (;;) {
-      try {
-        last = readFileSync(statusPath, "utf8");
-      } catch {
-        // A missing file is no status yet.
-      }
-      if (last !== null) {
-        // Parse the buffer that was read, not a second read of the file: the
-        // child can flip the status between two reads, and the printed line
-        // must be the one that matched.
-        const record = parseChildStatus(last);
-        if (record && wanted.has(record.status)) {
-          write(`${last}\n`);
-          return 0;
-        }
-      }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-      await sleep(Math.min(WAIT_POLL_MS, remaining));
+    const signal = waitSignal(values.signal);
+    // Judged by flag presence, not by the resolved default: `--status`
+    // defaults to `done,blocked`, so a check on the value would make every
+    // sidecar wait a usage error. Child statuses mean nothing to a sidecar.
+    if (signal === "sidecar" && values.status !== undefined) {
+      throw new Error("--status is a status-wait flag; drop it for --signal sidecar");
     }
+    const timeoutSeconds = waitTimeoutSeconds(values.timeout);
+    const timeout: WaitTimeout = {
+      deadline: Date.now() + timeoutSeconds * 1000,
+      seconds: timeoutSeconds,
+    };
 
-    write(`${last ?? JSON.stringify({ status: null })}\n`);
-    writeErr(
-      last === null
-        ? `timeout after ${timeoutSeconds}s: no status was seen\n`
-        : `timeout after ${timeoutSeconds}s: last status was ${rawChildStatusName(last)}\n`,
-    );
-    return 2;
+    if (signal === "sidecar") {
+      return await waitForSidecar(sessionPath, timeout, wait);
+    }
+    const wanted = new Set(waitStatuses(values.status));
+    return await waitForStatus(sessionPath, wanted, timeout, wait);
   } catch (error) {
-    // A usage error must leave stdout empty, so it is caught here instead of
-    // bubbling to the entry wrapper.
-    const message = error instanceof Error ? error.message : String(error);
-    writeErr(`cli.ts: ${message}\n`);
-    return 1;
+    return usageFailure(error, wait.writeErr);
   }
 }
 
@@ -531,9 +756,27 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     writeErr(`${USAGE}\n`);
     return 2;
   }
-  if (command === "start") return startCommand(values as CliValues, deps);
-  if (command === "resume") return resumeCommand(values as CliValues, deps);
+  if (command === "resume") {
+    // The mode is a launch property, so a flag here would be a silent no-op:
+    // the spec still says `last` while the orchestrator believes `send`.
+    if (values.report !== undefined) {
+      writeErr("invalid --report for resume: the launch spec holds the mode (use start)\n");
+      return 1;
+    }
+    return resumeCommand(values as CliValues, deps);
+  }
+  if (command === "start") {
+    // Exit-code convention, per the external-orchestration spec ("Requirement:
+    // Start a subagent" / "Resume a subagent" / "Send a report" / "Wait for a
+    // child"): `start` reports an invalid FLAG VALUE with exit 2 — `--report`
+    // names a value the caller must fix before any side effect — while `wait`,
+    // `resume` and `send` report a USAGE error (a missing or unusable flag)
+    // with exit 1. The codes are pinned per command; they are not unified.
+    const report = reportMode((values as CliValues).report, writeErr);
+    return report === null ? 2 : startCommand(values as CliValues, deps, report);
+  }
   if (command === "run") return runCommand(positionals.slice(1), deps);
+  if (command === "send") return sendCommand(values as CliValues, deps);
   if (command === "last-message") return lastMessageCommand(values as CliValues, deps);
   if (command === "wait") return await waitCommand(values as CliValues, deps);
   if (command === "prune") return pruneCommand(values as CliValues, deps);
@@ -561,9 +804,7 @@ if (invokedDirectly()) {
       process.exitCode = code;
     },
     (error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`cli.ts: ${message}\n`);
-      process.exitCode = 1;
+      process.exitCode = usageFailure(error, (text) => process.stderr.write(text));
     },
   );
 }

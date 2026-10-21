@@ -1,6 +1,6 @@
 ---
 name: pmux
-description: Delegated subagents for build, review, recon, or doc work across the rust-worker, reviewer, scout, worker, and advisor roles, each running as a pi process in its own tmux pane and reporting back through its session file. Relevant to requests phrased as launching, spinning up, spawning, starting, or delegating to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, review-fix loops repeating until pass, or mbv-orchestrator campaign work.
+description: Delegated subagents for build, review, recon, or doc work across the rust-worker, reviewer, scout, worker, and advisor roles, each running as a pi process in its own tmux pane and reporting back through its session file. For an external orchestrator such as Claude Code it starts children with `--report send`, which get the report typed into the orchestrator's pane. Relevant to requests phrased as launching, spinning up, spawning, starting, or delegating to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, review-fix loops repeating until pass, or mbv-orchestrator campaign work.
 ---
 
 # pi subagents via tmux
@@ -24,10 +24,13 @@ resolves the role, appends the parent-contact footer to your brief, splits and
 names the pane, and writes a JSON launch spec that the pane-side run wrapper
 executes. Never retype its steps by hand — invoke the script.
 
-How you and a child communicate — there is no channel from the child back to
-you; plain text printed in its pane is never seen, and it cannot message you:
+How you and a child communicate — in the default `last` mode there is no
+channel from the child back to you; plain text printed in its pane is never
+seen, and it cannot message you. (A child started with `--report send` can
+reach you — see [External orchestrators (Claude Code)](#external-orchestrators-claude-code).)
 
-- **The report** = the child's last assistant message in its session file.
+- **The report** (default `last` mode) = the child's last assistant message
+  in its session file.
   The footer the launcher appends to the brief tells the child this. You read
   it with `last-message --session <file>` after the wait.
 - **The completion signal** = the `<session>.exit` sidecar file, written by
@@ -116,7 +119,10 @@ with user consent).
      crash now writes an `error` sidecar). The pane stays open. Read the last
      assistant message from the session file (step 4) and decide whether to
      relaunch, then close the pane once you are done with it.
-4. Read the report — the child's last assistant message in the session
+4. Read the report (default `last` mode; in `send` mode the report is typed
+   into your pane instead — see
+   [External orchestrators (Claude Code)](#external-orchestrators-claude-code)) —
+   the child's last assistant message in the session
    file from the start JSON:
    ```bash
    node <skill-dir>/launch.ts last-message --session <file>
@@ -124,11 +130,115 @@ with user consent).
    It prints the text of the session's last assistant message, or
    `(no assistant message)`.
 
+## External orchestrators (Claude Code)
+
+The recipes above describe the default `last` mode: you can block in
+`wait`, and the report is the child's last assistant message. This section
+is for an orchestrator that cannot poll — Claude Code and any harness where
+you end a turn and are woken only by text arriving in your own pane. It
+starts the child with `--report send`, and the child types its report into
+your pane.
+
+0. Your own pane id is `$TMUX_PANE` — it is always set inside a pane, and
+   it is what children send their reports to. There is no parent name to
+   pick: every child gets `--parent "$TMUX_PANE"`.
+1. Write the brief to a file — the task, nothing else. The launcher appends
+   the send-mode parent-contact footer (your pane id and the send procedure)
+   itself.
+2. Start the child:
+   ```bash
+   node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent "$TMUX_PANE" --report send [--scratch <dir>] [--close-grace-ms <n>]
+   ```
+   On success it prints JSON on stdout:
+   `{"pane":..., "session":..., "launch":...}` — the session file (the
+   `.exit` sidecar lives next to it), the launch-spec path a resume needs,
+   and the child's pane id, which matters only while the child is alive,
+   because a `done` child closes its own pane after the close grace.
+3. End the turn. The report arrives as a new message in your prompt — that
+   is the child running the `send` command from its footer. A line break in
+   the report arrives as the two characters `\n`, so the whole report is one
+   message. Do NOT sit in a polling loop instead of ending your turn; the
+   wake-up is the message, not the file.
+4. When you are awake again (the report arrived, or you want the child's
+   final state), wait for the sidecar and read it:
+   ```bash
+   node <skill-dir>/launch.ts wait --session <session> --signal sidecar [--timeout <seconds>]
+   ```
+   `wait` blocks until `<session>.exit` appears (default timeout 600 s). On
+   success it prints one JSON line and exits 0:
+   `{"reason":"done","exitCode":0,"sidecar":"/abs/path/<session>.exit"}`.
+   `reason` is one of `done`, `handoff`, `ping`, `error`; a sidecar the
+   wrapper wrote itself carries `"source":"wrapper"`, printed in the wait
+   JSON as `"errorSource":"wrapper"`. A timeout prints
+   `{"sidecar":null}` and exits 2 (a child may simply still be working —
+   wait again, or nudge it); a usage error exits 1 and prints nothing on
+   stdout. `wait` never deletes the sidecar, and neither should you: the
+   pane-side wrapper reads the same file after the child exits, so removing
+   it early leaves the wrapper blind — it cannot close the pane, and the
+   ping wake-up loses the question. Read the JSON and act on it, but LEAVE
+   the sidecar in place; it is cleaned up for you:
+
+   - `start` and `resume` clear the sidecar of the session they (re)launch,
+     so a fresh run never reads an earlier run's exit.
+   - `prune` reclaims `.exit` files once they fall outside the retention
+     window.
+   - A repeated `wait` on the same session re-reports the same exit, which
+     is harmless.
+
+   The `sidecar` field of the printed JSON is that absolute path.
+5. Act on the reason from the wait JSON:
+   - `done` → clean finish. The child closed itself; the pane has closed
+     after the close grace. Its report was typed into your pane while it
+     ran — or the wrapper woke you that it exited without sending one.
+   - `handoff` → the child ended cleanly at its context alert, but the task
+     is NOT complete. The handoff text a fresh agent needs is in the JSON
+     (`handoff.message`). The pane closes itself after the close grace,
+     like a `done` pane. Do NOT resume that session: start a NEW child with
+     `start` and put the handoff text in its brief.
+   - `error` → two causes. The JSON carries `"errorSource":"wrapper"` when
+     the wrapper wrote the sidecar: the child crashed. Otherwise it is a
+     provider failure — auto-retry exhausted. Either way the child ended
+     before it could finish, so count on no report: only a wake-up already
+     typed into your pane tells you that one arrived. The pane stays open
+     showing `__SUBAGENT_DONE_<n>__`; read the last assistant message with
+     `last-message --session <session>`, then retry or resume, and close
+     the pane once you are done with it.
+   - `ping` → the child asked a question with `caller_ping` instead of
+     sending a report. The question is in the JSON (`ping.message`) and in
+     the wake-up text the wrapper sent you. Answer it with a `resume`
+     (below). The pane stays open until you close it.
+   - No sidecar at all (timeout) and `__SUBAGENT_DONE_<n>__` at the tail of
+     the child's pane → the wrapper itself was killed, so the child wrote
+     no sidecar. The pane stays open. Read the last assistant message and
+     decide whether to relaunch, then close the pane once you are done with
+     it.
+
+The wrapper also wakes you when a child exits without sending a report: it
+types `<child> <state> without sending a report. Read its last message: node
+<cli> last-message --session <session>` into your pane, where `<state>` is
+the sidecar type, or `exited` or `crashed (code <n>)` when no sidecar was
+written. A `ping` is quoted as `<child> pinged: <message>`. A child that
+ignored its footer therefore still wakes you.
+
+A follow-up (a recheck, or the answer to the child's question) always runs
+in a **new** pane: `resume` clears the stale `.exit` sidecar of the session
+it relaunches and re-appends the send footer, so the resumed child still
+knows how to reach you:
+
+```bash
+node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child>]
+```
+
+`<spec>` is the `launch` field from the start JSON; `--name` defaults to the
+child name stored in the spec. A fresh role or a correction lane → new child
+via `start`.
+
 ## While it runs / after
 
 - A follow-up (a recheck, or the answer to the child's question) always
-  runs in a **new** pane: `rm` the child's `.exit`, write the follow-up to
-  a prompt file, and run:
+  runs in a **new** pane: write the follow-up to a prompt file and run
+  (`resume` clears the stale `.exit` sidecar of the session it relaunches,
+  so there is nothing to remove by hand):
   ```bash
   node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child>]
   ```
@@ -138,7 +248,10 @@ with user consent).
   extension's `config.json`. The same session resumes with full
   context and the child re-reports the same way. The old pane is not needed.
   A fresh role or a correction lane → new child via `start`.
-- Idle child (you expected a report long ago): type a nudge into the
+- Idle child (you expected a report long ago; `last` mode — a send-mode
+  child reports with the `send` command its footer teaches, see
+  [External orchestrators (Claude Code)](#external-orchestrators-claude-code)):
+  type a nudge into the
   child's pane and press Enter, using the pane id from the `pane` field of
   the start JSON:
   ```bash

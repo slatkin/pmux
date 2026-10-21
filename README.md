@@ -40,7 +40,7 @@ npx skills add slatkin/pmux -g -a claude-code
 npx skills add /path/to/pmux -g -a claude-code
 ```
 
-The skill launches each child in its own pane, waits for the child's status file to reach a terminal status, and then reads the `.exit` sidecar, which says whether the child finished, handed off, pinged or failed. For the launcher commands, the completion signal, and close-on-done behavior, read [External orchestrators](docs/guide.md#external-orchestrators-claude-code).
+The skill launches each child in its own pane. In the default `last` mode it waits for the child's status file to reach a terminal status and then reads the `.exit` sidecar, which says whether the child finished, handed off, pinged or failed. A child started with `--report send` instead types its report into the orchestrator's pane; the skill's "External orchestrators (Claude Code)" section documents that mode. For the launcher commands, the completion signal, and close-on-done behavior, read [External orchestrators](docs/guide.md#external-orchestrators-claude-code).
 
 ## Configuration
 

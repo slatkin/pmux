@@ -19,7 +19,7 @@ A sender SHALL be able to address exactly these targets:
 - the name of one of the sender's own running children;
 - the name of a running sibling (another running child of the sender's parent), excluding the sender itself.
 
-No other agent SHALL be reachable, whether a grandchild, grandparent, finished subagent, or unrelated agent. A subagent whose parent is an external orchestrator — its launch env carries `PI_PMUX_EXTERNAL_PARENT` — has no `parent` target, because no pi parent reads its message file. When such a sender sends to `parent`, the tool MUST return an error that says the parent is an external orchestrator that does not read subagent messages, names the sender's last assistant message as the report, and names `caller_ping` as the way to ask a question; `parent` MUST NOT appear in the reachable target names the tool lists. When `to` matches no reachable target, the tool MUST return an error that lists the currently reachable target names. When a name matches more than one running agent, the tool MUST return an error listing the matches with their ids and send nothing. A target given as an exact subagent id MUST resolve without ambiguity.
+No other agent SHALL be reachable, whether a grandchild, grandparent, finished subagent, or unrelated agent. A subagent whose parent is an external orchestrator — its launch env carries `PI_PMUX_EXTERNAL_PARENT` — has no `parent` target, because no pi parent reads its message file. When such a sender sends to `parent`, the tool MUST return an error that says the parent is an external orchestrator that does not read subagent messages, tells the sender to report the way the parent-contact footer at the end of its brief says, and names `caller_ping` as the way to ask a question. The error MUST NOT say that the last assistant message is the report, because in the `send` report mode it is not. `parent` MUST NOT appear in the reachable target names the tool lists. When `to` matches no reachable target, the tool MUST return an error that lists the currently reachable target names. When a name matches more than one running agent, the tool MUST return an error listing the matches with their ids and send nothing. A target given as an exact subagent id MUST resolve without ambiguity.
 
 #### Scenario: Parent redirects a running child
 - **WHEN** a parent with a running child "Scout" calls `pmux_message({to: "Scout", message: "Skip the tests dir"})`
@@ -43,7 +43,7 @@ No other agent SHALL be reachable, whether a grandchild, grandparent, finished s
 
 #### Scenario: A child with an external parent cannot message the parent
 - **WHEN** a subagent whose env carries `PI_PMUX_EXTERNAL_PARENT=1` sends `pmux_message` to `parent`
-- **THEN** the tool returns an error naming the external orchestrator, the sender's last assistant message as the report, and `caller_ping` as the way to ask a question, and nothing is appended to any message file
+- **THEN** the tool returns an error naming the external orchestrator, the parent-contact footer of the brief as the way to report, and `caller_ping` as the way to ask a question, does not name the last assistant message as the report, and nothing is appended to any message file
 
 #### Scenario: The reachable list omits parent for a marked child
 - **WHEN** a subagent whose env carries `PI_PMUX_EXTERNAL_PARENT=1` sends to a target that matches nothing reachable
