@@ -235,7 +235,7 @@ pmux_spawn({ name: "Designer", agent: "game-designer", cwd: "agents/game-designe
 | `skills`       | string  | —                       | A comma-separated list of skill names.                                                                                                                                                                                                                                                             |
 | `tools`        | string  | —                       | A comma-separated list of tool names.                                                                                                                                                                                                                                                              |
 | `cwd`          | string  | —                       | The working directory for the child (see [Role Folders](#role-folders)).                                                                                                                                                                                                                           |
-| `surface`      | string  | extension configuration | It places this spawn. `"pane"` (default) places the child automatically in the caller's window: pmux splits the caller's newest living child pane, or the caller's own pane when it has none, side by side when that pane is at least twice as wide as it is tall and stacked below otherwise. `"tab"` opens the child in its own workspace tab. It overrides the `surface` key in `config.json` for this spawn. |
+| `surface`      | string  | extension configuration | It places this spawn. `"pane"` places the child automatically in the caller's window: pmux splits the caller's newest living child pane, or the caller's own pane when it has none, side by side when that pane is at least twice as wide as it is tall and stacked below otherwise. `"tab"` opens the child in its own workspace tab. `"float"` opens a floating pane in the caller's window, half the window's width and height, at the top right, and the caller keeps the focus; successive pmux floats cascade down and left. When absent, the agent's `surface:` frontmatter applies, and then the `surface` key in `config.json`. |
 
 ---
 
@@ -271,7 +271,7 @@ A session with no launch record, for example one that the skill launched, resume
 | ------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sessionPath` | string  | Required. The child session file. For a Claude Code child, use the session path from its result.                                                                                                                                                                                                  |
 | `message`     | string  | The follow-up prompt. With no message, the child resumes without a prompt.                                                                                                                                                                                                                        |
-| `surface`     | string  | `"pane"` (default) places the resumed pane automatically in the caller's window, by the same split rule as `pmux_spawn`. `"tab"` opens the resumed session in its own workspace tab. It overrides the `surface` key in `config.json` for this resume.                                                                                                                    |
+| `surface`     | string  | `"pane"` places the resumed pane automatically in the caller's window, by the same split rule as `pmux_spawn`. `"tab"` opens the resumed session in its own workspace tab. `"float"` opens a floating pane in the caller's window, at the top right, and the caller keeps the focus. When absent, the surface stored in the launch record applies (the role's `surface:`, kept from the spawn), and then the `surface` key in `config.json`.                                                                                                                    |
 | `autoExit`    | boolean | Whether the resumed session auto-exits after its next response. When absent, the launch record's auto-exit and interactive values apply. `false` runs the resumed child interactively, so stall and recovery transitions do not wake the parent.                                                    |
 
 The `name` parameter is removed: the resumed pane uses the name from the launch record, or `Resume` when there is no record. `pmux_spawn` also no longer takes `resumeSessionId`; use `pmux_resume` with the session file.
@@ -367,6 +367,7 @@ You are a specialized agent that does X...
 | `tools`                    | string  | Native pi tools only, as a comma-separated list: `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`.                                                                                                                                                                                                                                    |
 | `skills`                   | string  | A comma-separated list of skill names to auto-load.                                                                                                                                                                                                                                                                                        |
 | `session-mode`             | string  | The default child-session mode: `standalone`, `lineage-only`, or `fork`.                                                                                                                                                                                                                                                                   |
+| `surface`                  | string  | The default surface for this agent's spawns: `pane`, `tab`, or `float`. An invalid value is ignored, and the agent then has no surface preference.                                                                                                                                                                                         |
 | `spawning`                 | boolean | Set `false` to deny all child-spawning tools.                                                                                                                                                                                                                                                                                              |
 | `deny-tools`               | string  | A comma-separated list of extension tool names to deny.                                                                                                                                                                                                                                                                                    |
 | `auto-exit`                | boolean | Auto-shutdown when the agent finishes its turn, with no `pmux_done` call. If the user sends any input, auto-exit is disabled permanently and the user takes over the session. Use it for autonomous agents (scout, worker). Do not use it for interactive ones. It also sets the default value of `interactive` (see below). |
@@ -394,6 +395,23 @@ Choose how a child session starts:
 ---
 name: my-agent
 session-mode: lineage-only
+---
+```
+
+### `surface`
+
+Set where the spawns of this agent open: `pane` (a pane placed automatically in the caller's window), `tab` (its own workspace tab), or `float` (a floating pane in the caller's window, half the window's width and height, at the top right, with the focus staying on the caller; successive pmux floats cascade down and left).
+
+The role's `surface:` applies when the spawn or resume gives no `surface` parameter; the per-call value wins over the role, and the role wins over the configured default. An invalid value is ignored, and the agent then has no surface preference.
+
+A resume keeps the role's surface: the launch record (pi parent) and the launch spec (external orchestrator) store the role's surface, and a resume uses it when the call gives none.
+
+`float` is never a default: `config.json` and `/pmux-surface` accept only `pane` and `tab`.
+
+```yaml
+---
+name: reviewer
+surface: float
 ---
 ```
 
