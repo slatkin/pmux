@@ -43,3 +43,54 @@ When `send` runs with `PI_PMUX_SESSION` set, it SHALL append, after the delivery
 #### Scenario: Prune reclaims receipts
 - **WHEN** `prune` runs on a scratch directory holding a `.sent` file older than the retention and one within it
 - **THEN** the old one is deleted and the fresh one is kept
+
+### Requirement: Send-mode wake-up
+The send-mode wake-up SHALL be one message typed into the parent's pane through the pane-input primitive of `send`, before the close-on-done step. Its text SHALL be encoded the way the `send` command encodes its text, so a ping question that spans lines reaches the parent as one input. For a `ping` sidecar with a string `message` it SHALL be `<name> pinged: <message>`. Otherwise it SHALL be `<name> <state> without sending a report. Read its last message: node <cli> last-message --session <session>`, where `<state>` is the sidecar `type`, else `exited` for code 0, else `crashed (code <n>)`. A failed wake-up SHALL go to stderr only.
+
+#### Scenario: Exit without a report
+- **WHEN** a send-mode child with parent `%12` exits with a `done` sidecar and wrote no receipt
+- **THEN** `%12` receives one message naming the child, the state `done` and the `last-message --session <session>` command
+
+#### Scenario: Failed wake-up
+- **WHEN** the wake-up cannot be delivered to the parent's pane
+- **THEN** the wrapper writes an error naming the parent to stderr, and its exit code is the child's code
+
+#### Scenario: Ping is quoted
+- **WHEN** a send-mode child exits with `{"type":"ping","name":"w","message":"Which DB?"}` and no receipt
+- **THEN** the parent receives `<name> pinged: Which DB?`
+
+#### Scenario: A ping question that spans lines
+- **WHEN** a send-mode child exits with a ping sidecar whose message holds a line break, and no receipt
+- **THEN** the parent receives one message, with the line break written as the two characters `\n`
+
+#### Scenario: The name is the launch spec's name
+- **WHEN** a send-mode child launched as `worker-a` exits and its own sidecar names `w`
+- **THEN** the wake-up text names `worker-a`
+
+#### Scenario: Crash without a report
+- **WHEN** a send-mode child exits with code 2, wrote no sidecar, left no terminal status, and wrote no receipt
+- **THEN** the wrapper writes its `error` sidecar, and the parent receives a message with the state `error` and the `last-message` command
+
+#### Scenario: Crash after a terminal status
+- **WHEN** a send-mode child exits with code 2, wrote no sidecar, left a `done` status, and wrote no receipt
+- **THEN** the wrapper writes no `error` sidecar, and the parent receives a message with the state `crashed (code 2)` and the `last-message` command
+
+#### Scenario: Report suppresses the wake-up
+- **WHEN** a send-mode child sends its report to its parent and exits
+- **THEN** the parent receives no message from the wrapper
+
+#### Scenario: Report to another pane
+- **WHEN** a send-mode child sends only to a pane that is not its parent and exits
+- **THEN** the parent is still woken
+
+#### Scenario: Malformed receipt line
+- **WHEN** the only new line in `<session>.sent` is not JSON
+- **THEN** the parent is still woken
+
+#### Scenario: Earlier runs do not count
+- **WHEN** a resumed send-mode child exits without a report, and `<session>.sent` holds receipts to the parent from the earlier run
+- **THEN** the parent is woken
+
+#### Scenario: Last mode stays silent
+- **WHEN** a last-mode child exits without a report
+- **THEN** no text is typed into any pane but the child's own

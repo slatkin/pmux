@@ -8,6 +8,8 @@ The `send` report channel is built on that primitive. A child that writes a repo
 
 The same primitive carries every other pane input pmux sends: `pmux_message` to a child or a sibling, the send-mode wake-up, the idle-watchdog nudge. A multi-line message is split there too, so the child receives fragments of one message as separate turns.
 
+The send-mode wake-up has the same shape: it quotes the child's own ping question, so a question that spans lines would arrive as several inputs.
+
 One encoding rule at the pane-input boundary closes all of it: the text is encoded so that it holds no line terminator and no tab, and the target receives the whole text as one input.
 
 ## What Changes
@@ -15,6 +17,7 @@ One encoding rule at the pane-input boundary closes all of it: the text is encod
 - A new host-independent module `pane-input.ts` owns the encoding: a newline becomes the two characters `\n`, a carriage return `\r`, a tab `\t`, and any other C0 control character or DEL `\xNN` with lowercase hex. Every other character, a backslash included, is left as it is.
 - The tmux backend's pane-input primitive (`agentPrompt`) encodes the text before typing it. Every pane input pmux sends is therefore one input, whatever the target pane runs.
 - The `send` report channel is unchanged in shape: one `send-keys -l` call, one Enter. A report that spans lines now arrives whole, with the line breaks visible as `\n`.
+- The send-mode wake-up is encoded the same way, so a ping question that spans lines reaches the parent as one input.
 - The receipt's `bytes` field keeps counting the text `send` received, before the encoding, so the receipt still describes what the child wrote.
 - The send footer stops telling the child to keep the report on one line. It says the report may span lines and that a newline arrives as `\n`.
 - The `pmux_message` contract says the text is encoded, not "typed as it is".
@@ -33,7 +36,7 @@ None.
 
 ### Modified Capabilities
 
-- `external-orchestration`: the `send` command delivers one encoded line, and the receipt's `bytes` counts the text as received.
+- `external-orchestration`: the `send` command delivers one encoded line, the send-mode wake-up encodes the ping question it quotes, and the receipt's `bytes` counts the text as received.
 - `luvus-messaging`: a message to a child or a sibling is typed as one encoded input, not "as it is".
 
 ## Impact
@@ -41,5 +44,6 @@ None.
 - `pi-extension/pmux/pane-input.ts`: new, host independent, holds the encoding.
 - `pi-extension/pmux/tmux.ts`: `agentPrompt` encodes the text it types.
 - `pi-extension/pmux/cli.ts`: the send footer text.
+- `pi-extension/pmux/run.ts`: the send-mode wake-up encodes the text it types.
 - `AGENTS.md`: the pane-input contract, next to the other completion and env contracts.
 - Tests: a new `test/pane-input.test.ts` for the encoding, the multi-line `send` case in `test/cli.test.ts`, the `agentPrompt` case in `test/tmux.test.ts`.

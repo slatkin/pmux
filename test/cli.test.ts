@@ -477,6 +477,23 @@ describe("runSpec", () => {
     });
   });
 
+  // The ping question is the child's own text, so it can span lines. The
+  // wake-up is encoded like a report: the parent reads it as one input.
+  it("encodes a ping question that spans lines", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: {
+          PI_STUB_EXIT_BODY:
+            '{"type":"ping","name":"w","message":"Which DB?\\nPostgres or MySQL?"}',
+        },
+      });
+      assert.deepEqual(result.woken, [
+        { to: "%12", text: "scout-1 pinged: Which DB?\\nPostgres or MySQL?" },
+      ]);
+    });
+  });
+
   it("names the launch spec's child in the wake-up, not the sidecar's name", async () => {
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, {

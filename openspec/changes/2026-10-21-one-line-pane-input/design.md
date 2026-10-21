@@ -28,7 +28,11 @@ Unicode is untouched. A report in any language arrives as it was written.
 
 `pane-input.ts` is host independent, next to `exit-sidecar.ts` and `status-file.ts`: the encoding is a property of terminal input, not of tmux. The tmux backend calls it from `agentPrompt`, so there is one rule at one place, and every pane input pmux sends inherits it: the `send` report, `pmux_message` to a child or a sibling, the send-mode wake-up, the idle-watchdog nudge.
 
-Encoding inside `agentPrompt` rather than at each call site means no caller can forget it. The cost is that the receipt's `bytes` counts the text before the encoding, because `send` receives the child's text and the backend encodes it later. The receipt spec says so explicitly.
+Encoding at the two report-channel call sites rather than inside `agentPrompt` means no caller can forget it for the channel that matters, and `pmux_message` keeps the behavior the luvus-messaging spec gives it ("the text is typed as it is"). The two call sites are the `send` command and the send-mode wake-up, which quotes the child's ping question — the child's own text, and the other way a report reaches a pane.
+
+The cost of encoding inside `agentPrompt` instead would be that every pane input pmux sends changes, including the parent-to-child messages a pi parent writes, and those would lose their real line breaks in the child's editor for no gain.
+
+The receipt's `bytes` counts the text before the encoding, because `send` receives the child's text and the encoding happens later, at the call site. The receipt spec says so explicitly.
 
 ## Why not a bracketed paste
 
@@ -51,5 +55,5 @@ The send footer told the child to keep the report on one line, which put the bur
 ## Tests
 
 - `test/pane-input.test.ts`: the encoding table, and that a text without control characters comes back unchanged.
-- `test/cli.test.ts`: the multi-line `send` case types one line with the visible `\n`, and the receipt still counts the text as received.
+- `test/cli.test.ts`: the multi-line `send` case types one line with the visible `\n`, the receipt still counts the text as received, and a ping question that spans lines is encoded in the wake-up.
 - `test/tmux.test.ts`: `agentPrompt` encodes before typing.

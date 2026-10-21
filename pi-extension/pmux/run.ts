@@ -13,6 +13,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { buildPaneTitle, type LaunchSpec } from "./launch.ts";
 import { agentPrompt, closeSurface } from "./tmux.ts";
 import { exitSidecarPath, readExitSidecar, writeExitSidecar } from "./exit-sidecar.ts";
+import { encodePaneText } from "./pane-input.ts";
 import { countReportsTo } from "./report-receipt.ts";
 import { isTerminalChildStatus, readChildStatus, writeChildStatus } from "./status-file.ts";
 
@@ -187,7 +188,10 @@ export async function runSpec(
       wake = `${spec.name} ${state} without sending a report. Read its last message: node ${cliHint} last-message --session ${spec.sessionFile ?? "<session>"}`;
     }
     try {
-      (deps.sendToParent ?? agentPrompt)(parent, wake);
+      // The ping question is the child's own text and can span lines, so it
+      // is encoded like a report: the parent reads the question as one
+      // input.
+      (deps.sendToParent ?? agentPrompt)(parent, encodePaneText(wake));
     } catch (error) {
       writeErr(
         `Failed to wake parent ${parent}: ${error instanceof Error ? error.message : String(error)}\n`,
