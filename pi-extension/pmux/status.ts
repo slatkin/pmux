@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 import { getAgentConfigDir } from "./agent-defs.ts";
 import {
   DEFAULT_SURFACE_PLACEMENT,
-  parseSurfacePlacement,
-  type SurfacePlacement,
+  parseSurfaceDefault,
+  type SurfaceDefault,
 } from "./placement.ts";
 import { parseContextAlertConfig, type ContextAlertConfig } from "./context-alert.ts";
 import type {
@@ -234,12 +234,12 @@ export function parseStatusConfig(rawConfig: unknown, source = "config.json"): S
 }
 
 /** Read the optional `surface` placement default from parsed config JSON. */
-export function parseSurfaceConfig(rawConfig: unknown, source = "config.json"): SurfacePlacement {
+export function parseSurfaceConfig(rawConfig: unknown, source = "config.json"): SurfaceDefault {
   if (rawConfig == null || typeof rawConfig !== "object" || Array.isArray(rawConfig)) {
     invalidStatusConfig(source, "root must be an object");
   }
   const surface = (rawConfig as Record<string, unknown>).surface;
-  return parseSurfacePlacement(surface) ?? DEFAULT_SURFACE_PLACEMENT;
+  return parseSurfaceDefault(surface) ?? DEFAULT_SURFACE_PLACEMENT;
 }
 
 /**
@@ -263,7 +263,7 @@ export function loadSurfaceConfig(
   configPath?: string,
   examplePath = STATUS_CONFIG_EXAMPLE_PATH,
   legacyPath?: string,
-): SurfacePlacement {
+): SurfaceDefault {
   try {
     const { sourcePath, rawConfig } = readStatusConfigFile(
       configPath ?? getDefaultConfigPath(),
@@ -284,7 +284,7 @@ export function loadSurfaceConfig(
  * truncating the user's config.
  */
 export function writeSurfaceConfig(
-  placement: SurfacePlacement,
+  placement: SurfaceDefault,
   configPath?: string,
   examplePath = STATUS_CONFIG_EXAMPLE_PATH,
   legacyPath?: string,

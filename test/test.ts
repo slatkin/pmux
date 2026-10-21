@@ -67,6 +67,11 @@ import {
   readSubagentActivityFile,
 } from "../pi-extension/pmux/activity.ts";
 import {
+  parseSurfaceDefault,
+  parseSurfacePlacement,
+  resolvePlacement,
+} from "../pi-extension/pmux/placement.ts";
+import {
   shouldMarkUserTookOver,
   shouldAutoExitOnAgentEnd,
   shouldScheduleAgentEndNudge,
@@ -598,13 +603,38 @@ describe("status.ts", () => {
     });
   });
 
-  it("resolves the surface placement default: tab as given, legacy right/down/pane, junk and absent -> pane", () => {
+  it("resolves the surface placement default: tab as given, legacy right/down/pane, junk, float and absent -> pane", () => {
     assert.equal(parseSurfaceConfig({ surface: "tab" }), "tab");
     assert.equal(parseSurfaceConfig({ surface: "down" }), "pane");
     assert.equal(parseSurfaceConfig({ surface: "right" }), "pane");
     assert.equal(parseSurfaceConfig({ surface: "pane" }), "pane");
+    assert.equal(parseSurfaceConfig({ surface: "float" }), "pane");
     assert.equal(parseSurfaceConfig({ surface: "junk" }), "pane");
     assert.equal(parseSurfaceConfig({}), "pane");
+  });
+
+  it("parses the per-call surface values, accepting float", () => {
+    assert.equal(parseSurfacePlacement("pane"), "pane");
+    assert.equal(parseSurfacePlacement("tab"), "tab");
+    assert.equal(parseSurfacePlacement("float"), "float");
+    assert.equal(parseSurfacePlacement("right"), "pane");
+    assert.equal(parseSurfacePlacement("down"), "pane");
+    assert.equal(parseSurfacePlacement("junk"), undefined);
+  });
+
+  it("rejects float as a surface default", () => {
+    assert.equal(parseSurfaceDefault("pane"), "pane");
+    assert.equal(parseSurfaceDefault("tab"), "tab");
+    assert.equal(parseSurfaceDefault("right"), "pane");
+    assert.equal(parseSurfaceDefault("down"), "pane");
+    assert.equal(parseSurfaceDefault("float"), undefined);
+    assert.equal(parseSurfaceDefault("junk"), undefined);
+  });
+
+  it("resolves the placement: the call beats the role, the role beats the default", () => {
+    assert.equal(resolvePlacement("tab", "float", "pane"), "tab");
+    assert.equal(resolvePlacement(undefined, "float", "pane"), "float");
+    assert.equal(resolvePlacement(undefined, undefined, "pane"), "pane");
   });
 
   it("loads the surface placement from a temp config file", () => {
@@ -615,6 +645,9 @@ describe("status.ts", () => {
       assert.equal(loadSurfaceConfig(configPath, examplePath), "tab");
 
       writeFileSync(configPath, JSON.stringify({ surface: "junk" }));
+      assert.equal(loadSurfaceConfig(configPath, examplePath), "pane");
+
+      writeFileSync(configPath, JSON.stringify({ surface: "float" }));
       assert.equal(loadSurfaceConfig(configPath, examplePath), "pane");
 
       assert.equal(loadSurfaceConfig(join(dir, "missing.json"), examplePath), "pane");

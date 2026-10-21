@@ -20,7 +20,7 @@ import {
   agentPrompt,
   readWindowOptions,
 } from "./tmux.ts";
-import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
+import { parseSurfaceDefault, parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 import {
   createSupervisor,
   SubagentParams,
@@ -938,7 +938,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     description: "Show or set the default subagent surface: /pmux-surface [pane|tab]",
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
-      const placement = parseSurfacePlacement(arg);
+      const placement = parseSurfaceDefault(arg);
       if (placement) {
         setSurfaceDefault(placement);
         try {
