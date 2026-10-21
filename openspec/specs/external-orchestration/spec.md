@@ -67,7 +67,7 @@ The skill launcher SHALL find the package root, meaning a directory that holds `
 - **THEN** its model, tools, surface, auto-exit flag, spawning flag, deny-tools list and body resolve the same as the LF version
 
 #### Scenario: Floating role
-- **WHEN** the resolved role's frontmatter has `surface: float` and `start` runs without `--surface`
+- **WHEN** the resolved role's frontmatter has `surface: float`
 - **THEN** the child opens as a float by the tmux-backend float rule
 
 ### Requirement: Launch contract
@@ -141,18 +141,18 @@ After the child exits, the skill-path run wrapper SHALL print `__SUBAGENT_DONE_<
 - **THEN** no pane is addressed by title and no text is typed into any pane but the child's own
 
 ### Requirement: Resume in a new pane
-`resume --launch <spec> --prompt <file> [--name <child>]` SHALL create a new pane by the tmux-backend placement rule, with the caller's pane as the anchor, name it (after `--name`, or the child name stored in the spec), and run the existing launch spec there with the new prompt, so that pi resumes the same session with its context. Resume MUST NOT need the child's previous pane to exist. The surface SHALL be `--surface` when given, else the role surface stored in the spec, else the `config.json` default. On success it SHALL print JSON with `pane` and `launch`.
+`resume --launch <spec> --prompt <file> [--name <child>]` SHALL create a new pane by the tmux-backend placement rule, with the caller's pane as the anchor, name it (after `--name`, or the child name stored in the spec), and run the existing launch spec there with the new prompt, so that pi resumes the same session with its context. Resume MUST NOT need the child's previous pane to exist. The surface SHALL be the role surface stored in the spec, else the `config.json` default. On success it SHALL print JSON with `pane` and `launch`.
 
 #### Scenario: Resume after close-on-done
 - **WHEN** a child's pane closed on done and the orchestrator resumes it with a follow-up prompt
 - **THEN** a new pane runs pi on the same session file, and the child keeps its earlier context
 
 #### Scenario: Resume keeps the role's float
-- **WHEN** a child of a role with `surface: float` was started with `start`, and it is resumed with `resume` and no `--surface`
+- **WHEN** a child of a role with `surface: float` was started with `start`, and it is resumed with `resume`
 - **THEN** the resumed child opens as a float
 
 #### Scenario: Spec without a role surface
-- **WHEN** a child is resumed from a launch spec that holds no role surface, and no `--surface` is given
+- **WHEN** a child is resumed from a launch spec that holds no role surface
 - **THEN** the `config.json` default applies
 
 ### Requirement: Per-child launch spec
@@ -171,7 +171,7 @@ After the child exits, the skill-path run wrapper SHALL print `__SUBAGENT_DONE_<
 - **THEN** the launch spec holds the surface `tab`
 
 #### Scenario: Per-call surface is not recorded
-- **WHEN** `start` runs with `--surface float` for a role with no `surface:`
+- **WHEN** `start` runs for a role with no `surface:` (there is no `--surface` flag)
 - **THEN** the launch spec holds no surface
 
 ### Requirement: Default tool list
@@ -223,28 +223,13 @@ The CLI SHALL provide `last-message --session <file>`, which prints the text of 
 - **WHEN** the wait returns `done`
 - **THEN** the skill tells the orchestrator to run `last-message --session <file>` for the report
 
-### Requirement: Surface flag values
-`start` and `resume` SHALL accept `--surface pane` and `--surface tab`. They SHALL read the legacy values `right` and `down` as `pane`. Any other value MUST fail before a pane is created, with an error that names the accepted values `pane` and `tab`. When the flag is absent, the default comes from the extension's `config.json`.
+### Requirement: No surface flag
+`start` and `resume` SHALL NOT accept a `--surface` flag. An invocation that carries the flag MUST fail before a pane is created. A launch's surface SHALL come from the role's `surface:` frontmatter when it names `pane`, `tab` or `float`, and from the configured default otherwise.
 
-#### Scenario: Legacy value
-- **WHEN** `start` runs with `--surface down`
-- **THEN** the pane is placed by the tmux-backend split rule
+#### Scenario: Flag is rejected
+- **WHEN** `start` runs with `--surface float`
+- **THEN** it exits non-zero with an unknown-argument error, and no pane is created
 
-#### Scenario: Invalid value
-- **WHEN** `start` runs with `--surface window`
-- **THEN** it exits non-zero with an error naming `pane` and `tab`, and no pane is created
-
-### Requirement: Float surface flag
-`start` and `resume` SHALL accept `--surface float` in addition to `pane` and `tab`. The error for an invalid value SHALL name `pane`, `tab` and `float`. For `start`, the surface SHALL be `--surface` when given, else the role's `surface:`, else the `config.json` default.
-
-#### Scenario: Ad-hoc float
-- **WHEN** `start` runs with `--surface float` for a role with no `surface:`
-- **THEN** the child opens as a float by the tmux-backend float rule
-
-#### Scenario: Flag beats the role
-- **WHEN** `start` runs with `--surface pane` for a role with `surface: float`
-- **THEN** the child is placed by the tmux-backend split rule
-
-#### Scenario: Invalid value names float
-- **WHEN** `start` runs with `--surface window`
-- **THEN** it exits non-zero with an error naming `pane`, `tab` and `float`, and no pane is created
+#### Scenario: Role decides without a flag
+- **WHEN** `start` runs for a role with no `surface:` and the `config.json` default is `tab`
+- **THEN** the child opens in its own tmux window
