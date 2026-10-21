@@ -10,6 +10,7 @@
 import { randomBytes } from "node:crypto";
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -42,7 +43,12 @@ import {
   type LaunchSpec,
 } from "./launch.ts";
 import { agentPrompt, createSurface, runInPane, callerPaneId } from "./tmux.ts";
-import { removeExitSidecar } from "./exit-sidecar.ts";
+import {
+  exitSidecarPath,
+  interpretExitSidecar,
+  readExitSidecar,
+  removeExitSidecar,
+} from "./exit-sidecar.ts";
 import { resolvePlacement } from "./placement.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
@@ -85,7 +91,7 @@ const USAGE = [
   "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>]",
   "  node cli.ts run <spec> [<prompt>]",
   "  node cli.ts last-message --session <file>",
-  "  node cli.ts wait --session <file> [--status <list>] [--timeout <seconds>]",
+  "  node cli.ts wait --session <file> [--signal status|sidecar] [--status <list>] [--timeout <seconds>]",
   "  node cli.ts prune [--scratch <dir>] [--max-age-days <n>] [--dry-run]",
 ].join("\n");
 
@@ -103,6 +109,7 @@ const CLI_OPTIONS = {
   launch: { type: "string" },
   prompt: { type: "string" },
   session: { type: "string" },
+  signal: { type: "string" },
   status: { type: "string" },
   timeout: { type: "string" },
   "max-age-days": { type: "string" },
@@ -124,6 +131,7 @@ interface CliValues {
   launch?: string;
   prompt?: string;
   session?: string;
+  signal?: string;
   status?: string;
   timeout?: string;
   "max-age-days"?: string;
@@ -541,6 +549,13 @@ function waitStatuses(value: string | undefined): ChildStatus[] {
   return statuses;
 }
 
+/** Parse `--signal`, defaulting to `status`. */
+function waitSignal(value: string | undefined): "status" | "sidecar" {
+  if (value === undefined) return "status";
+  if (value === "status" || value === "sidecar") return value;
+  throw new Error(`invalid --signal value: ${value} (expected status or sidecar)`);
+}
+
 /** Parse `--timeout` as a positive number of seconds. */
 function waitTimeoutSeconds(value: string | undefined): number {
   if (value === undefined) return DEFAULT_WAIT_TIMEOUT_S;
@@ -552,10 +567,20 @@ function waitTimeoutSeconds(value: string | undefined): number {
 }
 
 /**
- * `wait`: poll `<session>.status` until it holds one of the wanted statuses.
- * A missing file counts as no status yet. Exit 0 prints the status line,
- * exit 2 is a timeout (it prints the last line seen, or `{"status":null}`),
- * exit 1 is a usage error. The loop reads a file only; no host is involved.
+ * `wait`: poll a session's completion signal until it holds the wanted exit.
+ * With `--signal status` (the default) it polls `<session>.status` until it
+ * holds one of the wanted statuses; a missing file counts as no status yet.
+ * With `--signal sidecar` it polls `<session>.exit` — the child's own exit
+ * record — whose presence alone is the signal, so a malformed sidecar still
+ * counts and `interpretExitSidecar` maps an unknown payload to `done`.
+ *
+ * Waiting is strictly read-only: the sidecar is never removed here. The
+ * wrapper (`cli.ts run`) reads the same file after the child exits, so a
+ * waiting parent that deleted it would break the close-on-done block.
+ *
+ * Exit 0 prints one JSON line (with the signal file's absolute path), exit 2
+ * is a timeout, exit 1 is a usage error. The loop reads files only; no host
+ * is involved.
  */
 async function waitCommand(values: CliValues, deps: CliDeps): Promise<number> {
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
@@ -563,11 +588,38 @@ async function waitCommand(values: CliValues, deps: CliDeps): Promise<number> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   try {
     const sessionPath = required("--session", values.session);
-    const wanted = new Set(waitStatuses(values.status));
+    const signal = waitSignal(values.signal);
+    // Judged by flag presence, not by the resolved default: `--status`
+    // defaults to `done,blocked`, so a check on the value would make every
+    // sidecar wait a usage error. Child statuses mean nothing to a sidecar.
+    if (signal === "sidecar" && values.status !== undefined) {
+      throw new Error("--status is a status-wait flag; drop it for --signal sidecar");
+    }
     const timeoutSeconds = waitTimeoutSeconds(values.timeout);
-
-    const statusPath = statusFilePath(sessionPath);
     const deadline = Date.now() + timeoutSeconds * 1000;
+
+    if (signal === "sidecar") {
+      const sidecarPath = exitSidecarPath(sessionPath);
+      const sidecarAbsPath = resolve(sidecarPath);
+      for (;;) {
+        if (existsSync(sidecarPath)) {
+          const result = interpretExitSidecar(readExitSidecar(sessionPath));
+          write(JSON.stringify({ ...result, sidecar: sidecarAbsPath }) + "\n");
+          return 0;
+        }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await sleep(Math.min(WAIT_POLL_MS, remaining));
+      }
+      write(`${JSON.stringify({ sidecar: null })}\n`);
+      writeErr(
+        `timeout after ${timeoutSeconds}s: no exit sidecar was seen (a sidecar, if any, would have been printed; wait never removes it)\n`,
+      );
+      return 2;
+    }
+
+    const wanted = new Set(waitStatuses(values.status));
+    const statusPath = statusFilePath(sessionPath);
     let last: string | null = null;
     for (;;) {
       try {
