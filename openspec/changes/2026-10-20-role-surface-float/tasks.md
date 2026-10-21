@@ -21,15 +21,15 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
 
 ## 3. Float placement and cascade in the tmux backend
 
-- [ ] 3.1 In `pi-extension/pmux/tmux.ts` `createSurface`, do these four things (design decision 4):
+- [x] 3.1 In `pi-extension/pmux/tmux.ts` `createSurface`, do these four things (design decision 4):
   - extend the dwindle `list-panes` format with `pane_floating_flag`, `pane_left`, `pane_top`, `window_width`, `window_height` and `pane-border-lines`;
   - skip floating rows as dwindle candidates;
   - add the `float` branch: anchor, newest pmux float, border width, cascade step, wrap to the anchor, then `new-pane -d -t <caller> -x -y -X -Y -P -F '#{pane_id}'`;
   - set `@pmux_parent` and the pane name, as for a tiled pane.
 
   Update the doc comment. Verify with `pnpm run typecheck`.
-- [ ] 3.2 Update `test/tmux-fakes.ts` so that the placement `list-panes` fake can return rows with the new fields. The default is one tiled caller row in a 200x50 window. Verify that `node --test test/cli.test.ts test/supervisor.test.ts` still passes.
-- [ ] 3.3 In `test/tmux.test.ts`, add one test for each tmux-backend delta scenario:
+- [x] 3.2 Update `test/tmux-fakes.ts` so that the placement `list-panes` fake can return rows with the new fields. The default is one tiled caller row in a 200x50 window. Verify that `node --test test/cli.test.ts test/supervisor.test.ts` still passes.
+- [x] 3.3 In `test/tmux.test.ts`, add one test for each tmux-backend delta scenario:
   - a floating child is not a split target;
   - the first float on 200x50 gives `-x 100 -y 25 -X 98 -Y 1` and `-d`;
   - the second float gives `-X 96 -Y 2`;
