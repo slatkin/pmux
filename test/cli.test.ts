@@ -873,10 +873,10 @@ interface StartCase {
   /** `@pane_session_id` the caller pane answers: a string, `null` for a
    * failed read; absent answers empty. */
   paneSessionId?: string | null;
-  /** The `PI_CODING_AGENT_DIR` value for the launch: the role file's config
-   * dir (holding `agents/`). Defaults to the case cwd's `.pi`, where
-   * `writeRole` writes; the search also reads the launcher process's own
-   * env, so the pin keeps the machine's real config out of the run. */
+  /** The `PI_CODING_AGENT_DIR` value for the launch. Defaults to an empty
+   * per-case dir: the pin exists to keep the machine's real config out of
+   * the role search, and the search itself finds case roles through the
+   * target anchor (`--cwd`'s own `.pi/agents`), not the pin. */
   agentDir?: string;
 }
 
@@ -920,10 +920,11 @@ async function runStartWith(entry: CliEntry, options: StartCase): Promise<Starte
   if (options.report !== undefined) argv.push("--report", options.report);
 
   // The CLI's role search reads the process env, not the injected env, so
-  // the config dir is pinned around the call: without the pin a test role
-  // would resolve against the machine's own ~/.pi/agent.
+  // the config dir is pinned around the call: an empty dir, so a test role
+  // resolves through the target anchor alone (a pin at the target's .pi
+  // would mask a lost anchor — that mask hid one once).
   const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = options.agentDir ?? join(options.cwd, ".pi");
+  process.env.PI_CODING_AGENT_DIR = options.agentDir ?? join(dir, "agent-config");
   let result: CliResult;
   try {
     result = await capture(entry, argv, env, options.configPath);
@@ -1331,6 +1332,26 @@ describe("cli.ts start", () => {
       const record = readLaunchRecord(getLaunchRecordFile(res.json.session));
       assert.ok(record);
       assert.equal(record.cwd, resolve("test"));
+    } finally {
+      process.chdir(savedCwd);
+    }
+  });
+
+  it("resolves a role the target cwd's own .pi/agents holds", async () => {
+    // The external path's anchor is the target directory (AGENTS.md's role
+    // search): a role that exists only in the child cwd's .pi/agents must
+    // resolve, from whatever cwd the launcher runs in.
+    const savedCwd = process.cwd();
+    process.chdir(mkdtempSync(join(workdir, "elsewhere-")));
+    try {
+      const cwd = mkdtempSync(join(workdir, "targetrole-cwd-"));
+      writeRole(cwd, "local", "model: m\nthinking: low", "Local body.");
+      const res = await runStart({ cwd, role: "local", child: "w9" });
+      assert.equal(res.spec.env.PI_PMUX_AGENT, "local");
+      assert.equal(argValue(res.spec.args, "--model"), "m:low");
+      const record = readLaunchRecord(getLaunchRecordFile(res.json.session));
+      assert.ok(record);
+      assert.equal(record.model, "m");
     } finally {
       process.chdir(savedCwd);
     }
