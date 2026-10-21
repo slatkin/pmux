@@ -19,7 +19,7 @@
 
 ## 4. Documentation
 
-- [ ] 4.1 Update `skills/pmux/SKILL.md` (scratch contents, the resume refusal) and the "Two ways to launch a child" section of `AGENTS.md` to name `launch-build.ts`. Verify by reading the changed text against the spec delta.
+- [x] 4.1 Update `skills/pmux/SKILL.md` (scratch contents, the resume refusal) and the "Two ways to launch a child" section of `AGENTS.md` to name `launch-build.ts`. Verify by reading the changed text against the spec delta.
 
 ## 5. Integration
 
