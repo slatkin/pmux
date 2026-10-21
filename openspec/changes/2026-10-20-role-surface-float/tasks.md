@@ -47,18 +47,18 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
 
 ## 4. pi parent: precedence, record and resume
 
-- [ ] 4.1 In `pi-extension/pmux/index.ts`, stop resolving the placement:
+- [x] 4.1 In `pi-extension/pmux/index.ts`, stop resolving the placement:
   - pass the parsed per-call `surface` (possibly `undefined`) and `getSurfaceDefault()` to `spawn` and `resume`;
   - add `float` to the `surface` union of both tools, with the new description;
   - make `/pmux-surface` parse with `parseSurfaceDefault`, so that `float` is reported as invalid with the accepted values `pane, tab`.
 
   Update the `surfaceDefault` comment. Verify with `pnpm run typecheck`.
-- [ ] 4.2 In `pi-extension/pmux/supervisor.ts`:
+- [x] 4.2 In `pi-extension/pmux/supervisor.ts`:
   - `spawn` resolves with `resolvePlacement(call, agentDefs?.surface, default)`, and writes `agentDefs?.surface` (never the per-call value) into the launch record;
   - `resume` resolves with `resolvePlacement(call, storedRecord?.surface, default)`.
 
   In `launch-record.ts`, add the optional `surface`. It is parsed with `parseSurfacePlacement`, and an unknown value is dropped. Verify with `pnpm run typecheck`.
-- [ ] 4.3 Add tests for the `luvus-surface` and `subagent-supervision` delta scenarios:
+- [x] 4.3 Add tests for the `luvus-surface` and `subagent-supervision` delta scenarios:
   - a floating role spawns a float;
   - the per-call `pane` beats the role's float;
   - the role's `pane` beats a `tab` default;
