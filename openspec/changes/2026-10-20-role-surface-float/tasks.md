@@ -17,7 +17,7 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
 
 - [x] 2.1 In `pi-extension/pmux/agent-defs.ts`, add `surface?: SurfacePlacement` to `AgentDefaults`, and read `surface:` with `parseSurfacePlacement` (an invalid value gives `undefined`). Verify with `pnpm run typecheck`.
 - [x] 2.2 Add `parseAgentDefinition` tests: `surface: float`, `surface: tab`, `surface: window` (undefined), no key (undefined), and a CRLF file with `surface: float`. Verify with `node --test test/test.ts`.
-- [ ] 2.3 In `docs/guide.md`, add `surface` to the frontmatter table and a short `### surface` section. The section says: `pane`, `tab` or `float`; it is used when the call gives no `surface`; it is kept on resume; `float` is never a default. Check by hand that the text matches the `luvus-surface` delta.
+- [x] 2.3 In `docs/guide.md`, add `surface` to the frontmatter table and a short `### surface` section. The section says: `pane`, `tab` or `float`; it is used when the call gives no `surface`; it is kept on resume; `float` is never a default. Check by hand that the text matches the `luvus-surface` delta.
 
 ## 3. Float placement and cascade in the tmux backend
 
@@ -74,14 +74,14 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
 
 ## 5. External orchestrator CLI
 
-- [ ] 5.1 In `pi-extension/pmux/cli.ts`, make these changes:
+- [x] 5.1 In `pi-extension/pmux/cli.ts`, make these changes:
   - parse `--surface` with `parseSurfacePlacement`, and keep it as `undefined` when the flag is absent;
   - in `start`, resolve with `resolvePlacement(flag, definition.surface, loadSurfaceConfig())` after `loadAgentDefaults`, and write `definition.surface` into the launch spec;
   - in `resume`, resolve with `resolvePlacement(flag, spec.surface, loadSurfaceConfig())`;
   - change the usage to `[--surface pane|tab|float]` and the error text to `(expected pane, tab or float)`.
 
   In `launch.ts`, add the optional `surface`. It is parsed with `parseSurfacePlacement`, and an unknown value is dropped. Verify with `pnpm run typecheck`. Also verify that an invalid `--surface` still fails before any tmux call.
-- [ ] 5.2 In `test/cli.test.ts`, add tests for the `external-orchestration` delta scenarios:
+- [x] 5.2 In `test/cli.test.ts`, add tests for the `external-orchestration` delta scenarios:
   - a floating role with no flag gives `new-pane`;
   - `--surface pane` beats the role;
   - `--surface float` with no role surface gives a float, and the spec holds no surface;
@@ -92,13 +92,13 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
   - a CRLF role with `surface: float` behaves like the LF role.
 
   Verify with `node --test test/cli.test.ts`.
-- [ ] 5.3 In `skills/pmux/SKILL.md`, describe `--surface pane|tab|float` for `start` and `resume`. The text must say that the role's `surface:` applies when the flag is absent, and that a resume keeps the role's surface. Check by hand with `grep -n "surface" skills/pmux/SKILL.md`.
+- [x] 5.3 In `skills/pmux/SKILL.md`, describe `--surface pane|tab|float` for `start` and `resume`. The text must say that the role's `surface:` applies when the flag is absent, and that a resume keeps the role's surface. Check by hand with `grep -n "surface" skills/pmux/SKILL.md`.
 
 ## 6. Integration
 
-- [ ] 6.1 In `README.md`, mention the float surface and the role `surface:` key next to the placement text. Check by hand that it matches the specs.
-- [ ] 6.2 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`, in that order. All four must pass. The `no-explicit-any` warnings are expected.
-- [ ] 6.3 Run `openspec validate 2026-10-20-role-surface-float --strict` and verify that it passes.
+- [x] 6.1 In `README.md`, mention the float surface and the role `surface:` key next to the placement text. Check by hand that it matches the specs.
+- [x] 6.2 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`, in that order. All four must pass. The `no-explicit-any` warnings are expected.
+- [x] 6.3 Run `openspec validate 2026-10-20-role-surface-float --strict` and verify that it passes.
 
 ## Workflow follow-up
 
