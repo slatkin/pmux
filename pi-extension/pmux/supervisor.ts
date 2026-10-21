@@ -796,6 +796,10 @@ export function requestSubagentInterrupt(
 export interface BackendLaunchRequest extends PiLaunchRequest {
   /** Spawn-only: how the task reaches the child. */
   launchBehavior?: LaunchBehavior;
+  /** The pane the child starts in. Kept at the request level beside the
+   * parent contact's own `surface` because `startRun` and both backends read
+   * it: the contact is the builder's input, this is the run's (design D2). */
+  surface: string;
   /** Values that change for every run; the record does not keep them (design D3). */
   run: {
     id: string;
@@ -1443,9 +1447,13 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
         launchBehavior,
         localAgentDir,
         artifactDir,
+        parentContact: {
+          kind: "pi",
+          siblingNames: Array.from(runningSubagents.values(), (agent) => agent.name),
+          parentRosterFile: rosterContext?.file,
+          surface,
+        },
         surface,
-        siblingNames: Array.from(runningSubagents.values(), (agent) => agent.name),
-        parentRosterFile: rosterContext?.file,
         run: {
           id,
           startTime,
@@ -1767,9 +1775,13 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
           task: params.message ?? "resumed session",
           localAgentDir,
           artifactDir,
+          parentContact: {
+            kind: "pi",
+            siblingNames: Array.from(runningSubagents.values(), (agent) => agent.name),
+            parentRosterFile: rosterContext?.file,
+            surface,
+          },
           surface,
-          siblingNames: Array.from(runningSubagents.values(), (agent) => agent.name),
-          parentRosterFile: rosterContext?.file,
           resume: { message: params.message },
           run: {
             id,

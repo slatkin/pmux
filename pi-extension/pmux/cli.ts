@@ -68,12 +68,13 @@ import {
 } from "./status-file.ts";
 import { slugifyName } from "./slug.ts";
 import { encodeChildEnv, resolveDenyTools } from "./child-env.ts";
+import { SUBAGENTS_CLI_PATH, reportFooter } from "./launch-build.ts";
 
 /** Absolute path to `pi-extension/pmux`. */
 const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 
 /** Pane-side entry point; the pane runs this file with `node`. */
-const CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
+const CLI_PATH = SUBAGENTS_CLI_PATH;
 
 /** Close-on-done grace used when `--close-grace-ms` is omitted. */
 const DEFAULT_CLOSE_GRACE_MS = 5000;
@@ -207,56 +208,6 @@ function scratchBase(name: string, id: string): string {
   return `${slug}-${id}`;
 }
 
-/**
- * The parent-contact footer appended to the brief. There is no send channel
- * back to the parent, so the report is the child's last assistant message.
- */
-function parentFooter(parent: string, pane: string): string {
-  return `Your parent is a session named ${parent} (pane ${pane}).
-Plain text printed in your own pane is never seen. Your last assistant message is the report the parent reads.
-
-So do ALL of the following before you stop:
-1. Finish the task.
-2. Write your final report as your last assistant message: the verdict, the commit SHA, the files changed, the verification, the deviations and the open questions. Put the verdict first.
-3. Then call the pmux_done tool to close your session.
-
-If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.
-If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.`;
-}
-
-/**
- * The send-mode parent-contact footer: the report is typed into the parent's
- * pane with the `send` command. The auto-exit claim is conditional because a
- * role without `auto-exit: true` keeps running and gets the completion nudge.
- */
-function sendFooter(parent: string, cliPath: string): string {
-  return `Your parent is the tmux pane ${parent}.
-Plain text printed in your own pane is never seen. The only way to reach it is bash: node ${cliPath} send --to ${parent} --text '<text>'.
-
-If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of the following before you stop:
-1. Finish the task.
-2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
-   This is what wakes the orchestrator with your report — without it, it only learns that you exited.
-   The report text may be long, may contain quotes and may span several lines — reading it from a file into the argument is fine; only the target pane matters. A line break arrives as the two characters \\n, so the orchestrator still reads the whole report as one message.
-3. Then call the pmux_done tool to close your session.
-
-If you are blocked, send your question with the send command and stop. The session closes; the parent resumes it with the answer. Do not try to reach the parent any other way.
-If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report with the send command first, then call pmux_done.`;
-}
-
-/**
- * The parent-contact footer of a report mode. `last` mode points the child at
- * its last assistant message; `send` mode teaches it the `send` command. An
- * absent mode reads as `last`.
- */
-function reportFooter(
-  parent: string,
-  report: ReportMode | undefined,
-  env: NodeJS.ProcessEnv,
-): string {
-  return report === "send" ? sendFooter(parent, CLI_PATH) : parentFooter(parent, callerPaneId(env));
-}
-
 /** Parse `--close-grace-ms`, defaulting to `DEFAULT_CLOSE_GRACE_MS`. */
 function closeGraceMs(value: string | undefined): number {
   if (value === undefined) return DEFAULT_CLOSE_GRACE_MS;
@@ -335,7 +286,7 @@ function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): num
   }
   const briefText = readFileSync(brief, "utf8");
   writeFileSync(rolePromptPath, definition.body ? `${definition.body}\n` : "");
-  writeFileSync(promptPath, `${briefText}\n${reportFooter(parent, report, env)}\n`);
+  writeFileSync(promptPath, `${briefText}\n${reportFooter(parent, report, callerPaneId(env))}\n`);
   // In send mode the report is a bash command, so the child must keep the
   // bash tool on both sides: the allowlist gains it and the denied set loses
   // it (`PI_DENY_TOOLS` wins over `--tools`).
@@ -414,7 +365,7 @@ function resumeCommand(values: CliValues, deps: CliDeps): number {
   let sentPrompt = promptPath;
   if (spec.parent !== undefined) {
     sentPrompt = `${promptPath}.resume.md`;
-    const footer = reportFooter(spec.parent, spec.report, env);
+    const footer = reportFooter(spec.parent, spec.report, callerPaneId(env));
     writeFileSync(sentPrompt, `${readFileSync(promptPath, "utf8")}\n${footer}\n`);
   }
   const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);
