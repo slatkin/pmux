@@ -157,7 +157,6 @@ export interface SupervisorContext {
 /** Parameters of the `pmux_resume` tool. */
 export interface ResumeParams {
   sessionPath: string;
-  surface?: string;
   message?: string;
   autoExit?: boolean;
 }
