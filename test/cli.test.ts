@@ -1791,12 +1791,24 @@ describe("cli.ts send", () => {
     ]);
   });
 
-  // A multiline report must arrive as one paste: every tmux call is one argv
-  // array, so the newlines ride inside the single literal text.
-  it("keeps multiline text in one paste", async () => {
+  // A multiline report must arrive as one input: the line breaks are
+  // encoded, so the typed text holds no newline and the parent reads the
+  // whole report as one message.
+  it("encodes multiline text into one line", async () => {
     const res = await runCli(["send", "--to", "%3", "--text", "line one\nline two"], tmuxEnv());
     assert.equal(res.code, 0);
-    assert.deepEqual(paneCalls, ["send-keys -t %3 -l line one\nline two", "send-keys -t %3 Enter"]);
+    assert.deepEqual(paneCalls, [
+      "send-keys -t %3 -l line one\\nline two",
+      "send-keys -t %3 Enter",
+    ]);
+  });
+
+  // A tab or another control byte would end a field or drive the target's
+  // terminal, so it is encoded too.
+  it("encodes a tab and a control character", async () => {
+    const res = await runCli(["send", "--to", "%3", "--text", "a\tb\u0007"], tmuxEnv());
+    assert.equal(res.code, 0);
+    assert.deepEqual(paneCalls, ["send-keys -t %3 -l a\\tb\\x07", "send-keys -t %3 Enter"]);
   });
 
   it("requires --to and --text", async () => {

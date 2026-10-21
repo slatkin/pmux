@@ -44,6 +44,7 @@ The pane runs `cli.ts run`. It starts the child from the spec with no shell, rep
 
 - A child writes `<session file>.exit` when it finishes: `done`, `ping`, `handoff` or `error`. The parent polls that file. The terminal sentinel is only a fallback. Decoding lives in `exit-sidecar.ts`.
 - A send-mode child appends a report receipt to `<session file>.sent` (`report-receipt.ts`) for every delivered report. The run wrapper counts the receipts addressed to the parent to decide whether it must wake the parent.
+- A pane input is one line: the text is typed, then one Enter keypress submits it. The report channel encodes the text before typing it (`pane-input.ts`), so a line break arrives as `\n` and a report cannot be split across inputs. `pmux_message` types its text as it is.
 - The parent writes the child's env with `encodeChildEnv` (`child-env.ts`), and the child reads it with `decodeChildEnv`. The keys are `PI_PMUX_*` and `PI_DENY_TOOLS`.
 - The child loads `pmux-done.ts` (`pi -e`). That file provides `pmux_done`, `caller_ping`, the completion nudge, auto-exit and the sidecar writes. The role's `tools` list does not remove the control tools, and `pmux_done` is never denied.
 

@@ -51,6 +51,7 @@ import {
   removeExitSidecar,
 } from "./exit-sidecar.ts";
 import { resolvePlacement } from "./placement.ts";
+import { encodePaneText } from "./pane-input.ts";
 import { appendReportReceipt } from "./report-receipt.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
@@ -236,7 +237,7 @@ If this session auto-exits, it closes the first time you stop generating: the mo
 1. Finish the task.
 2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
    This is what wakes the orchestrator with your report — without it, it only learns that you exited.
-   The report text may be long and may contain quotes — reading it from a file into the argument is fine; only the target pane matters. The text is typed into the parent's pane and Enter is pressed after it, so a newline inside it submits there and the rest arrives as separate input: keep the report on one line (fold it yourself, or read a file in with \`$(cat file)\` or \`tr '\\n' ' ' < file\`).
+   The report text may be long, may contain quotes and may span several lines — reading it from a file into the argument is fine; only the target pane matters. A line break arrives as the two characters \\n, so the orchestrator still reads the whole report as one message.
 3. Then call the pmux_done tool to close your session.
 
 If you are blocked, send your question with the send command and stop. The session closes; the parent resumes it with the answer. Do not try to reach the parent any other way.
@@ -519,13 +520,16 @@ function writeReportReceipt(env: NodeJS.ProcessEnv, to: string, text: string): v
   });
 }
 
-/** `send`: deliver one report line into a pane (paste, then Enter). */
+/** `send`: deliver one report into a pane as one input (type it, then Enter). */
 function sendCommand(values: CliValues, deps: CliDeps): number {
   const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
   try {
     const to = required("--to", values.to);
     const text = required("--text", values.text);
-    agentPrompt(to, text);
+    // The report is encoded so it reaches the parent as one input: a raw
+    // newline would end the line in the parent's pane, and the rest of the
+    // report would arrive as separate input.
+    agentPrompt(to, encodePaneText(text));
     writeReportReceipt(deps.env ?? process.env, to, text);
     return 0;
   } catch (error) {

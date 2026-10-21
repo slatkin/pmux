@@ -155,9 +155,10 @@ your pane.
    and the child's pane id, which matters only while the child is alive,
    because a `done` child closes its own pane after the close grace.
 3. End the turn. The report arrives as a new message in your prompt — that
-   is the child running the `send` command from its footer. Do NOT sit in a
-   polling loop instead of ending your turn; the wake-up is the message,
-   not the file.
+   is the child running the `send` command from its footer. A line break in
+   the report arrives as the two characters `\n`, so the whole report is one
+   message. Do NOT sit in a polling loop instead of ending your turn; the
+   wake-up is the message, not the file.
 4. When you are awake again (the report arrived, or you want the child's
    final state), wait for the sidecar and read it:
    ```bash
