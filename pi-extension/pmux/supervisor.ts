@@ -27,7 +27,12 @@ import {
 } from "./tmux.ts";
 import { exitSidecarPath, removeExitSidecar, type PollResult } from "./exit-sidecar.ts";
 import { removeChildStatus } from "./status-file.ts";
-import { DEFAULT_SURFACE_PLACEMENT, resolvePlacement, type SurfacePlacement } from "./placement.ts";
+import {
+  DEFAULT_SURFACE_PLACEMENT,
+  resolvePlacement,
+  type SurfaceDefault,
+  type SurfacePlacement,
+} from "./placement.ts";
 import {
   buildSubagentToolAllowlist,
   getAgentConfigDir,
@@ -165,7 +170,7 @@ export interface SurfaceOptions {
   /** The call's parsed `surface` parameter; absent means unset. */
   callSurface?: SurfacePlacement;
   /** Configured default, used when neither the call nor the role names one. */
-  fallback?: SurfacePlacement;
+  fallback?: SurfaceDefault;
 }
 
 /** Session context the supervisor needs from the tool call that starts a run. */

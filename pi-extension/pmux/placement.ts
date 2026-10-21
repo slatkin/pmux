@@ -45,7 +45,7 @@ export function parseSurfaceDefault(value: unknown): SurfaceDefault | undefined 
 export function resolvePlacement(
   call: SurfacePlacement | undefined,
   role: SurfacePlacement | undefined,
-  fallback: SurfacePlacement,
+  fallback: SurfaceDefault,
 ): SurfacePlacement {
   return call ?? role ?? fallback;
 }
