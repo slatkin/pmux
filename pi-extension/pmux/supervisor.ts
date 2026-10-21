@@ -27,7 +27,7 @@ import {
 } from "./tmux.ts";
 import { exitSidecarPath, removeExitSidecar, type PollResult } from "./exit-sidecar.ts";
 import { removeChildStatus } from "./status-file.ts";
-import { resolvePlacement, type SurfaceDefault, type SurfacePlacement } from "./placement.ts";
+import { resolvePlacement, type SurfaceDefault } from "./placement.ts";
 import {
   buildSubagentToolAllowlist,
   getAgentConfigDir,
@@ -89,19 +89,6 @@ const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
 /** Pane-side entry point every pi-parent launch spec runs through. */
 const SUBAGENTS_CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
 
-/**
- * The `surface` tool parameter: where a subagent's pane goes. Shared by the
- * spawn and resume tools so both offer the same values and wording. When the
- * parameter is absent, the role's `surface:` applies, then the configured
- * default; the description never asks the agent to choose a split direction.
- */
-export const SurfaceParam = Type.Optional(
-  Type.Union([Type.Literal("pane"), Type.Literal("tab"), Type.Literal("float")], {
-    description:
-      '"pane": place the pane automatically in the caller\'s window. "tab": open it in its own window. "float": open a floating pane at the top right of the caller\'s window. When absent, the role\'s surface applies, then the configured default.',
-  }),
-);
-
 export const SubagentParams = Type.Object({
   name: Type.String({ description: "Display name." }),
   task: Type.String({ description: "Task prompt for the subagent." }),
@@ -138,7 +125,6 @@ export const SubagentParams = Type.Object({
         "true: the user drives the subagent, and stall events do not wake you. Default: the agent `interactive` value, else the inverse of `auto-exit`.",
     }),
   ),
-  surface: SurfaceParam,
 });
 
 /** One steer message delivered to the parent session through `deps.send`. */
@@ -160,9 +146,7 @@ export type SendFn = (message: SteerMessage, options: SendOptions) => void;
 
 /** Options of a launch call that name the surface. */
 export interface SurfaceOptions {
-  /** The call's parsed `surface` parameter; absent means unset. */
-  callSurface?: SurfacePlacement;
-  /** Configured default, used when neither the call nor the role names one. */
+  /** Configured default, used when the role names no surface. */
   fallback?: SurfaceDefault;
 }
 
@@ -179,7 +163,6 @@ export interface SupervisorContext {
 /** Parameters of the `pmux_resume` tool. */
 export interface ResumeParams {
   sessionPath: string;
-  surface?: string;
   message?: string;
   autoExit?: boolean;
 }
@@ -1637,8 +1620,9 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     const backend = backendFor(agentDefs);
     const rolePrompt = backend.resolveRolePrompt(params, agentDefs);
 
-    // Resolve the placement after the role is loaded: its `surface:` is one input.
-    const placement = resolvePlacement(options?.callSurface, agentDefs?.surface, options?.fallback);
+    // Resolve the placement after the role is loaded: the role's `surface:`
+    // wins over the configured default; there is no per-call value.
+    const placement = resolvePlacement(agentDefs?.surface, options?.fallback);
 
     // Resolve the agent defaults once and keep them in the launch record, so a
     // later resume starts the same role without reading the agent file again.
@@ -1653,8 +1637,8 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       ...(effectiveTools ? { tools: effectiveTools } : {}),
       ...(rolePrompt ? { rolePrompt } : {}),
       ...(agentDefs?.systemPromptMode ? { systemPromptMode: agentDefs.systemPromptMode } : {}),
-      // The record holds the role's surface only, never the per-call value, so
-      // a one-off ad-hoc float does not stick to the child.
+      // The record holds the role's surface only, so a later resume keeps
+      // the same placement.
       ...(agentDefs?.surface ? { surface: agentDefs.surface } : {}),
       denyTools: [...denySet],
       autoExit: agentDefs?.autoExit ?? false,
@@ -2000,11 +1984,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       );
       const paneLine = paneCommandLine(SUBAGENTS_CLI_PATH, launchScriptFile);
 
-      const placement = resolvePlacement(
-        options?.callSurface,
-        storedRecord?.surface,
-        options?.fallback,
-      );
+      const placement = resolvePlacement(storedRecord?.surface, options?.fallback);
       const surface = deps.pmux.createSurface(name, placement);
       await new Promise<void>((resolve) => setTimeout(resolve, getShellReadyDelayMs()));
 

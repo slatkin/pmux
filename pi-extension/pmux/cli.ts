@@ -36,7 +36,7 @@ import {
 } from "./launch.ts";
 import { createSurface, runInPane, callerPaneId } from "./tmux.ts";
 import { removeExitSidecar } from "./exit-sidecar.ts";
-import { parseSurfacePlacement, resolvePlacement, type SurfacePlacement } from "./placement.ts";
+import { resolvePlacement } from "./placement.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
@@ -73,8 +73,8 @@ const MIN_NODE: readonly [number, number] = [22, 18];
 
 const USAGE = [
   "Usage:",
-  "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--surface pane|tab|float]",
-  "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>] [--surface pane|tab|float]",
+  "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>]",
+  "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>]",
   "  node cli.ts run <spec> [<prompt>]",
   "  node cli.ts last-message --session <file>",
   "  node cli.ts wait --session <file> [--status <list>] [--timeout <seconds>]",
@@ -89,7 +89,6 @@ const CLI_OPTIONS = {
   parent: { type: "string" },
   scratch: { type: "string" },
   "close-grace-ms": { type: "string" },
-  surface: { type: "string" },
   launch: { type: "string" },
   prompt: { type: "string" },
   session: { type: "string" },
@@ -108,7 +107,6 @@ interface CliValues {
   parent?: string;
   scratch?: string;
   "close-grace-ms"?: string;
-  surface?: string;
   launch?: string;
   prompt?: string;
   session?: string;
@@ -212,11 +210,7 @@ function closeGraceMs(value: string | undefined): number {
 }
 
 /** `start`: resolve a role, write the launch spec and run it in a new pane. */
-function startCommand(
-  values: CliValues,
-  deps: CliDeps,
-  surfaceFlag: SurfacePlacement | undefined,
-): number {
+function startCommand(values: CliValues, deps: CliDeps): number {
   const env = deps.env ?? process.env;
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
 
@@ -240,12 +234,9 @@ function startCommand(
     const rolePath = rolePaths.find(isFile) ?? rolePaths[0];
     throw new Error(`role '${role}' has an empty model (${rolePath})`);
   }
-  // The role is known only here, so the placement resolves here.
-  const placement = resolvePlacement(
-    surfaceFlag,
-    definition.surface,
-    loadSurfaceConfig(deps.configPath),
-  );
+  // The role is known only here, so the placement resolves here: the role's
+  // `surface:` wins over the configured default.
+  const placement = resolvePlacement(definition.surface, loadSurfaceConfig(deps.configPath));
 
   const graceMs = closeGraceMs(values["close-grace-ms"]);
   const id = randomBytes(4).toString("hex");
@@ -323,11 +314,7 @@ function startCommand(
 }
 
 /** `resume`: run an existing launch spec in a new pane with a new prompt. */
-function resumeCommand(
-  values: CliValues,
-  deps: CliDeps,
-  surfaceFlag: SurfacePlacement | undefined,
-): number {
+function resumeCommand(values: CliValues, deps: CliDeps): number {
   const env = deps.env ?? process.env;
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
 
@@ -339,7 +326,7 @@ function resumeCommand(
 
   const spec = readLaunchSpec(launchPath);
   // The placement resolves here too, from the role surface stored in the spec.
-  const placement = resolvePlacement(surfaceFlag, spec.surface, loadSurfaceConfig(deps.configPath));
+  const placement = resolvePlacement(spec.surface, loadSurfaceConfig(deps.configPath));
   // A resume reuses the spec unchanged, so its session and close grace carry
   // over; only the prompt and the pane are new.
   // `start` appends the parent-contact footer; a resume must too, or the child
@@ -544,18 +531,8 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     writeErr(`${USAGE}\n`);
     return 2;
   }
-  if (command === "start" || command === "resume") {
-    const requested = values.surface;
-    const parsed = requested === undefined ? undefined : parseSurfacePlacement(requested);
-    if (requested !== undefined && parsed === undefined) {
-      writeErr(`invalid --surface value: ${requested} (expected pane, tab or float)\n`);
-      return 2;
-    }
-    // The role is only known inside the command, so each command resolves the
-    // flag against the role surface and the configured default itself.
-    if (command === "start") return startCommand(values as CliValues, deps, parsed);
-    return resumeCommand(values as CliValues, deps, parsed);
-  }
+  if (command === "start") return startCommand(values as CliValues, deps);
+  if (command === "resume") return resumeCommand(values as CliValues, deps);
   if (command === "run") return runCommand(positionals.slice(1), deps);
   if (command === "last-message") return lastMessageCommand(values as CliValues, deps);
   if (command === "wait") return await waitCommand(values as CliValues, deps);

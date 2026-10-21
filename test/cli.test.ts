@@ -583,6 +583,27 @@ async function runCli(
   return capture(main, argv, env, configPath);
 }
 
+/**
+ * Run a node process and report how it exited. A non-zero exit is the case
+ * under test, so the status and stderr come back instead of throwing.
+ */
+function runNodeProcess(
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): { status: number; stderr: string } {
+  try {
+    execFileSync(process.execPath, args, {
+      ...(env === undefined ? {} : { env }),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { status: 0, stderr: "" };
+  } catch (error) {
+    const failure = error as { status?: number; stderr?: string };
+    return { status: failure.status ?? 1, stderr: String(failure.stderr ?? "") };
+  }
+}
+
 /** Write a role definition under the child cwd's `.pi/agents/`. */
 function writeRole(cwd: string, name: string, frontmatter: string, body: string): void {
   const dir = join(cwd, ".pi", "agents");
@@ -603,8 +624,6 @@ interface StartCase {
   env?: NodeJS.ProcessEnv;
   /** Config file holding the `surface` default; defaults to the sandbox config. */
   configPath?: string;
-  /** Explicit `--surface` flag. */
-  surface?: string;
 }
 
 interface Started extends CliResult {
@@ -639,7 +658,6 @@ async function runStartWith(entry: CliEntry, options: StartCase): Promise<Starte
   ];
   if (options.closeGraceMs !== undefined)
     argv.push("--close-grace-ms", String(options.closeGraceMs));
-  if (options.surface !== undefined) argv.push("--surface", options.surface);
 
   const result = await capture(entry, argv, env, options.configPath);
   const json = JSON.parse(result.stdout) as Started["json"];
@@ -906,10 +924,10 @@ describe("cli.ts start", () => {
     assert.equal(record.args[record.args.length - 1], `@${res.promptPath}`);
   });
 
-  it("--surface tab moves the new pane into its own tab and restores the caller's focus", async () => {
+  it("opens a tab role in its own window and restores the caller's focus", async () => {
     const cwd = mkdtempSync(join(workdir, "tab-cwd-"));
-    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
-    const res = await runStart({ cwd, role: "doer", child: "fix-7", surface: "tab" });
+    writeRole(cwd, "tabber", "model: m\nthinking: low\nsurface: tab", "Body.");
+    const res = await runStart({ cwd, role: "tabber", child: "fix-7" });
 
     assert.equal(res.code, 0);
     assert.equal(res.json.pane, "%24");
@@ -926,8 +944,8 @@ describe("cli.ts start", () => {
 
   it("closes the tab pane on done, not the caller's pane", async () => {
     const cwd = mkdtempSync(join(workdir, "tabclose-cwd-"));
-    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
-    const started = await runStart({ cwd, role: "doer", child: "fix-7", surface: "tab" });
+    writeRole(cwd, "tabber", "model: m\nthinking: low\nsurface: tab", "Body.");
+    const started = await runStart({ cwd, role: "tabber", child: "fix-7" });
 
     // Run the launch spec the way the tab's run wrapper does. `TMUX_PANE`
     // is the tab pane (%24), so close-on-done closes the wrapper's own pane —
@@ -953,7 +971,7 @@ describe("cli.ts start", () => {
     assert.deepEqual(closed, ["%24"]);
   });
 
-  it("defaults --surface to the config.json value", async () => {
+  it("uses the config.json default when the role names no surface", async () => {
     const cwd = mkdtempSync(join(workdir, "cfgsurface-cwd-"));
     writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
     const configPath = join(mkdtempSync(join(workdir, "surface-config-")), "config.json");
@@ -971,49 +989,38 @@ describe("cli.ts start", () => {
     ]);
   });
 
-  it("accepts the legacy --surface down and splits by the rule", async () => {
-    const cwd = mkdtempSync(join(workdir, "legacy-cwd-"));
-    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
-    const res = await runStart({ cwd, role: "doer", surface: "down" });
-    assert.equal(res.code, 0);
-    assert.deepEqual(paneCalls, [
-      "split-window -d -h -t %21 -P -F #{pane_id}",
-      "select-pane -t %24 -T scout-1",
-      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
-      "send-keys -t %24 Enter",
-    ]);
-  });
-
-  it("rejects --surface window with exit code 2, naming pane, tab and float, with no pane", async () => {
+  it("rejects --surface as an unknown argument with a non-zero exit and no pane", async () => {
     const cwd = mkdtempSync(join(workdir, "badsurface-cwd-"));
     writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
     const dir = mkdtempSync(join(workdir, "badsurface-"));
     const brief = join(dir, "brief.md");
     writeFileSync(brief, "Do it.\n");
+    const argv = [
+      "start",
+      "--name",
+      "fix-7",
+      "--role",
+      "doer",
+      "--cwd",
+      cwd,
+      "--brief",
+      brief,
+      "--parent",
+      "orch",
+      "--scratch",
+      join(dir, "scratch"),
+      "--surface",
+      "pane",
+    ];
 
-    const res = await runCli(
-      [
-        "start",
-        "--name",
-        "fix-7",
-        "--role",
-        "doer",
-        "--cwd",
-        cwd,
-        "--brief",
-        brief,
-        "--parent",
-        "orch",
-        "--scratch",
-        join(dir, "scratch"),
-        "--surface",
-        "window",
-      ],
-      tmuxEnv(),
-    );
-    assert.equal(res.code, 2);
-    assert.match(res.stderr, /invalid --surface value: window \(expected pane, tab or float\)/);
+    // In-process: main rejects while parsing, before any role load or pane.
+    await assert.rejects(main(argv, { env: tmuxEnv() }), /Unknown option '--surface'/);
     assert.deepEqual(paneCalls, []);
+
+    // The direct entry turns the same parse failure into exit code 1.
+    const { status, stderr } = runNodeProcess([CLI, ...argv]);
+    assert.equal(status, 1);
+    assert.match(stderr, /Unknown option '--surface'/);
   });
 
   it("opens a floating role with no flag as a float and records the role surface", async () => {
@@ -1031,27 +1038,6 @@ describe("cli.ts start", () => {
       "send-keys -t %24 Enter",
     ]);
     assert.equal(res.spec.surface, "float");
-  });
-
-  it("places --surface pane ahead of the role's float, and still records the role surface", async () => {
-    const cwd = mkdtempSync(join(workdir, "flagbeatsrole-cwd-"));
-    writeRole(cwd, "floater", "model: m\nthinking: low\nsurface: float", "Body.");
-    const res = await runStart({ cwd, role: "floater", surface: "pane" });
-
-    assert.equal(res.code, 0);
-    assert.deepEqual(paneCalls[0], "split-window -d -h -t %21 -P -F #{pane_id}");
-    // The spec carries the role's surface, never the per-call value.
-    assert.equal(res.spec.surface, "float");
-  });
-
-  it("opens --surface float for a role with no surface, and records no surface", async () => {
-    const cwd = mkdtempSync(join(workdir, "adhocfloat-cwd-"));
-    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
-    const res = await runStart({ cwd, role: "doer", surface: "float" });
-
-    assert.equal(res.code, 0);
-    assert.deepEqual(paneCalls[0], FIRST_FLOAT_CALL);
-    assert.equal(res.spec.surface, undefined);
   });
 
   it("records the role's tab surface in the spec and opens a tab", async () => {
@@ -1198,13 +1184,17 @@ describe("cli.ts resume", () => {
     );
   });
 
-  it("--surface tab moves the resumed pane into its own tab", async () => {
-    const started = await startNamedChild();
+  it("moves the resumed pane into its own tab when the spec holds a tab role surface", async () => {
+    const cwd = mkdtempSync(join(workdir, "resumetab-cwd-"));
+    writeRole(cwd, "tabber", "model: m\nthinking: low\nsurface: tab", "Body.");
+    const started = await runStart({ cwd, role: "tabber", child: "fix-7" });
+    assert.equal(started.spec.surface, "tab");
+    paneCalls.length = 0;
     const followup = join(dirname(started.json.launch), "followup.md");
     writeFileSync(followup, "Follow-up.\n");
 
     const res = await runCli(
-      ["resume", "--launch", started.json.launch, "--prompt", followup, "--surface", "tab"],
+      ["resume", "--launch", started.json.launch, "--prompt", followup],
       tmuxEnv(),
     );
     assert.equal(res.code, 0);
@@ -1472,19 +1462,10 @@ describe("skills/pmux/launch.ts", () => {
     assert.deepEqual(paneCalls, []);
 
     // The direct entry turns the same failure into a non-zero exit.
-    let status = 0;
-    let stderr = "";
-    try {
-      execFileSync(process.execPath, [copy, "help"], {
-        env: { HOME: home, PATH: process.env.PATH },
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (error) {
-      const failure = error as { status?: number; stderr?: string };
-      status = failure.status ?? 1;
-      stderr = String(failure.stderr ?? "");
-    }
+    const { status, stderr } = runNodeProcess([copy, "help"], {
+      HOME: home,
+      PATH: process.env.PATH,
+    });
     assert.equal(status, 1);
     assert.match(stderr, /launch\.ts: Cannot find the pmux extension/);
     assert.deepEqual(paneCalls, []);

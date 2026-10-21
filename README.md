@@ -11,12 +11,12 @@ caller's window even when another client is attached to another window of
 the same server.
 
 A role can set `surface:` in its frontmatter to `pane`, `tab` or `float` as
-its default placement; the per-call value wins over the role, and the role
-wins over the configured default. `float` opens a floating pane in the
+its default placement; the role's `surface:` wins over the configured default.
+`float` opens a floating pane in the
 caller's window, half the window's width and height, at the top right, while
 the caller keeps the focus; successive floats cascade down and left. A resume
 keeps the role's surface: the launch record and the launch spec store it, and
-a resume uses it when the call gives none.
+a resume uses it.
 
 - Reports live status per pane. Each child writes `working` or `idle` (and `done` or `blocked` at exit) to a status file next to its session file, and an unfocused parent pane pushes a tmux status-line notification when its turn ends.
 

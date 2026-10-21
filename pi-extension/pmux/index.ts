@@ -20,11 +20,10 @@ import {
   agentPrompt,
   readWindowOptions,
 } from "./tmux.ts";
-import { parseSurfaceDefault, parseSurfacePlacement, type SurfaceDefault } from "./placement.ts";
+import { parseSurfaceDefault, type SurfaceDefault } from "./placement.ts";
 import {
   createSupervisor,
   SubagentParams,
-  SurfaceParam,
   borderLine,
   buildLaunchMessagingHint,
   buildPiPromptArgs,
@@ -531,9 +530,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "pmux_spawn",
       label: "Subagent",
       description:
-        "Start a subagent in a new tmux pane. The tool is fire-and-forget: it returns only an acknowledgement. When the subagent finishes, its result arrives automatically as a steer message that starts a new turn. Do not poll, sleep, read logs, or call other tools to check status. Do not fabricate or guess the result. After the call, end your turn or do other independent work, for example start more subagents.",
-      promptSnippet:
-        "Start an async subagent in a tmux pane; its result arrives later as a steer message.",
+        "Start a subagent. The tool is fire-and-forget: it returns only an acknowledgement. When the subagent finishes, its result arrives automatically as a steer message that starts a new turn. Do not poll, sleep, read logs, or call other tools to check status. Do not fabricate or guess the result. After the call, end your turn or do other independent work, for example start more subagents.",
+      promptSnippet: "Start an async subagent; its result arrives later as a steer message.",
       parameters: SubagentParams,
 
       async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -571,7 +569,6 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // Launch the subagent (creates pane or tab, sends command) and start
         // watching it in the background; the supervisor delivers the result.
         const running = await currentSupervisor().spawn(params, ctx, {
-          callSurface: parseSurfacePlacement(params.surface),
           fallback: getSurfaceDefault(),
         });
 
@@ -837,7 +834,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "pmux_resume",
       label: "Resume Subagent",
       description:
-        "Resume an earlier subagent session in a new tmux pane, to continue a cancelled run or give follow-up work. Delivery is the same as subagent: fire-and-forget, the result arrives as a steer message, do not poll or fabricate it.",
+        "Resume an earlier subagent session, to continue a cancelled run or give follow-up work. Delivery is the same as subagent: fire-and-forget, the result arrives as a steer message, do not poll or fabricate it.",
       promptSnippet:
         "Resume an earlier subagent session; its result arrives later as a steer message.",
       parameters: Type.Object({
@@ -847,7 +844,6 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             description: "Message to send after the resume, for example follow-up instructions.",
           }),
         ),
-        surface: SurfaceParam,
         autoExit: Type.Optional(
           Type.Boolean({
             description:
@@ -895,7 +891,6 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         // pi-style session file; without a record, a missing session file is
         // still an error result.
         return currentSupervisor().resume(params, ctx, {
-          callSurface: parseSurfacePlacement(params.surface),
           fallback: getSurfaceDefault(),
         });
       },

@@ -27,7 +27,7 @@ export interface LaunchRecord {
   tools?: string;
   rolePrompt?: string;
   systemPromptMode?: "append" | "replace";
-  /** The role's `surface:`, when the role set a valid one. Never the per-call value. */
+  /** The role's `surface:`, when the role set a valid one. */
   surface?: SurfacePlacement;
   denyTools: string[];
   autoExit: boolean;
