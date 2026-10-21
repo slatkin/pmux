@@ -16,6 +16,14 @@ import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 /** Launch spec version written by `writeLaunchSpec`; readers reject others. */
 export const LAUNCH_SPEC_VERSION = 1;
 
+/** The report modes a launch spec may hold. */
+export type ReportMode = "last" | "send";
+
+/** True when the value names a report mode. */
+export function isReportMode(value: unknown): value is ReportMode {
+  return value === "last" || value === "send";
+}
+
 /**
  * Everything a pane needs to start one child: the executable and argv (no
  * shell), the env delta, and the optional close-on-done rule.
@@ -45,7 +53,7 @@ export interface LaunchSpec {
   parent?: string;
   /** Report mode. Written only for `send`; an absent field reads as `last`,
    * where the report is the child's last assistant message. */
-  report?: "last" | "send";
+  report?: ReportMode;
 }
 
 function invalid(message: string): never {
@@ -92,10 +100,10 @@ export function validateLaunchSpec(data: unknown): LaunchSpec {
   const parent = optionalString(spec.parent, "parent");
 
   const report = spec.report;
-  if (report !== undefined && report !== "last" && report !== "send") {
+  if (report !== undefined && !isReportMode(report)) {
     invalid("report must be last or send");
   }
-  const reportMode = report as "last" | "send" | undefined;
+  const reportMode = isReportMode(report) ? report : undefined;
 
   // The stored surface is parsed, not validated: an unknown value is dropped
   // and does not make the file invalid, matching the role key's treatment.

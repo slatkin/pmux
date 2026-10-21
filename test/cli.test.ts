@@ -134,6 +134,23 @@ async function runStubCase(dir: string, options: RunCase = {}): Promise<RunOutco
   };
 }
 
+/** One receipt line, as the `send` subcommand writes it. */
+function receiptLine(to: string): string {
+  return `${JSON.stringify({ at: new Date().toISOString(), to, bytes: 4 })}\n`;
+}
+
+/** A send-mode spec whose stub child appends `line` to the receipt file. */
+function sendSpecWithReceipt(receiptFile: string, line: string): Partial<LaunchSpec> {
+  return {
+    parent: "%12",
+    report: "send",
+    args: [
+      "-e",
+      `require("fs").appendFileSync(${JSON.stringify(receiptFile)}, ${JSON.stringify(line)})`,
+    ],
+  };
+}
+
 const SPEC: LaunchSpec = {
   version: LAUNCH_SPEC_VERSION,
   name: "scout-1",
@@ -473,19 +490,10 @@ describe("runSpec", () => {
 
   it("does not wake the parent when the send-mode child reported", async () => {
     await withTempDirAsync(async (dir) => {
-      const receiptFile = join(dir, "session.jsonl.sent");
-      const line = `${JSON.stringify({ at: new Date().toISOString(), to: "%12", bytes: 4 })}\n`;
       // The child delivers its report while it runs, so the receipt lands
       // after the wrapper took its baseline count.
       const result = await runStubCase(dir, {
-        spec: {
-          parent: "%12",
-          report: "send",
-          args: [
-            "-e",
-            `require("fs").appendFileSync(${JSON.stringify(receiptFile)}, ${JSON.stringify(line)})`,
-          ],
-        },
+        spec: sendSpecWithReceipt(join(dir, "session.jsonl.sent"), receiptLine("%12")),
       });
       assert.deepEqual(result.woken, []);
     });
@@ -493,17 +501,8 @@ describe("runSpec", () => {
 
   it("still wakes the parent when the send-mode child reported only to another pane", async () => {
     await withTempDirAsync(async (dir) => {
-      const receiptFile = join(dir, "session.jsonl.sent");
-      const line = `${JSON.stringify({ at: new Date().toISOString(), to: "%99", bytes: 4 })}\n`;
       const result = await runStubCase(dir, {
-        spec: {
-          parent: "%12",
-          report: "send",
-          args: [
-            "-e",
-            `require("fs").appendFileSync(${JSON.stringify(receiptFile)}, ${JSON.stringify(line)})`,
-          ],
-        },
+        spec: sendSpecWithReceipt(join(dir, "session.jsonl.sent"), receiptLine("%99")),
       });
       assert.equal(result.woken.length, 1);
       assert.match(result.woken[0]!.text, /without sending a report/);
@@ -512,16 +511,8 @@ describe("runSpec", () => {
 
   it("still wakes the parent when the only new receipt line is malformed", async () => {
     await withTempDirAsync(async (dir) => {
-      const receiptFile = join(dir, "session.jsonl.sent");
       const result = await runStubCase(dir, {
-        spec: {
-          parent: "%12",
-          report: "send",
-          args: [
-            "-e",
-            `require("fs").appendFileSync(${JSON.stringify(receiptFile)}, "not json at all\\n")`,
-          ],
-        },
+        spec: sendSpecWithReceipt(join(dir, "session.jsonl.sent"), "not json at all\n"),
       });
       assert.equal(result.woken.length, 1);
     });
@@ -533,8 +524,7 @@ describe("runSpec", () => {
       // `resume` reuses the session file, so a receipt from the earlier run
       // must not stand in for a report of this run: the baseline is taken
       // before the child starts.
-      const line = `${JSON.stringify({ at: new Date().toISOString(), to: "%12", bytes: 4 })}\n`;
-      writeFileSync(receiptFile, line);
+      writeFileSync(receiptFile, receiptLine("%12"));
       const result = await runStubCase(dir, {
         spec: { parent: "%12", report: "send" },
       });

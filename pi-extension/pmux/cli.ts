@@ -9,7 +9,6 @@
  */
 import { randomBytes } from "node:crypto";
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -36,11 +35,13 @@ import {
 import {
   LAUNCH_SPEC_VERSION,
   buildPaneTitle,
+  isReportMode,
   paneCommandLine,
   readLaunchSpec,
   resolvePiCommand,
   writeLaunchSpec,
   type LaunchSpec,
+  type ReportMode,
 } from "./launch.ts";
 import { agentPrompt, createSurface, runInPane, callerPaneId } from "./tmux.ts";
 import {
@@ -50,6 +51,7 @@ import {
   removeExitSidecar,
 } from "./exit-sidecar.ts";
 import { resolvePlacement } from "./placement.ts";
+import { appendReportReceipt } from "./report-receipt.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
@@ -241,6 +243,19 @@ If you are blocked, send your question with the send command and stop. The sessi
 If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report with the send command first, then call pmux_done.`;
 }
 
+/**
+ * The parent-contact footer of a report mode. `last` mode points the child at
+ * its last assistant message; `send` mode teaches it the `send` command. An
+ * absent mode reads as `last`.
+ */
+function reportFooter(
+  parent: string,
+  report: ReportMode | undefined,
+  env: NodeJS.ProcessEnv,
+): string {
+  return report === "send" ? sendFooter(parent, CLI_PATH) : parentFooter(parent, callerPaneId(env));
+}
+
 /** Parse `--close-grace-ms`, defaulting to `DEFAULT_CLOSE_GRACE_MS`. */
 function closeGraceMs(value: string | undefined): number {
   if (value === undefined) return DEFAULT_CLOSE_GRACE_MS;
@@ -256,16 +271,18 @@ function closeGraceMs(value: string | undefined): number {
  * mode; an unknown value is a usage error (the caller exits 2 and the
  * message goes to stderr).
  */
-function reportMode(values: CliValues, writeErr: (text: string) => void): "last" | "send" | null {
-  const requested = values.report;
-  if (requested === undefined || requested === "last") return "last";
-  if (requested === "send") return "send";
-  writeErr(`invalid --report value: ${requested} (expected last or send)\n`);
+function reportMode(
+  value: string | undefined,
+  writeErr: (text: string) => void,
+): ReportMode | null {
+  if (value === undefined) return "last";
+  if (isReportMode(value)) return value;
+  writeErr(`invalid --report value: ${value} (expected last or send)\n`);
   return null;
 }
 
 /** `start`: resolve a role, write the launch spec and run it in a new pane. */
-function startCommand(values: CliValues, deps: CliDeps, report: "last" | "send"): number {
+function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): number {
   const env = deps.env ?? process.env;
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
 
@@ -317,14 +334,13 @@ function startCommand(values: CliValues, deps: CliDeps, report: "last" | "send")
   }
   const briefText = readFileSync(brief, "utf8");
   writeFileSync(rolePromptPath, definition.body ? `${definition.body}\n` : "");
-  const footer =
-    report === "send" ? sendFooter(parent, CLI_PATH) : parentFooter(parent, callerPaneId(env));
-  writeFileSync(promptPath, `${briefText}\n${footer}\n`);
+  writeFileSync(promptPath, `${briefText}\n${reportFooter(parent, report, env)}\n`);
   // In send mode the report is a bash command, so the child must keep the
   // bash tool on both sides: the allowlist gains it and the denied set loses
   // it (`PI_DENY_TOOLS` wins over `--tools`).
+  const sendMode = report === "send";
   const denied = resolveDenyTools(definition);
-  if (report === "send") denied.delete("bash");
+  if (sendMode) denied.delete("bash");
   const specEnv = encodeChildEnv({
     name,
     agent: role,
@@ -352,7 +368,7 @@ function startCommand(values: CliValues, deps: CliDeps, report: "last" | "send")
       "--append-system-prompt",
       rolePromptPath,
       "--tools",
-      buildSubagentToolAllowlist(definition.tools, report === "send" ? ["bash"] : []),
+      buildSubagentToolAllowlist(definition.tools, sendMode ? ["bash"] : []),
       "--name",
       name,
     ],
@@ -360,7 +376,7 @@ function startCommand(values: CliValues, deps: CliDeps, report: "last" | "send")
     title: buildPaneTitle(name, briefText),
     closeOnDone: { graceMs },
     parent,
-    ...(report === "send" ? { report: "send" as const } : {}),
+    ...(sendMode ? { report: "send" as const } : {}),
     ...(definition.surface !== undefined ? { surface: definition.surface } : {}),
   };
   writeLaunchSpec(specPath, spec);
@@ -397,10 +413,7 @@ function resumeCommand(values: CliValues, deps: CliDeps): number {
   let sentPrompt = promptPath;
   if (spec.parent !== undefined) {
     sentPrompt = `${promptPath}.resume.md`;
-    const footer =
-      spec.report === "send"
-        ? sendFooter(spec.parent, CLI_PATH)
-        : parentFooter(spec.parent, callerPaneId(env));
+    const footer = reportFooter(spec.parent, spec.report, env);
     writeFileSync(sentPrompt, `${readFileSync(promptPath, "utf8")}\n${footer}\n`);
   }
   const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);
@@ -499,14 +512,11 @@ function pruneCommand(values: CliValues, deps: CliDeps): number {
 function writeReportReceipt(env: NodeJS.ProcessEnv, to: string, text: string): void {
   const session = env.PI_PMUX_SESSION;
   if (!session) return;
-  try {
-    appendFileSync(
-      `${session}.sent`,
-      `${JSON.stringify({ at: new Date().toISOString(), to, bytes: text.length })}\n`,
-    );
-  } catch {
-    // Best effort; the delivery already happened.
-  }
+  appendReportReceipt(session, {
+    at: new Date().toISOString(),
+    to,
+    bytes: text.length,
+  });
 }
 
 /** `send`: deliver one report line into a pane (paste, then Enter). */
@@ -567,12 +577,114 @@ function waitTimeoutSeconds(value: string | undefined): number {
 }
 
 /**
+ * Sleep until the next poll, or until the deadline passes. Returns false when
+ * the deadline passed, so the caller stops polling.
+ */
+async function waitForNextPoll(
+  deadline: number,
+  sleep: (ms: number) => Promise<void>,
+): Promise<boolean> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return false;
+  await sleep(Math.min(WAIT_POLL_MS, remaining));
+  return true;
+}
+
+/** The sinks and the timer a wait command uses. */
+interface WaitDeps {
+  write: (text: string) => void;
+  writeErr: (text: string) => void;
+  sleep: (ms: number) => Promise<void>;
+}
+
+/** The timeout a wait command runs under. */
+interface WaitTimeout {
+  /** The moment the wait gives up. */
+  deadline: number;
+  /** The timeout in seconds, for the timeout message. */
+  seconds: number;
+}
+
+/** Resolve the wait sinks from the injected deps. */
+function resolveWaitDeps(deps: CliDeps): WaitDeps {
+  return {
+    write: deps.stdout ?? ((text: string) => process.stdout.write(text)),
+    writeErr: deps.stderr ?? ((text: string) => process.stderr.write(text)),
+    sleep: deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms))),
+  };
+}
+
+/**
+ * `wait --signal sidecar`: poll `<session>.exit` until the file appears. The
+ * file's presence alone is the signal, so a malformed sidecar still counts
+ * and `interpretExitSidecar` maps an unknown payload to `done`. The sidecar
+ * is never removed: the wrapper (`cli.ts run`) reads the same file after the
+ * child exits.
+ */
+async function waitForSidecar(
+  sessionPath: string,
+  timeout: WaitTimeout,
+  deps: WaitDeps,
+): Promise<number> {
+  const sidecarPath = exitSidecarPath(sessionPath);
+  const sidecarAbsPath = resolve(sidecarPath);
+  for (;;) {
+    if (existsSync(sidecarPath)) {
+      const result = interpretExitSidecar(readExitSidecar(sessionPath));
+      deps.write(JSON.stringify({ ...result, sidecar: sidecarAbsPath }) + "\n");
+      return 0;
+    }
+    if (!(await waitForNextPoll(timeout.deadline, deps.sleep))) break;
+  }
+  deps.write(`${JSON.stringify({ sidecar: null })}\n`);
+  deps.writeErr(
+    `timeout after ${timeout.seconds}s: no exit sidecar was seen (a sidecar, if any, would have been printed; wait never removes it)\n`,
+  );
+  return 2;
+}
+
+/**
+ * `wait --signal status`: poll `<session>.status` until it holds one of the
+ * wanted statuses. A missing file counts as no status yet.
+ */
+async function waitForStatus(
+  sessionPath: string,
+  wanted: Set<ChildStatus>,
+  timeout: WaitTimeout,
+  deps: WaitDeps,
+): Promise<number> {
+  const statusPath = statusFilePath(sessionPath);
+  let last: string | null = null;
+  for (;;) {
+    try {
+      last = readFileSync(statusPath, "utf8");
+    } catch {
+      // A missing file is no status yet.
+    }
+    if (last !== null) {
+      // Parse the buffer that was read, not a second read of the file: the
+      // child can flip the status between two reads, and the printed line
+      // must be the one that matched.
+      const record = parseChildStatus(last);
+      if (record && wanted.has(record.status)) {
+        deps.write(`${last}\n`);
+        return 0;
+      }
+    }
+    if (!(await waitForNextPoll(timeout.deadline, deps.sleep))) break;
+  }
+  deps.write(`${last ?? JSON.stringify({ status: null })}\n`);
+  deps.writeErr(
+    last === null
+      ? `timeout after ${timeout.seconds}s: no status was seen\n`
+      : `timeout after ${timeout.seconds}s: last status was ${rawChildStatusName(last)}\n`,
+  );
+  return 2;
+}
+
+/**
  * `wait`: poll a session's completion signal until it holds the wanted exit.
- * With `--signal status` (the default) it polls `<session>.status` until it
- * holds one of the wanted statuses; a missing file counts as no status yet.
- * With `--signal sidecar` it polls `<session>.exit` — the child's own exit
- * record — whose presence alone is the signal, so a malformed sidecar still
- * counts and `interpretExitSidecar` maps an unknown payload to `done`.
+ * The two signals live in `waitForStatus` and `waitForSidecar`.
  *
  * Waiting is strictly read-only: the sidecar is never removed here. The
  * wrapper (`cli.ts run`) reads the same file after the child exits, so a
@@ -583,9 +695,7 @@ function waitTimeoutSeconds(value: string | undefined): number {
  * is involved.
  */
 async function waitCommand(values: CliValues, deps: CliDeps): Promise<number> {
-  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
-  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
-  const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const wait = resolveWaitDeps(deps);
   try {
     const sessionPath = required("--session", values.session);
     const signal = waitSignal(values.signal);
@@ -596,64 +706,21 @@ async function waitCommand(values: CliValues, deps: CliDeps): Promise<number> {
       throw new Error("--status is a status-wait flag; drop it for --signal sidecar");
     }
     const timeoutSeconds = waitTimeoutSeconds(values.timeout);
-    const deadline = Date.now() + timeoutSeconds * 1000;
+    const timeout: WaitTimeout = {
+      deadline: Date.now() + timeoutSeconds * 1000,
+      seconds: timeoutSeconds,
+    };
 
     if (signal === "sidecar") {
-      const sidecarPath = exitSidecarPath(sessionPath);
-      const sidecarAbsPath = resolve(sidecarPath);
-      for (;;) {
-        if (existsSync(sidecarPath)) {
-          const result = interpretExitSidecar(readExitSidecar(sessionPath));
-          write(JSON.stringify({ ...result, sidecar: sidecarAbsPath }) + "\n");
-          return 0;
-        }
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) break;
-        await sleep(Math.min(WAIT_POLL_MS, remaining));
-      }
-      write(`${JSON.stringify({ sidecar: null })}\n`);
-      writeErr(
-        `timeout after ${timeoutSeconds}s: no exit sidecar was seen (a sidecar, if any, would have been printed; wait never removes it)\n`,
-      );
-      return 2;
+      return await waitForSidecar(sessionPath, timeout, wait);
     }
-
     const wanted = new Set(waitStatuses(values.status));
-    const statusPath = statusFilePath(sessionPath);
-    let last: string | null = null;
-    for (;;) {
-      try {
-        last = readFileSync(statusPath, "utf8");
-      } catch {
-        // A missing file is no status yet.
-      }
-      if (last !== null) {
-        // Parse the buffer that was read, not a second read of the file: the
-        // child can flip the status between two reads, and the printed line
-        // must be the one that matched.
-        const record = parseChildStatus(last);
-        if (record && wanted.has(record.status)) {
-          write(`${last}\n`);
-          return 0;
-        }
-      }
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-      await sleep(Math.min(WAIT_POLL_MS, remaining));
-    }
-
-    write(`${last ?? JSON.stringify({ status: null })}\n`);
-    writeErr(
-      last === null
-        ? `timeout after ${timeoutSeconds}s: no status was seen\n`
-        : `timeout after ${timeoutSeconds}s: last status was ${rawChildStatusName(last)}\n`,
-    );
-    return 2;
+    return await waitForStatus(sessionPath, wanted, timeout, wait);
   } catch (error) {
     // A usage error must leave stdout empty, so it is caught here instead of
     // bubbling to the entry wrapper.
     const message = error instanceof Error ? error.message : String(error);
-    writeErr(`cli.ts: ${message}\n`);
+    wait.writeErr(`cli.ts: ${message}\n`);
     return 1;
   }
 }
@@ -691,7 +758,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     return resumeCommand(values as CliValues, deps);
   }
   if (command === "start") {
-    const report = reportMode(values as CliValues, writeErr);
+    const report = reportMode((values as CliValues).report, writeErr);
     return report === null ? 2 : startCommand(values as CliValues, deps, report);
   }
   if (command === "run") return runCommand(positionals.slice(1), deps);

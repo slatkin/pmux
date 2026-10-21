@@ -12,6 +12,7 @@
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { REPORT_RECEIPT_SUFFIX } from "./report-receipt.ts";
 
 /** Default retention for scratch files: a week keeps recent resumes working. */
 export const DEFAULT_PRUNE_MAX_AGE_DAYS = 7;
@@ -44,7 +45,7 @@ function isManagedScratchFile(name: string): boolean {
     name.endsWith(".exit") ||
     name.endsWith(".msg") ||
     name.endsWith(".report.md") ||
-    name.endsWith(".sent")
+    name.endsWith(REPORT_RECEIPT_SUFFIX)
   );
 }
 

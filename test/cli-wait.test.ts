@@ -105,19 +105,21 @@ describe("cli wait", () => {
 });
 
 describe("cli wait --signal sidecar", () => {
+  /** `wait --signal sidecar` against a session file. */
+  function waitSidecar(
+    sessionFile: string,
+    timeout = "5",
+    deps: { sleep?: (ms: number) => Promise<void> } = {},
+  ) {
+    return runWait(["--session", sessionFile, "--signal", "sidecar", "--timeout", timeout], deps);
+  }
+
   it("prints the interpreted sidecar and leaves it in place", async () => {
     await withTempDir(async (dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const sidecar = exitSidecarPath(sessionFile);
       writeFileSync(sidecar, JSON.stringify({ type: "done" }));
-      const result = await runWait([
-        "--session",
-        sessionFile,
-        "--signal",
-        "sidecar",
-        "--timeout",
-        "5",
-      ]);
+      const result = await waitSidecar(sessionFile);
       assert.equal(result.code, 0);
       assert.equal(
         result.stdout,
@@ -139,22 +141,8 @@ describe("cli wait --signal sidecar", () => {
       const sessionFile = join(dir, "child.jsonl");
       const sidecar = exitSidecarPath(sessionFile);
       writeFileSync(sidecar, JSON.stringify({ type: "done" }));
-      const first = await runWait([
-        "--session",
-        sessionFile,
-        "--signal",
-        "sidecar",
-        "--timeout",
-        "5",
-      ]);
-      const second = await runWait([
-        "--session",
-        sessionFile,
-        "--signal",
-        "sidecar",
-        "--timeout",
-        "5",
-      ]);
+      const first = await waitSidecar(sessionFile);
+      const second = await waitSidecar(sessionFile);
       assert.equal(first.code, 0);
       assert.equal(second.code, 0);
       assert.equal(first.stdout, second.stdout);
@@ -171,14 +159,7 @@ describe("cli wait --signal sidecar", () => {
         sidecar,
         JSON.stringify({ type: "ping", name: "worker", message: "need answer" }),
       );
-      const result = await runWait([
-        "--session",
-        sessionFile,
-        "--signal",
-        "sidecar",
-        "--timeout",
-        "5",
-      ]);
+      const result = await waitSidecar(sessionFile);
       assert.equal(result.code, 0);
       assert.deepEqual(JSON.parse(result.stdout), {
         reason: "ping",
@@ -193,14 +174,7 @@ describe("cli wait --signal sidecar", () => {
   it("times out with the null sidecar line and a message on stderr", async () => {
     await withTempDir(async (dir) => {
       const sessionFile = join(dir, "child.jsonl");
-      const result = await runWait([
-        "--session",
-        sessionFile,
-        "--signal",
-        "sidecar",
-        "--timeout",
-        "0.05",
-      ]);
+      const result = await waitSidecar(sessionFile, "0.05");
       assert.equal(result.code, 2);
       assert.equal(result.stdout, `${JSON.stringify({ sidecar: null })}\n`);
       assert.match(result.stderr, /timeout/);
@@ -213,17 +187,14 @@ describe("cli wait --signal sidecar", () => {
       const sessionFile = join(dir, "child.jsonl");
       const sidecar = exitSidecarPath(sessionFile);
       let polls = 0;
-      const result = await runWait(
-        ["--session", sessionFile, "--signal", "sidecar", "--timeout", "5"],
-        {
-          sleep: async () => {
-            polls += 1;
-            if (polls === 1) {
-              writeFileSync(sidecar, JSON.stringify({ type: "done" }));
-            }
-          },
+      const result = await waitSidecar(sessionFile, "5", {
+        sleep: async () => {
+          polls += 1;
+          if (polls === 1) {
+            writeFileSync(sidecar, JSON.stringify({ type: "done" }));
+          }
         },
-      );
+      });
       assert.equal(result.code, 0);
       assert.equal(
         result.stdout,
@@ -242,14 +213,7 @@ describe("cli wait --signal sidecar", () => {
       const sessionFile = join(dir, "child.jsonl");
       const sidecar = exitSidecarPath(sessionFile);
       writeFileSync(sidecar, "not json at all");
-      const result = await runWait([
-        "--session",
-        sessionFile,
-        "--signal",
-        "sidecar",
-        "--timeout",
-        "5",
-      ]);
+      const result = await waitSidecar(sessionFile);
       assert.equal(result.code, 0);
       // The file's presence is the signal; an unknown payload maps to done.
       assert.equal(
@@ -310,17 +274,14 @@ describe("cli wait --signal sidecar", () => {
       const sessionFile = join(dir, "child.jsonl");
       const sidecar = exitSidecarPath(sessionFile);
       let polls = 0;
-      const result = await runWait(
-        ["--session", sessionFile, "--signal", "sidecar", "--timeout", "5"],
-        {
-          sleep: async () => {
-            polls += 1;
-            if (polls === 1) {
-              writeFileSync(sidecar, JSON.stringify({ type: "handoff" }));
-            }
-          },
+      const result = await waitSidecar(sessionFile, "5", {
+        sleep: async () => {
+          polls += 1;
+          if (polls === 1) {
+            writeFileSync(sidecar, JSON.stringify({ type: "handoff" }));
+          }
         },
-      );
+      });
       assert.equal(result.code, 0);
       assert.deepEqual(JSON.parse(result.stdout), {
         reason: "handoff",
