@@ -17,14 +17,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { fileURLToPath } from "node:url";
-import {
-  agentDefinitionPaths,
-  buildSubagentToolAllowlist,
-  loadAgentDefaults,
-} from "./agent-defs.ts";
 import {
   autoPrune,
   defaultScratchDir,
@@ -33,17 +27,14 @@ import {
   DEFAULT_PRUNE_MAX_AGE_DAYS,
 } from "./prune.ts";
 import {
-  LAUNCH_SPEC_VERSION,
-  buildPaneTitle,
   isReportMode,
   paneCommandLine,
   readLaunchSpec,
   resolvePiCommand,
   writeLaunchSpec,
-  type LaunchSpec,
   type ReportMode,
 } from "./launch.ts";
-import { agentPrompt, createSurface, runInPane, callerPaneId } from "./tmux.ts";
+import { agentPrompt, callerPaneId, createSurface, readPaneOption, runInPane } from "./tmux.ts";
 import {
   exitSidecarPath,
   interpretExitSidecar,
@@ -67,11 +58,13 @@ import {
   type ChildStatus,
 } from "./status-file.ts";
 import { slugifyName } from "./slug.ts";
-import { encodeChildEnv, resolveDenyTools } from "./child-env.ts";
-import { SUBAGENTS_CLI_PATH, reportFooter } from "./launch-build.ts";
-
-/** Absolute path to `pi-extension/pmux`. */
-const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
+import {
+  SUBAGENTS_CLI_PATH,
+  buildPiLaunch,
+  reportFooter,
+  resolveLaunchRecord,
+} from "./launch-build.ts";
+import { getLaunchRecordFile, writeLaunchRecord } from "./launch-record.ts";
 
 /** Pane-side entry point; the pane runs this file with `node`. */
 const CLI_PATH = SUBAGENTS_CLI_PATH;
@@ -249,31 +242,38 @@ function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): num
   assertNodeVersion();
   assertHostEnv(env);
 
-  const rolePaths = agentDefinitionPaths(role, cwd);
-  const definition = loadAgentDefaults(role, cwd);
-  if (definition === null) {
-    throw new Error(`unknown role '${role}' (searched: ${rolePaths.join(" ")})`);
-  }
-  if (!definition.model) {
-    const rolePath = rolePaths.find(isFile) ?? rolePaths[0];
-    throw new Error(`role '${role}' has an empty model (${rolePath})`);
-  }
+  // The role resolves once, into the record a resume reads (design D6): the
+  // unknown-role and empty-model errors keep today's text and still happen
+  // before any file is written.
+  const { record, definition } = resolveLaunchRecord({
+    role,
+    anchor: cwd,
+    overrides: { name, cwd },
+    strict: true,
+  });
   // The role is known only here, so the placement resolves here: the role's
   // `surface:` wins over the configured default.
-  const placement = resolvePlacement(definition.surface, loadSurfaceConfig(deps.configPath));
+  const placement = resolvePlacement(definition?.surface, loadSurfaceConfig(deps.configPath));
 
   const graceMs = closeGraceMs(values["close-grace-ms"]);
   const id = randomBytes(4).toString("hex");
   const base = scratchBase(name, id);
   const scratch = resolve(values.scratch ?? defaultScratchDir());
   const specPath = join(scratch, `${base}.json`);
-  const promptPath = join(scratch, `${base}.prompt.md`);
-  const rolePromptPath = join(scratch, `${base}.role.md`);
   const sessionFile = join(scratch, `${base}.jsonl`);
+  const callerPane = callerPaneId(env);
 
   // The token rule runs before anything is created, so an unsafe scratch path
-  // fails without leaving an empty pane behind.
-  const paneLine = paneCommandLine(CLI_PATH, specPath, promptPath);
+  // fails without leaving an empty pane behind. The prompt path travels inside
+  // the spec args (design D5), so the pane line never sees a `%` id.
+  const paneLine = paneCommandLine(CLI_PATH, specPath);
+
+  // The parent session id (design D5): the caller pane's sidebar id when it
+  // has one, the caller pane id otherwise. A failed or empty read must not
+  // stop the launch; the id goes into the record, so a resume uses the same
+  // artifact directory.
+  const parentSessionId = readPaneOption(callerPane, "@pane_session_id") ?? callerPane;
+  const artifactDir = join(scratch, "artifacts", parentSessionId);
 
   mkdirSync(scratch, { recursive: true });
   autoPrune(scratch);
@@ -285,59 +285,39 @@ function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): num
     }
   }
   const briefText = readFileSync(brief, "utf8");
-  writeFileSync(rolePromptPath, definition.body ? `${definition.body}\n` : "");
-  writeFileSync(promptPath, `${briefText}\n${reportFooter(parent, report, callerPaneId(env))}\n`);
-  // In send mode the report is a bash command, so the child must keep the
-  // bash tool on both sides: the allowlist gains it and the denied set loses
-  // it (`PI_DENY_TOOLS` wins over `--tools`).
-  const sendMode = report === "send";
-  const denied = resolveDenyTools(definition);
-  if (sendMode) denied.delete("bash");
-  const specEnv = encodeChildEnv({
-    name,
-    agent: role,
-    sessionFile,
-    id,
-    activityFile: join(scratch, `${base}.activity.json`),
-    externalParent: true,
-    autoExit: definition.autoExit === true,
-    denyTools: [...denied],
+
+  // The launch record sits beside the session file (design D6), with the
+  // external-only values a later resume needs (designs D5 and D7).
+  writeLaunchRecord(getLaunchRecordFile(sessionFile), {
+    ...record,
+    parentSessionId,
+    closeGraceMs: graceMs,
   });
 
-  const spec: LaunchSpec = {
-    version: LAUNCH_SPEC_VERSION,
-    name,
-    cwd,
-    env: specEnv,
-    command: "pi",
-    args: [
-      "--session",
-      sessionFile,
-      "-e",
-      join(SUBAGENTS_DIR, "pmux-done.ts"),
-      "--model",
-      definition.thinking ? `${definition.model}:${definition.thinking}` : definition.model,
-      "--append-system-prompt",
-      rolePromptPath,
-      "--tools",
-      buildSubagentToolAllowlist(definition.tools, sendMode ? ["bash"] : []),
-      "--name",
-      name,
-    ],
-    sessionFile,
-    title: buildPaneTitle(name, briefText),
-    closeOnDone: { graceMs },
-    parent,
-    ...(sendMode ? { report: "send" as const } : {}),
-    ...(definition.surface !== undefined ? { surface: definition.surface } : {}),
-  };
+  // The shared builder (designs D3 and D4): it writes the brief-plus-footer
+  // prompt and the role body under `artifacts/<id>/context/` and builds the
+  // spec with the prompt path, the external-parent marker and the close grace.
+  const spec = buildPiLaunch({
+    record,
+    task: briefText,
+    localAgentDir: null,
+    artifactDir,
+    parentContact: {
+      kind: "external",
+      parent,
+      callerPane,
+      report,
+      closeGraceMs: graceMs,
+    },
+    run: { id, sessionFile, activityFile: join(scratch, `${base}.activity.json`) },
+  });
   writeLaunchSpec(specPath, spec);
 
   // A new run must not read the status of an earlier run, nor its exit.
   removeChildStatus(sessionFile);
   removeExitSidecar(sessionFile);
 
-  const pane = createSurface(name, placement, callerPaneId(env));
+  const pane = createSurface(name, placement, callerPane);
   runInPane(pane, paneLine);
 
   write(JSON.stringify({ pane, session: sessionFile, launch: specPath }) + "\n");

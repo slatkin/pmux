@@ -195,6 +195,8 @@ describe("cli.ts prune", () => {
     );
     assert.equal(code, 0);
     assert.equal(existsSync(old), false);
-    assert.ok(readdirSync(scratch).some((file) => file.endsWith(".prompt.md")));
+    // The fresh launch files survive the prune; the prompt now lives under
+    // artifacts/<id>/context/, so the record beside the session file marks it.
+    assert.ok(readdirSync(scratch).some((file) => file.endsWith(".launch.json")));
   });
 });

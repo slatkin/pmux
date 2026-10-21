@@ -35,6 +35,7 @@ import {
   type LaunchSpec,
 } from "../pi-extension/pmux/launch.ts";
 import { runSpec } from "../pi-extension/pmux/run.ts";
+import { getLaunchRecordFile, readLaunchRecord } from "../pi-extension/pmux/launch-record.ts";
 import { main } from "../pi-extension/pmux/cli.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 import { argValue, placementRow, useTmuxPaneFake } from "./tmux-fakes.ts";
@@ -769,6 +770,7 @@ after(() => {
 
 beforeEach(() => {
   paneCalls.length = 0;
+  paneFake.paneSessionId = undefined;
 });
 
 /** tmux environment for a CLI run, with ambient host keys replaced. */
@@ -868,14 +870,19 @@ interface StartCase {
   configPath?: string;
   /** Report mode passed as `--report`; absent means the flag is not given. */
   report?: "last" | "send";
+  /** `@pane_session_id` the caller pane answers: a string, `null` for a
+   * failed read; absent answers empty. */
+  paneSessionId?: string | null;
 }
 
 interface Started extends CliResult {
   json: { pane: string; session: string; launch: string };
   spec: LaunchSpec;
   scratch: string;
+  /** The prompt file the builder wrote under `artifacts/<id>/context/`. */
   promptPath: string;
-  rolePromptPath: string;
+  /** The role system-prompt file, when the role has a body. */
+  rolePromptPath: string | undefined;
 }
 
 /** Start a child through a CLI entry point and return its JSON, spec and scratch files. */
@@ -900,22 +907,32 @@ async function runStartWith(entry: CliEntry, options: StartCase): Promise<Starte
     "--scratch",
     scratch,
   ];
+  // Set the pane option answer before the run: a value, `null` for a failed
+  // read, and unset for the empty answer.
+  paneFake.paneSessionId = options.paneSessionId;
   if (options.closeGraceMs !== undefined)
     argv.push("--close-grace-ms", String(options.closeGraceMs));
   if (options.report !== undefined) argv.push("--report", options.report);
 
   const result = await capture(entry, argv, env, options.configPath);
   const json = JSON.parse(result.stdout) as Started["json"];
-  const promptName = readdirSync(scratch).find((file) => file.endsWith(".prompt.md"));
-  const roleName = readdirSync(scratch).find((file) => file.endsWith(".role.md"));
-  assert.ok(promptName && roleName, "expected the scratch files to be written");
+  const spec = readLaunchSpec(json.launch);
+  // The prompt reaches pi as the `@<path>` operand inside the spec args
+  // (design D5); the role body rides `--append-system-prompt`.
+  const promptOperand = spec.args[spec.args.length - 1];
+  assert.ok(
+    typeof promptOperand === "string" && promptOperand.startsWith("@") === true,
+    "expected the prompt operand at the end of the spec args",
+  );
+  const promptPath = promptOperand.slice(1);
+  assert.ok(existsSync(promptPath), `expected the prompt file at ${promptPath}`);
   return {
     ...result,
     json,
-    spec: readLaunchSpec(json.launch),
+    spec,
     scratch,
-    promptPath: join(scratch, promptName),
-    rolePromptPath: join(scratch, roleName),
+    promptPath,
+    rolePromptPath: argValue(spec.args, "--append-system-prompt"),
   };
 }
 
@@ -983,7 +1000,7 @@ describe("cli.ts start", () => {
     assert.deepEqual(paneCalls, [
       "split-window -d -h -t %21 -P -F #{pane_id}",
       "select-pane -t %24 -T fix-7",
-      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
 
@@ -993,6 +1010,7 @@ describe("cli.ts start", () => {
     assert.ok(promptText.includes("# Task"));
 
     // Role prompt holds the role body.
+    assert.ok(res.rolePromptPath, "expected the role system-prompt file");
     assert.ok(readFileSync(res.rolePromptPath, "utf8").includes("Doer role body."));
 
     // The spec holds everything the pane needs, and no surface: it stays
@@ -1204,6 +1222,98 @@ describe("cli.ts start", () => {
     assert.equal(res.spec.closeOnDone?.graceMs, 0);
   });
 
+  /** Row 5.2 shape contract: the last four path segments and the timestamp. */
+  function assertPromptPathShape(promptPath: string, parentSessionId: string, name: string): void {
+    const file = resolve(promptPath).split("/").slice(-1)[0] ?? "";
+    const segments = resolve(promptPath).split("/").slice(-4);
+    assert.deepEqual(segments.slice(0, 3), ["artifacts", parentSessionId, "context"]);
+    assert.ok(file.startsWith(`${name}-`), `expected the file stem ${name}-…: ${file}`);
+    // The timestamp that follows the name has exactly 19 characters (row 5.2:
+    // the shape the tmux-agent-sidebar's parse_pmux_task matches).
+    const timestamp = file.slice(name.length + 1, -3);
+    assert.equal(timestamp.length, 19);
+    assert.match(timestamp, /^[0-9T-]{19}$/);
+  }
+
+  it("writes the prompt under artifacts/<id>/context/ and the file holds brief and footer", async () => {
+    const cwd = mkdtempSync(join(workdir, "prompt-loc-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const res = await runStart({ cwd, role: "doer", child: "w2", paneSessionId: "abc" });
+
+    // Task prompt location scenario: the id comes from the caller's pane
+    // option, and the file name is `<name>-<19-char timestamp>.md`.
+    assertPromptPathShape(res.promptPath, "abc", "w2");
+    // The brief followed by the footer, ending with the footer's last line.
+    const promptText = readFileSync(res.promptPath, "utf8");
+    assert.ok(promptText.startsWith("# Task"));
+    assert.ok(promptText.includes("Your parent is a session named orch (pane %21)."));
+    assert.ok(promptText.endsWith("was already delivered.\n"));
+  });
+
+  it("falls back to the caller pane id as the artifact id when the pane option is unset", async () => {
+    const cwd = mkdtempSync(join(workdir, "sid-fallback-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const res = await runStart({ cwd, role: "doer", child: "w2", closeGraceMs: 1234 });
+
+    // Parent session id scenario: no @pane_session_id, so the caller pane id
+    // is the id and the launch continues.
+    assertPromptPathShape(res.promptPath, "%21", "w2");
+    const record = readLaunchRecord(getLaunchRecordFile(res.json.session));
+    assert.ok(record);
+    assert.equal(record.parentSessionId, "%21");
+    assert.equal(record.closeGraceMs, 1234);
+    assert.equal(res.code, 0);
+  });
+
+  it("continues with the pane id when the @pane_session_id read fails", async () => {
+    const cwd = mkdtempSync(join(workdir, "sid-error-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const res = await runStart({ cwd, role: "doer", child: "w2", paneSessionId: null });
+    assert.equal(res.code, 0);
+    assertPromptPathShape(res.promptPath, "%21", "w2");
+  });
+
+  it("writes the launch record beside the session file for a later resume", async () => {
+    const cwd = mkdtempSync(join(workdir, "record-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const res = await runStart({
+      cwd,
+      role: "doer",
+      child: "fix-7",
+      closeGraceMs: 0,
+      paneSessionId: "abc",
+    });
+
+    // Per-child launch spec scenario: the record is valid as a launch record
+    // and carries the values a resume needs (designs D5 and D7).
+    const record = readLaunchRecord(getLaunchRecordFile(res.json.session));
+    assert.ok(record);
+    assert.equal(record.backend, "pi");
+    assert.equal(record.agent, "doer");
+    assert.equal(record.model, "m");
+    assert.equal(record.name, "fix-7");
+    assert.equal(record.cwd, cwd);
+    assert.equal(record.parentSessionId, "abc");
+    assert.equal(record.closeGraceMs, 0);
+  });
+
+  it("keeps the pane id's `%` out of the pane command line", async () => {
+    const cwd = mkdtempSync(join(workdir, "sid-line-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    // A pane id carries `%`, which the pane token rule must never see, so the
+    // id may exist only inside spec args and the record (design D5). The
+    // pane call sequence stays the plain launch.
+    const res = await runStart({ cwd, role: "doer", child: "fix-7" });
+    assert.deepEqual(paneCalls, [
+      "split-window -d -h -t %21 -P -F #{pane_id}",
+      "select-pane -t %24 -T fix-7",
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch)}`,
+      "send-keys -t %24 Enter",
+    ]);
+    // And the rule still holds for the pane line itself.
+    assert.equal(paneCommandLine(CLI, res.json.launch).includes("%"), false);
+  });
+
   it("fails before splitting for an unknown role", async () => {
     const cwd = mkdtempSync(join(workdir, "norole-"));
     const message = await startFailure({ cwd, role: "nope" });
@@ -1255,16 +1365,18 @@ describe("cli.ts start", () => {
     assert.deepEqual(paneCalls, [
       "split-window -d -h -t %21 -P -F #{pane_id}",
       "select-pane -t %24 -T a;b $(touch pwned) 'q",
-      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
 
     // Running the spec the way the pane does delivers the raw name and the
-    // prompt path as single argv entries, with no shell in between.
+    // prompt path as single argv entries, with no shell in between. The
+    // prompt operand already sits in the spec args (design D5), so the run
+    // needs no positional prompt.
     const recordPath = join(dirname(res.json.launch), "record.json");
     const stdout: string[] = [];
     const stderr: string[] = [];
-    const code = await main(["run", res.json.launch, res.promptPath], {
+    const code = await main(["run", res.json.launch], {
       env: tmuxEnv({
         PI_PMUX_PI_ENTRY: PI_STUB,
         PI_STUB_RECORD: recordPath,
@@ -1295,7 +1407,7 @@ describe("cli.ts start", () => {
       "display-message -p -t %21 #{window_id}",
       "select-window -t @4",
       "select-pane -t %24 -T fix-7",
-      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
   });
@@ -1342,7 +1454,7 @@ describe("cli.ts start", () => {
     assert.deepEqual(paneCalls, [
       "split-window -d -h -t %21 -P -F #{pane_id}",
       "select-pane -t %24 -T scout-1",
-      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
   });
@@ -1392,7 +1504,7 @@ describe("cli.ts start", () => {
     assert.deepEqual(paneCalls, [
       FIRST_FLOAT_CALL,
       "select-pane -t %24 -T scout-1",
-      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch, res.promptPath)}`,
+      `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
     assert.equal(res.spec.surface, "float");
@@ -1444,7 +1556,7 @@ describe("cli.ts start", () => {
       assert.deepEqual(paneCalls, [
         "split-window -d -h -t %24 -P -F #{pane_id}",
         "select-pane -t %24 -T fix-8",
-        `send-keys -t %24 -l ${paneCommandLine(CLI, second.json.launch, second.promptPath)}`,
+        `send-keys -t %24 -l ${paneCommandLine(CLI, second.json.launch)}`,
         "send-keys -t %24 Enter",
       ]);
     } finally {
@@ -1978,7 +2090,7 @@ describe("skills/pmux/launch.ts", () => {
     assert.deepEqual(paneCalls, [
       "split-window -d -h -t %21 -P -F #{pane_id}",
       "select-pane -t %24 -T scout-1",
-      `send-keys -t %24 -l ${paneCommandLine(join(install, "pi-extension", "pmux", "cli.ts"), started.json.launch, started.promptPath)}`,
+      `send-keys -t %24 -l ${paneCommandLine(join(install, "pi-extension", "pmux", "cli.ts"), started.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
   });
@@ -1993,7 +2105,7 @@ describe("skills/pmux/launch.ts", () => {
     assert.deepEqual(paneCalls, [
       "split-window -d -h -t %21 -P -F #{pane_id}",
       "select-pane -t %24 -T scout-1",
-      `send-keys -t %24 -l ${paneCommandLine(SHIM_CLI, started.json.launch, started.promptPath)}`,
+      `send-keys -t %24 -l ${paneCommandLine(SHIM_CLI, started.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
   });
@@ -2052,7 +2164,7 @@ describe("skills/pmux/launch.ts", () => {
     assert.deepEqual(paneCalls, [
       "split-window -d -h -t %21 -P -F #{pane_id}",
       "select-pane -t %24 -T scout-1",
-      `send-keys -t %24 -l ${paneCommandLine(installCli, started.json.launch, started.promptPath)}`,
+      `send-keys -t %24 -l ${paneCommandLine(installCli, started.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
   });
