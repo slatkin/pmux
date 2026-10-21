@@ -32,7 +32,7 @@ The skill launcher SHALL find the package root, meaning a directory that holds `
 - **THEN** the launcher exits non-zero with an error naming `pi install`, and no pane is split
 
 ### Requirement: Role resolution
-`start` SHALL resolve a role name with the same lookup the extension uses: the `.pi/agents/` directory of the child's working directory, then the global agents directory (`PI_CODING_AGENT_DIR`, or `~/.pi/agent`, followed by `agents/`), then the package's `agents/`. The first file that exists wins. It SHALL use the frontmatter `model`, `thinking` and `tools` fields, the `auto-exit` flag, the `spawning` flag and the `deny-tools` list, and the body as the appended system prompt. The child SHALL get the same denied tools that a pi-parent launch of the same role gives. Role files with LF or CRLF line endings SHALL parse the same way. An unknown role, or a role whose `model` is empty, MUST fail before a pane is split.
+`start` SHALL resolve a role name with the same lookup the extension uses: the `.pi/agents/` directory of the child's working directory, then the global agents directory (`PI_CODING_AGENT_DIR`, or `~/.pi/agent`, followed by `agents/`), then the package's `agents/`. The first file that exists wins. It SHALL use the frontmatter `model`, `thinking`, `tools` and `surface` fields, the `auto-exit` flag, the `spawning` flag and the `deny-tools` list, and the body as the appended system prompt. The child SHALL get the same denied tools that a pi-parent launch of the same role gives. Role files with LF or CRLF line endings SHALL parse the same way. An unknown role, or a role whose `model` is empty, MUST fail before a pane is split.
 
 #### Scenario: Auto-exit role
 - **WHEN** the resolved role's frontmatter has `auto-exit: true`
@@ -64,7 +64,11 @@ The skill launcher SHALL find the package root, meaning a directory that holds `
 
 #### Scenario: CRLF role file
 - **WHEN** the role file uses CRLF line endings
-- **THEN** its model, tools, auto-exit flag, spawning flag, deny-tools list and body resolve the same as the LF version
+- **THEN** its model, tools, surface, auto-exit flag, spawning flag, deny-tools list and body resolve the same as the LF version
+
+#### Scenario: Floating role
+- **WHEN** the resolved role's frontmatter has `surface: float` and `start` runs without `--surface`
+- **THEN** the child opens as a float by the tmux-backend float rule
 
 ### Requirement: Launch contract
 `start` SHALL create a new pane by the tmux-backend placement rule, with the caller's pane as the anchor, without taking focus, and name it after the child. It SHALL write a launch spec that starts pi with `--session`, the env vars `pmux-done.ts` reads (with `PI_PMUX_SESSION` equal to `--session`), and the brief as the prompt. It SHALL remove `<session>.status` before it runs that spec, and then run the spec in the pane. On success it SHALL print exactly one JSON document on stdout, giving the pane id, the session file and the launch-spec path. Everything else SHALL go to stderr. Because every `start` is an external-orchestrator launch, it SHALL set `PI_PMUX_EXTERNAL_PARENT=1` in the launch spec env; a pi-parent launch does not set that key. A `resume` reuses the launch spec unchanged, so the resumed child carries the marker too.
@@ -137,14 +141,22 @@ After the child exits, the skill-path run wrapper SHALL print `__SUBAGENT_DONE_<
 - **THEN** no pane is addressed by title and no text is typed into any pane but the child's own
 
 ### Requirement: Resume in a new pane
-`resume --launch <spec> --prompt <file> [--name <child>]` SHALL create a new pane by the tmux-backend placement rule, with the caller's pane as the anchor, name it (after `--name`, or the child name stored in the spec), and run the existing launch spec there with the new prompt, so that pi resumes the same session with its context. Resume MUST NOT need the child's previous pane to exist. On success it SHALL print JSON with `pane` and `launch`.
+`resume --launch <spec> --prompt <file> [--name <child>]` SHALL create a new pane by the tmux-backend placement rule, with the caller's pane as the anchor, name it (after `--name`, or the child name stored in the spec), and run the existing launch spec there with the new prompt, so that pi resumes the same session with its context. Resume MUST NOT need the child's previous pane to exist. The surface SHALL be `--surface` when given, else the role surface stored in the spec, else the `config.json` default. On success it SHALL print JSON with `pane` and `launch`.
 
 #### Scenario: Resume after close-on-done
 - **WHEN** a child's pane closed on done and the orchestrator resumes it with a follow-up prompt
 - **THEN** a new pane runs pi on the same session file, and the child keeps its earlier context
 
+#### Scenario: Resume keeps the role's float
+- **WHEN** a child of a role with `surface: float` was started with `start`, and it is resumed with `resume` and no `--surface`
+- **THEN** the resumed child opens as a float
+
+#### Scenario: Spec without a role surface
+- **WHEN** a child is resumed from a launch spec that holds no role surface, and no `--surface` is given
+- **THEN** the `config.json` default applies
+
 ### Requirement: Per-child launch spec
-`start` SHALL write a per-child launch spec under the scratch directory. It holds everything needed to start the child except its pane and prompt. The run wrapper SHALL set `PI_PMUX_SURFACE` from `TMUX_PANE` at runtime, so that the spec can run in any later pane. An invalid spec SHALL make the wrapper exit non-zero, naming the file, without starting a child.
+`start` SHALL write a per-child launch spec under the scratch directory. It holds everything needed to start the child except its pane and prompt. When the resolved role has a valid `surface:`, the spec SHALL hold that value. The run wrapper SHALL set `PI_PMUX_SURFACE` from `TMUX_PANE` at runtime, so that the spec can run in any later pane. An invalid spec SHALL make the wrapper exit non-zero, naming the file, without starting a child.
 
 #### Scenario: Spec is pane-independent
 - **WHEN** the launch spec runs in a pane other than the one it was written for
@@ -153,6 +165,14 @@ After the child exits, the skill-path run wrapper SHALL print `__SUBAGENT_DONE_<
 #### Scenario: Corrupt spec
 - **WHEN** `run` is given a spec file that is not valid JSON or lacks the child command
 - **THEN** it exits non-zero naming the file, and no child starts
+
+#### Scenario: Spec records the role surface
+- **WHEN** `start` launches a role whose frontmatter has `surface: tab`
+- **THEN** the launch spec holds the surface `tab`
+
+#### Scenario: Per-call surface is not recorded
+- **WHEN** `start` runs with `--surface float` for a role with no `surface:`
+- **THEN** the launch spec holds no surface
 
 ### Requirement: Default tool list
 A role with no `tools` frontmatter line SHALL run with the default tools `read,bash,edit,write,grep,find,ls` plus `caller_ping`, `pmux_done` and `pmux_message`. This SHALL apply to skill launches and pi-parent launches alike, from a single shared definition. For pi-parent launches this is an intended narrowing: such roles previously received every pi tool.
@@ -213,3 +233,18 @@ The CLI SHALL provide `last-message --session <file>`, which prints the text of 
 #### Scenario: Invalid value
 - **WHEN** `start` runs with `--surface window`
 - **THEN** it exits non-zero with an error naming `pane` and `tab`, and no pane is created
+
+### Requirement: Float surface flag
+`start` and `resume` SHALL accept `--surface float` in addition to `pane` and `tab`. The error for an invalid value SHALL name `pane`, `tab` and `float`. For `start`, the surface SHALL be `--surface` when given, else the role's `surface:`, else the `config.json` default.
+
+#### Scenario: Ad-hoc float
+- **WHEN** `start` runs with `--surface float` for a role with no `surface:`
+- **THEN** the child opens as a float by the tmux-backend float rule
+
+#### Scenario: Flag beats the role
+- **WHEN** `start` runs with `--surface pane` for a role with `surface: float`
+- **THEN** the child is placed by the tmux-backend split rule
+
+#### Scenario: Invalid value names float
+- **WHEN** `start` runs with `--surface window`
+- **THEN** it exits non-zero with an error naming `pane`, `tab` and `float`, and no pane is created
