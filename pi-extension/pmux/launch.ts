@@ -43,6 +43,9 @@ export interface LaunchSpec {
   /** Parent's name, as the brief footer (and a future `pending --parent`
    * listing) present it to the child. */
   parent?: string;
+  /** Report mode. Written only for `send`; an absent field reads as `last`,
+   * where the report is the child's last assistant message. */
+  report?: "last" | "send";
 }
 
 function invalid(message: string): never {
@@ -88,6 +91,12 @@ export function validateLaunchSpec(data: unknown): LaunchSpec {
   const title = optionalString(spec.title, "title");
   const parent = optionalString(spec.parent, "parent");
 
+  const report = spec.report;
+  if (report !== undefined && report !== "last" && report !== "send") {
+    invalid("report must be last or send");
+  }
+  const reportMode = report as "last" | "send" | undefined;
+
   // The stored surface is parsed, not validated: an unknown value is dropped
   // and does not make the file invalid, matching the role key's treatment.
   const surface = parseSurfacePlacement(spec.surface);
@@ -112,6 +121,7 @@ export function validateLaunchSpec(data: unknown): LaunchSpec {
     args: args as string[],
     ...(cwd !== undefined ? { cwd } : {}),
     ...(parent !== undefined ? { parent } : {}),
+    ...(reportMode !== undefined ? { report: reportMode } : {}),
     ...(sessionFile !== undefined ? { sessionFile } : {}),
     ...(title !== undefined ? { title } : {}),
     ...(surface !== undefined ? { surface } : {}),

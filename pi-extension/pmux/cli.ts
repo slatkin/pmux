@@ -73,7 +73,7 @@ const MIN_NODE: readonly [number, number] = [22, 18];
 
 const USAGE = [
   "Usage:",
-  "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>]",
+  "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--report last|send]",
   "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>]",
   "  node cli.ts run <spec> [<prompt>]",
   "  node cli.ts last-message --session <file>",
@@ -89,6 +89,7 @@ const CLI_OPTIONS = {
   parent: { type: "string" },
   scratch: { type: "string" },
   "close-grace-ms": { type: "string" },
+  report: { type: "string" },
   launch: { type: "string" },
   prompt: { type: "string" },
   session: { type: "string" },
@@ -107,6 +108,7 @@ interface CliValues {
   parent?: string;
   scratch?: string;
   "close-grace-ms"?: string;
+  report?: string;
   launch?: string;
   prompt?: string;
   session?: string;
@@ -199,6 +201,26 @@ If you are blocked, write your question as your last assistant message and stop.
 If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.`;
 }
 
+/**
+ * The send-mode parent-contact footer: the report is typed into the parent's
+ * pane with the `send` command. The auto-exit claim is conditional because a
+ * role without `auto-exit: true` keeps running and gets the completion nudge.
+ */
+function sendFooter(parent: string, cliPath: string): string {
+  return `Your parent is the tmux pane ${parent}.
+Plain text printed in your own pane is never seen. The only way to reach it is bash: node ${cliPath} send --to ${parent} --text '<text>'.
+
+If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of the following before you stop:
+1. Finish the task.
+2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
+   This is what wakes the orchestrator with your report — without it, it only learns that you exited.
+   The report text may be long or contain quotes — pass it however is convenient (for example read it from a file into the argument); only the target pane matters.
+3. Then call the pmux_done tool to close your session.
+
+If you are blocked, send your question with the send command and stop. The session closes; the parent resumes it with the answer. Do not try to reach the parent any other way.
+If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report with the send command first, then call pmux_done.`;
+}
+
 /** Parse `--close-grace-ms`, defaulting to `DEFAULT_CLOSE_GRACE_MS`. */
 function closeGraceMs(value: string | undefined): number {
   if (value === undefined) return DEFAULT_CLOSE_GRACE_MS;
@@ -209,8 +231,21 @@ function closeGraceMs(value: string | undefined): number {
   return grace;
 }
 
+/**
+ * The `--report` flag of `start`. A missing flag means the default `last`
+ * mode; an unknown value is a usage error (the caller exits 2 and the
+ * message goes to stderr).
+ */
+function reportMode(values: CliValues, writeErr: (text: string) => void): "last" | "send" | null {
+  const requested = values.report;
+  if (requested === undefined || requested === "last") return "last";
+  if (requested === "send") return "send";
+  writeErr(`invalid --report value: ${requested} (expected last or send)\n`);
+  return null;
+}
+
 /** `start`: resolve a role, write the launch spec and run it in a new pane. */
-function startCommand(values: CliValues, deps: CliDeps): number {
+function startCommand(values: CliValues, deps: CliDeps, report: "last" | "send"): number {
   const env = deps.env ?? process.env;
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
 
@@ -262,7 +297,14 @@ function startCommand(values: CliValues, deps: CliDeps): number {
   }
   const briefText = readFileSync(brief, "utf8");
   writeFileSync(rolePromptPath, definition.body ? `${definition.body}\n` : "");
-  writeFileSync(promptPath, `${briefText}\n${parentFooter(parent, callerPaneId(env))}\n`);
+  const footer =
+    report === "send" ? sendFooter(parent, CLI_PATH) : parentFooter(parent, callerPaneId(env));
+  writeFileSync(promptPath, `${briefText}\n${footer}\n`);
+  // In send mode the report is a bash command, so the child must keep the
+  // bash tool on both sides: the allowlist gains it and the denied set loses
+  // it (`PI_DENY_TOOLS` wins over `--tools`).
+  const denied = resolveDenyTools(definition);
+  if (report === "send") denied.delete("bash");
   const specEnv = encodeChildEnv({
     name,
     agent: role,
@@ -271,7 +313,7 @@ function startCommand(values: CliValues, deps: CliDeps): number {
     activityFile: join(scratch, `${base}.activity.json`),
     externalParent: true,
     autoExit: definition.autoExit === true,
-    denyTools: [...resolveDenyTools(definition)],
+    denyTools: [...denied],
   });
 
   const spec: LaunchSpec = {
@@ -290,7 +332,7 @@ function startCommand(values: CliValues, deps: CliDeps): number {
       "--append-system-prompt",
       rolePromptPath,
       "--tools",
-      buildSubagentToolAllowlist(definition.tools),
+      buildSubagentToolAllowlist(definition.tools, report === "send" ? ["bash"] : []),
       "--name",
       name,
     ],
@@ -298,6 +340,7 @@ function startCommand(values: CliValues, deps: CliDeps): number {
     title: buildPaneTitle(name, briefText),
     closeOnDone: { graceMs },
     parent,
+    ...(report === "send" ? { report: "send" as const } : {}),
     ...(definition.surface !== undefined ? { surface: definition.surface } : {}),
   };
   writeLaunchSpec(specPath, spec);
@@ -334,10 +377,11 @@ function resumeCommand(values: CliValues, deps: CliDeps): number {
   let sentPrompt = promptPath;
   if (spec.parent !== undefined) {
     sentPrompt = `${promptPath}.resume.md`;
-    writeFileSync(
-      sentPrompt,
-      `${readFileSync(promptPath, "utf8")}\n${parentFooter(spec.parent, callerPaneId(env))}\n`,
-    );
+    const footer =
+      spec.report === "send"
+        ? sendFooter(spec.parent, CLI_PATH)
+        : parentFooter(spec.parent, callerPaneId(env));
+    writeFileSync(sentPrompt, `${readFileSync(promptPath, "utf8")}\n${footer}\n`);
   }
   const paneLine = paneCommandLine(CLI_PATH, launchPath, sentPrompt);
 
@@ -531,8 +575,19 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     writeErr(`${USAGE}\n`);
     return 2;
   }
-  if (command === "start") return startCommand(values as CliValues, deps);
-  if (command === "resume") return resumeCommand(values as CliValues, deps);
+  if (command === "resume") {
+    // The mode is a launch property, so a flag here would be a silent no-op:
+    // the spec still says `last` while the orchestrator believes `send`.
+    if (values.report !== undefined) {
+      writeErr("invalid --report for resume: the launch spec holds the mode (use start)\n");
+      return 1;
+    }
+    return resumeCommand(values as CliValues, deps);
+  }
+  if (command === "start") {
+    const report = reportMode(values as CliValues, writeErr);
+    return report === null ? 2 : startCommand(values as CliValues, deps, report);
+  }
   if (command === "run") return runCommand(positionals.slice(1), deps);
   if (command === "last-message") return lastMessageCommand(values as CliValues, deps);
   if (command === "wait") return await waitCommand(values as CliValues, deps);

@@ -163,6 +163,23 @@ describe("launch spec", () => {
   it("rejects an unknown version", () => {
     assert.throws(() => validateLaunchSpec({ ...SPEC, version: 2 }), /unknown version 2/);
   });
+
+  it("rejects an unknown report mode", () => {
+    assert.throws(
+      () => validateLaunchSpec({ ...SPEC, report: "email" }),
+      /report must be last or send/,
+    );
+  });
+
+  it("reads an absent report field as last and keeps the field out", () => {
+    withTempDir((dir) => {
+      const specPath = join(dir, "last.json");
+      writeLaunchSpec(specPath, SPEC);
+      const spec = readLaunchSpec(specPath);
+      assert.equal(spec.report, undefined);
+      assert.equal("report" in spec, false);
+    });
+  });
 });
 
 describe("paneCommandLine", () => {
@@ -624,6 +641,8 @@ interface StartCase {
   env?: NodeJS.ProcessEnv;
   /** Config file holding the `surface` default; defaults to the sandbox config. */
   configPath?: string;
+  /** Report mode passed as `--report`; absent means the flag is not given. */
+  report?: "last" | "send";
 }
 
 interface Started extends CliResult {
@@ -658,6 +677,7 @@ async function runStartWith(entry: CliEntry, options: StartCase): Promise<Starte
   ];
   if (options.closeGraceMs !== undefined)
     argv.push("--close-grace-ms", String(options.closeGraceMs));
+  if (options.report !== undefined) argv.push("--report", options.report);
 
   const result = await capture(entry, argv, env, options.configPath);
   const json = JSON.parse(result.stdout) as Started["json"];
@@ -837,6 +857,116 @@ describe("cli.ts start", () => {
       argValue(res.spec.args, "--tools"),
       "read,bash,edit,write,grep,find,ls,caller_ping,pmux_done,pmux_message",
     );
+  });
+
+  it("keeps the last footer and no report field without the flag", async () => {
+    const cwd = mkdtempSync(join(workdir, "lastmode-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const res = await runStart({ cwd, role: "doer" });
+
+    // The spec holds no report field: a last-mode spec stays byte for byte
+    // what it was before the --report flag existed.
+    assert.equal(res.spec.report, undefined);
+    const promptText = readFileSync(res.promptPath, "utf8");
+    assert.ok(
+      promptText.endsWith(
+        `Your parent is a session named orch (pane %21).\n` +
+          `Plain text printed in your own pane is never seen. Your last assistant message is the report the parent reads.\n` +
+          `\n` +
+          `So do ALL of the following before you stop:\n` +
+          `1. Finish the task.\n` +
+          `2. Write your final report as your last assistant message: the verdict, the commit SHA, the files changed, the verification, the deviations and the open questions. Put the verdict first.\n` +
+          `3. Then call the pmux_done tool to close your session.\n` +
+          `\n` +
+          `If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.\n` +
+          `If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.\n`,
+      ),
+    );
+  });
+
+  it("records report send and appends the send footer", async () => {
+    const cwd = mkdtempSync(join(workdir, "sendmode-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const res = await runStart({ cwd, role: "doer", report: "send", parent: "%12" });
+
+    assert.equal(res.spec.report, "send");
+    assert.equal(res.spec.parent, "%12");
+    const promptText = readFileSync(res.promptPath, "utf8");
+    assert.ok(promptText.includes("Your parent is the tmux pane %12."));
+    assert.ok(promptText.includes(`send --to %12 --text`));
+    assert.ok(promptText.includes("pmux_done"));
+    assert.ok(
+      promptText.includes("If you are blocked, send your question with the send command and stop."),
+    );
+    assert.ok(
+      promptText.includes(
+        "ignore its claim that your last message was already delivered — send your report with the send command first",
+      ),
+    );
+    assert.ok(
+      promptText.includes(
+        "If this session auto-exits, it closes the first time you stop generating:",
+      ),
+    );
+    assert.ok(
+      promptText.includes("Whether it does or not, do ALL of the following before you stop:"),
+    );
+    assert.doesNotMatch(promptText, /last assistant message is the report the parent reads/);
+    // The report step and the wake-up hint name this checkout's CLI.
+    assert.ok(promptText.includes(`node ${CLI} send --to %12 --text '<verdict`));
+  });
+
+  it("exits 2 on an unknown --report value before writing anything", async () => {
+    const dir = mkdtempSync(join(workdir, "report-bad-"));
+    const cwd = mkdtempSync(join(dir, "cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low", "Body.");
+    const brief = join(dir, "brief.md");
+    writeFileSync(brief, "# Task\n");
+    const scratch = join(dir, "scratch");
+    const res = await runCli(
+      [
+        "start",
+        "--name",
+        "w",
+        "--role",
+        "doer",
+        "--cwd",
+        cwd,
+        "--brief",
+        brief,
+        "--parent",
+        "orch",
+        "--scratch",
+        scratch,
+        "--report",
+        "email",
+      ],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 2);
+    assert.match(res.stderr, /email/);
+    assert.equal(existsSync(scratch), false);
+    assert.equal(paneCalls.length, 0);
+  });
+
+  it("adds bash in send mode and clears it from the denied set", async () => {
+    const cwd = mkdtempSync(join(workdir, "sendbash-"));
+    writeRole(cwd, "nobash", "model: m\nthinking: low\ntools: read\ndeny-tools: bash", "Body.");
+    const res = await runStart({ cwd, role: "nobash", report: "send" });
+    assert.equal(
+      argValue(res.spec.args, "--tools"),
+      "read,bash,caller_ping,pmux_done,pmux_message",
+    );
+    // The denied set lost bash, so no PI_DENY_TOOLS remains at all.
+    assert.equal("PI_DENY_TOOLS" in res.spec.env, false);
+  });
+
+  it("does not add bash in last mode for a role whose tools omit it", async () => {
+    const cwd = mkdtempSync(join(workdir, "lastbash-"));
+    writeRole(cwd, "nobash", "model: m\nthinking: low\ntools: read\ndeny-tools: bash", "Body.");
+    const res = await runStart({ cwd, role: "nobash" });
+    assert.equal(argValue(res.spec.args, "--tools"), "read,caller_ping,pmux_done,pmux_message");
+    assert.equal(res.spec.env.PI_DENY_TOOLS, "bash");
   });
 
   it("stores the close grace from --close-grace-ms", async () => {
@@ -1138,6 +1268,68 @@ describe("cli.ts resume", () => {
     assert.equal(spec.closeOnDone?.graceMs, 2500);
   });
 
+  it("appends the send footer to a resumed send-mode child", async () => {
+    const cwd = mkdtempSync(join(workdir, "resumesend-cwd-"));
+    writeRole(cwd, "doer", "model: m\nthinking: low\nauto-exit: true", "Body.");
+    const started = await runStart({
+      cwd,
+      role: "doer",
+      child: "fix-7",
+      report: "send",
+      parent: "%12",
+    });
+    paneCalls.length = 0;
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up task.\n");
+
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 0);
+    const sent = readFileSync(`${followup}.resume.md`, "utf8");
+    assert.ok(sent.startsWith("Follow-up task.\n"));
+    assert.ok(sent.includes("Your parent is the tmux pane %12."));
+    assert.ok(sent.includes(`send --to %12 --text`));
+    assert.doesNotMatch(sent, /last assistant message is the report the parent reads/);
+  });
+
+  it("appends the last footer to a resumed last-mode child", async () => {
+    const started = await startNamedChild();
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up task.\n");
+
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--name", "fix-7"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 0);
+    const sent = readFileSync(`${followup}.resume.md`, "utf8");
+    assert.ok(sent.includes("Your parent is a session named orch (pane %21)."));
+    assert.ok(sent.includes("Your last assistant message is the report the parent reads"));
+  });
+
+  it("rejects --report on resume without touching the stored mode", async () => {
+    const started = await startNamedChild();
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up task.\n");
+
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--report", "send"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout, "");
+    assert.match(res.stderr, /--report/);
+    assert.match(res.stderr, /launch spec/);
+    // Nothing launched, and the spec still holds no report field.
+    assert.equal(
+      paneCalls.some((call) => call.startsWith("split-window")),
+      false,
+    );
+    assert.equal(readLaunchSpec(started.json.launch).report, undefined);
+  });
+
   it("keeps the external-parent marker in the spec after a resume", async () => {
     const cwd = mkdtempSync(join(workdir, "external-cwd-"));
     writeRole(cwd, "doer", "model: m\nthinking: low\nauto-exit: true", "Body.");
@@ -1296,6 +1488,29 @@ describe("cli.ts run", () => {
       );
       await assert.rejects(runCli(["run", specPath], tmuxEnv()), (error: Error) => {
         assert.match(error.message, /Cannot read launch spec/);
+        assert.ok(error.message.includes(specPath));
+        return true;
+      });
+    });
+  });
+
+  it("fails naming the file when the spec holds an unknown report mode", async () => {
+    await withTempDirAsync(async (dir) => {
+      const specPath = join(dir, "report.json");
+      writeFileSync(
+        specPath,
+        JSON.stringify({
+          version: LAUNCH_SPEC_VERSION,
+          name: "x",
+          env: {},
+          command: "pi",
+          args: [],
+          report: "email",
+        }),
+      );
+      await assert.rejects(runCli(["run", specPath], tmuxEnv()), (error: Error) => {
+        assert.match(error.message, /Cannot read launch spec/);
+        assert.match(error.message, /report must be last or send/);
         assert.ok(error.message.includes(specPath));
         return true;
       });
