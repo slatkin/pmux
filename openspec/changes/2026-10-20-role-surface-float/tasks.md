@@ -4,8 +4,8 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
 
 ## 1. Placement values and resolution helper
 
-- [ ] 1.1 In `pi-extension/pmux/placement.ts`, add `"float"` to `SurfacePlacement`. Make `parseSurfacePlacement` accept `float`. Add `SurfaceDefault = "pane" | "tab"`, `parseSurfaceDefault` (which rejects `float`), and `resolvePlacement(call, role, fallback)` (design decisions 1 and 2). Switch `parseSurfaceConfig`, `loadSurfaceConfig` and `writeSurfaceConfig` in `status.ts` to `SurfaceDefault`. Verify with `pnpm run typecheck`.
-- [ ] 1.2 In `test/test.ts`, add surface-config cases:
+- [x] 1.1 In `pi-extension/pmux/placement.ts`, add `"float"` to `SurfacePlacement`. Make `parseSurfacePlacement` accept `float`. Add `SurfaceDefault = "pane" | "tab"`, `parseSurfaceDefault` (which rejects `float`), and `resolvePlacement(call, role, fallback)` (design decisions 1 and 2). Switch `parseSurfaceConfig`, `loadSurfaceConfig` and `writeSurfaceConfig` in `status.ts` to `SurfaceDefault`. Verify with `pnpm run typecheck`.
+- [x] 1.2 In `test/test.ts`, add surface-config cases:
   - `"float"` in `config.json` loads as `pane`;
   - `parseSurfacePlacement("float")` gives `float`;
   - `parseSurfaceDefault("float")` gives `undefined`;
