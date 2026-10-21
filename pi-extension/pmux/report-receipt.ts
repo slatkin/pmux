@@ -43,19 +43,18 @@ export function appendReportReceipt(sessionFile: string, receipt: ReportReceipt)
 }
 
 /**
- * Parse one receipt line. Returns the record, or null when the line is not
- * a receipt: a malformed line, or a JSON object whose shape does not match
- * `ReportReceipt` (a string `to` and `at`, a number `bytes`).
+ * The pane a receipt line names, or null when the line names none.
+ *
+ * The count rule is the spec's: a line counts when it parses as JSON and
+ * its `to` is a string. The other fields belong to the writer, and a line
+ * that lacks them still names a pane.
  */
-function parseReceipt(line: string): ReportReceipt | null {
+function receiptTarget(line: string): string | null {
   try {
     const data: unknown = JSON.parse(line);
     if (data === null || typeof data !== "object") return null;
-    const fields = data as Record<string, unknown>;
-    if (typeof fields.to !== "string") return null;
-    if (typeof fields.at !== "string") return null;
-    if (typeof fields.bytes !== "number") return null;
-    return data as ReportReceipt;
+    const to = (data as Record<string, unknown>).to;
+    return typeof to === "string" ? to : null;
   } catch {
     return null;
   }
@@ -81,7 +80,7 @@ export function countReportsTo(sessionFile: string | undefined, target: string):
   for (const line of content.split("\n")) {
     if (!line) continue;
     // A malformed line proves nothing about the target: skip it.
-    if (parseReceipt(line)?.to === target) count += 1;
+    if (receiptTarget(line) === target) count += 1;
   }
   return count;
 }

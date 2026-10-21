@@ -26,7 +26,7 @@ Unicode is untouched. A report in any language arrives as it was written.
 
 ## Where the rule lives
 
-`pane-input.ts` is host independent, next to `exit-sidecar.ts` and `status-file.ts`: the encoding is a property of terminal input, not of tmux. The tmux backend calls it from `agentPrompt`, so there is one rule at one place, and every pane input pmux sends inherits it: the `send` report, `pmux_message` to a child or a sibling, the send-mode wake-up, the idle-watchdog nudge.
+`pane-input.ts` is host independent, next to `exit-sidecar.ts` and `status-file.ts`: the encoding is a property of terminal input, not of tmux. The two report-channel call sites call it — the `send` command and the send-mode wake-up, which quotes the child's ping question, the two ways a report reaches a pane.
 
 Encoding at the two report-channel call sites rather than inside `agentPrompt` means no caller can forget it for the channel that matters, and `pmux_message` keeps the behavior the luvus-messaging spec gives it ("the text is typed as it is"). The two call sites are the `send` command and the send-mode wake-up, which quotes the child's ping question — the child's own text, and the other way a report reaches a pane.
 
@@ -56,4 +56,3 @@ The send footer told the child to keep the report on one line, which put the bur
 
 - `test/pane-input.test.ts`: the encoding table, and that a text without control characters comes back unchanged.
 - `test/cli.test.ts`: the multi-line `send` case types one line with the visible `\n`, the receipt still counts the text as received, and a ping question that spans lines is encoded in the wake-up.
-- `test/tmux.test.ts`: `agentPrompt` encodes before typing.
