@@ -46,5 +46,5 @@ The porting source is `/home/slatkin/Dev/foreman` (`src/cli.ts`, `src/run.ts`, `
 
 ## 8. Gates
 
-- [ ] 8.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck`, `pnpm test`.
-- [ ] 8.2 Run `openspec validate send-report-channel --strict`.
+- [x] 8.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck`, `pnpm test`.
+- [x] 8.2 Run `openspec validate send-report-channel --strict`.
