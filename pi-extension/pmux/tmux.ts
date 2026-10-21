@@ -140,7 +140,9 @@ interface PaneRow {
   height: number;
   /** 1 when the pane floats over the window's tiled panes. */
   floating: number;
-  /** The pane's outer box, border included, in window cells. */
+  /** The pane's content-box origin in window cells; with a border drawn it
+   * sits one cell inside the outer box, so the outer corner is
+   * `left - border` / `top - border` (`border` is 0 for `none`, else 1). */
   left: number;
   top: number;
   /** The outer size of the pane's window. */
