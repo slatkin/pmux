@@ -86,16 +86,16 @@ Install the `pmux` skill first (see the [README](../README.md#external-orchestra
 The skill launcher `launch.ts` prepares everything outside the child pane. It finds the child extension, resolves the role, appends the parent-contact footer to the brief, splits and names a new pane, and writes the launch spec. A launch spec is a JSON file that starts one child. Run it with `node`:
 
 ```bash
-node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--surface pane|tab]
+node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--surface pane|tab|float]
 ```
 
 On success it prints JSON with the pane id, the session file, and the launch-spec path. A follow-up always runs in a new pane from the same launch spec:
 
 ```bash
-node <skill-dir>/launch.ts resume --launch <path> --prompt <file> [--name <child>] [--surface pane|tab]
+node <skill-dir>/launch.ts resume --launch <path> --prompt <file> [--name <child>] [--surface pane|tab|float]
 ```
 
-The `--surface` flag places the new pane. `pane` (default) places it automatically in the caller's window: pmux splits the caller's newest living child pane, or the caller's own pane when it has none, side by side when that pane is at least twice as wide as it is tall and stacked below otherwise. `tab` opens its own workspace tab. The legacy values `right` and `down` are still accepted and mean `pane`. If the flag is absent, the value comes from the `surface` key in the extension `config.json`. On a `done` sidecar the child pane closes itself, split or tab.
+The `--surface` flag places the new pane. `pane` (default) places it automatically in the caller's window: pmux splits the caller's newest living child pane, or the caller's own pane when it has none, side by side when that pane is at least twice as wide as it is tall and stacked below otherwise. `tab` opens its own workspace tab. `float` opens a floating pane in the caller's window, half the window's width and height, at the top right, while the caller keeps the focus (successive floats cascade down and left). The legacy values `right` and `down` are still accepted and mean `pane`. When the flag is absent, the role's `surface:` frontmatter applies when it names `pane`, `tab` or `float`, and then the extension's `config.json`. On a resume, the role surface stored in the launch spec applies — a resume keeps the role's surface — and then the extension's `config.json`. On a `done` sidecar the child pane closes itself, split, tab or float.
 
 For the report cross-check, run `node <skill-dir>/launch.ts last-message --session <file>`. It prints the last assistant message of the session, or `(no assistant message)`.
 
