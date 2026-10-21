@@ -15,8 +15,8 @@ Precondition: `2026-10-20-dwindle-pane-placement` is applied. Start each group f
 
 ## 2. Role frontmatter key
 
-- [ ] 2.1 In `pi-extension/pmux/agent-defs.ts`, add `surface?: SurfacePlacement` to `AgentDefaults`, and read `surface:` with `parseSurfacePlacement` (an invalid value gives `undefined`). Verify with `pnpm run typecheck`.
-- [ ] 2.2 Add `parseAgentDefinition` tests: `surface: float`, `surface: tab`, `surface: window` (undefined), no key (undefined), and a CRLF file with `surface: float`. Verify with `node --test test/test.ts`.
+- [x] 2.1 In `pi-extension/pmux/agent-defs.ts`, add `surface?: SurfacePlacement` to `AgentDefaults`, and read `surface:` with `parseSurfacePlacement` (an invalid value gives `undefined`). Verify with `pnpm run typecheck`.
+- [x] 2.2 Add `parseAgentDefinition` tests: `surface: float`, `surface: tab`, `surface: window` (undefined), no key (undefined), and a CRLF file with `surface: float`. Verify with `node --test test/test.ts`.
 - [ ] 2.3 In `docs/guide.md`, add `surface` to the frontmatter table and a short `### surface` section. The section says: `pane`, `tab` or `float`; it is used when the call gives no `surface`; it is kept on resume; `float` is never a default. Check by hand that the text matches the `luvus-surface` delta.
 
 ## 3. Float placement and cascade in the tmux backend
