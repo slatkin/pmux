@@ -427,6 +427,8 @@ async function runCommand(positionals: string[], deps: CliDeps): Promise<number>
     stdout: deps.stdout,
     stderr: deps.stderr,
     sleep: deps.sleep,
+    // The send-mode wake-up names this CLI for reading the child's session.
+    cliPath: CLI_PATH,
   };
   return runSpec(
     { ...spec, command, args: [...resolved.slice(1), ...spec.args] },

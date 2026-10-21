@@ -68,6 +68,8 @@ interface RunOutcome {
   record: { args: string[]; env: Record<string, string> } | null;
   /** `<session>.exit` contents, or null when the stub wrote none. */
   sidecar: string | null;
+  /** Wake-up messages the wrapper sent, in order. */
+  woken: Array<{ to: string; text: string }>;
 }
 
 interface RunCase {
@@ -77,6 +79,8 @@ interface RunCase {
   env?: NodeJS.ProcessEnv;
   /** Prompt path passed to `runSpec`, if any. */
   prompt?: string;
+  /** Parent wake-up override; defaults to a recorder surfaced as `woken`. */
+  sendToParent?: (to: string, text: string) => void;
 }
 
 /** Run the wrapper against the stub child with every side effect recorded. */
@@ -86,6 +90,7 @@ async function runStubCase(dir: string, options: RunCase = {}): Promise<RunOutco
   const stderr: string[] = [];
   const sleptMs: number[] = [];
   const closedPanes: string[] = [];
+  const woken: Array<{ to: string; text: string }> = [];
   const spec: LaunchSpec = {
     version: LAUNCH_SPEC_VERSION,
     name: "scout-1",
@@ -111,6 +116,7 @@ async function runStubCase(dir: string, options: RunCase = {}): Promise<RunOutco
       sleptMs.push(ms);
     },
     closePane: (pane) => closedPanes.push(pane),
+    sendToParent: options.sendToParent ?? ((to, text) => woken.push({ to, text })),
   });
 
   const record = existsSync(recordPath)
@@ -124,6 +130,7 @@ async function runStubCase(dir: string, options: RunCase = {}): Promise<RunOutco
     closedPanes,
     record,
     sidecar: exitPath !== undefined && existsSync(exitPath) ? readFileSync(exitPath, "utf8") : null,
+    woken,
   };
 }
 
@@ -359,9 +366,9 @@ describe("runSpec", () => {
   });
 
   // A skill launch carries the external-parent marker even with `parent` set:
-  // the wrapper contacts nobody, and the wrapper-error sidecar logic is
-  // untouched.
-  it("contacts nobody when the child exits", async () => {
+  // the wrapper contacts nobody in last mode, and the wrapper-error sidecar
+  // logic is untouched.
+  it("contacts nobody when a last-mode child exits", async () => {
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, {
         spec: { parent: "orch" },
@@ -370,11 +377,219 @@ describe("runSpec", () => {
       assert.equal(result.stdout, "__SUBAGENT_DONE_0__\n");
       assert.equal(result.stderr, "");
       assert.deepEqual(result.closedPanes, []);
+      assert.deepEqual(result.woken, []);
       // The wrapper-error sidecar logic is untouched: a child that wrote no
       // sidecar still gets the wrapper's `error` sidecar.
       const sidecar = result.sidecar ? JSON.parse(result.sidecar) : null;
       assert.equal(sidecar?.type, "error");
       assert.equal(sidecar?.source, "wrapper");
+    });
+  });
+
+  // The invariance the wake-up tests guard: only a `send` spec with a parent
+  // may contact the parent. A `last` spec with a parent must stay silent.
+  it("contacts nobody when the spec has a parent and no report mode", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12" },
+        env: { PI_STUB_EXIT_BODY: '{"type":"done"}' },
+      });
+      assert.deepEqual(result.woken, []);
+      assert.equal(result.stderr, "");
+    });
+  });
+
+  it("wakes the parent when a send-mode child exits without a report", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: { PI_STUB_EXIT_BODY: '{"type":"done"}' },
+      });
+      assert.deepEqual(result.woken, [
+        {
+          to: "%12",
+          text: `scout-1 done without sending a report. Read its last message: node <pmux-cli> last-message --session ${join(dir, "session.jsonl")}`,
+        },
+      ]);
+    });
+  });
+
+  it("wakes the parent with state error after the wrapper sidecar when a send-mode child crashes", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: { PI_STUB_CODE: "2" },
+      });
+      // The wrapper wrote its own `error` sidecar first, so the wake-up names
+      // that state instead of the raw exit code.
+      const sidecar = result.sidecar ? JSON.parse(result.sidecar) : null;
+      assert.equal(sidecar?.type, "error");
+      assert.equal(sidecar?.source, "wrapper");
+      assert.equal(result.woken.length, 1);
+      assert.match(result.woken[0]!.text, /^scout-1 error without sending a report/);
+      assert.match(result.woken[0]!.text, /last-message --session/);
+    });
+  });
+
+  it("wakes the parent with the crash state when a send-mode child left a terminal status", async () => {
+    await withTempDirAsync(async (dir) => {
+      // A `done` status the child wrote itself is terminal, so the wrapper
+      // writes no sidecar of its own and the wake-up carries the raw crash.
+      writeFileSync(
+        join(dir, "session.jsonl.status"),
+        JSON.stringify({ status: "done", at: new Date().toISOString() }),
+      );
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: { PI_STUB_CODE: "2" },
+      });
+      assert.equal(result.sidecar, null);
+      assert.equal(result.woken.length, 1);
+      assert.match(result.woken[0]!.text, /^scout-1 crashed \(code 2\) without sending a report/);
+      assert.match(result.woken[0]!.text, /last-message --session/);
+    });
+  });
+
+  it("quotes a ping sidecar in the wake-up", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: { PI_STUB_EXIT_BODY: '{"type":"ping","name":"w","message":"Which DB?"}' },
+      });
+      assert.deepEqual(result.woken, [{ to: "%12", text: "scout-1 pinged: Which DB?" }]);
+    });
+  });
+
+  it("names the launch spec's child in the wake-up, not the sidecar's name", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { name: "worker-a", parent: "%12", report: "send" },
+        env: { PI_STUB_EXIT_BODY: '{"type":"done"}' },
+      });
+      assert.equal(result.woken.length, 1);
+      assert.match(result.woken[0]!.text, /^worker-a done without sending a report/);
+    });
+  });
+
+  it("does not wake the parent when the send-mode child reported", async () => {
+    await withTempDirAsync(async (dir) => {
+      const receiptFile = join(dir, "session.jsonl.sent");
+      const line = `${JSON.stringify({ at: new Date().toISOString(), to: "%12", bytes: 4 })}\n`;
+      // The child delivers its report while it runs, so the receipt lands
+      // after the wrapper took its baseline count.
+      const result = await runStubCase(dir, {
+        spec: {
+          parent: "%12",
+          report: "send",
+          args: [
+            "-e",
+            `require("fs").appendFileSync(${JSON.stringify(receiptFile)}, ${JSON.stringify(line)})`,
+          ],
+        },
+      });
+      assert.deepEqual(result.woken, []);
+    });
+  });
+
+  it("still wakes the parent when the send-mode child reported only to another pane", async () => {
+    await withTempDirAsync(async (dir) => {
+      const receiptFile = join(dir, "session.jsonl.sent");
+      const line = `${JSON.stringify({ at: new Date().toISOString(), to: "%99", bytes: 4 })}\n`;
+      const result = await runStubCase(dir, {
+        spec: {
+          parent: "%12",
+          report: "send",
+          args: [
+            "-e",
+            `require("fs").appendFileSync(${JSON.stringify(receiptFile)}, ${JSON.stringify(line)})`,
+          ],
+        },
+      });
+      assert.equal(result.woken.length, 1);
+      assert.match(result.woken[0]!.text, /without sending a report/);
+    });
+  });
+
+  it("still wakes the parent when the only new receipt line is malformed", async () => {
+    await withTempDirAsync(async (dir) => {
+      const receiptFile = join(dir, "session.jsonl.sent");
+      const result = await runStubCase(dir, {
+        spec: {
+          parent: "%12",
+          report: "send",
+          args: [
+            "-e",
+            `require("fs").appendFileSync(${JSON.stringify(receiptFile)}, "not json at all\\n")`,
+          ],
+        },
+      });
+      assert.equal(result.woken.length, 1);
+    });
+  });
+
+  it("wakes the parent when receipts from an earlier run already sit in the file", async () => {
+    await withTempDirAsync(async (dir) => {
+      const receiptFile = join(dir, "session.jsonl.sent");
+      // `resume` reuses the session file, so a receipt from the earlier run
+      // must not stand in for a report of this run: the baseline is taken
+      // before the child starts.
+      const line = `${JSON.stringify({ at: new Date().toISOString(), to: "%12", bytes: 4 })}\n`;
+      writeFileSync(receiptFile, line);
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+      });
+      assert.equal(result.woken.length, 1);
+    });
+  });
+
+  it("reports a failed wake-up on stderr and keeps the child's exit code", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send" },
+        env: { PI_STUB_CODE: "3" },
+        sendToParent: () => {
+          throw new Error("pane gone");
+        },
+      });
+      assert.equal(result.code, 3);
+      assert.equal(result.stdout, "__SUBAGENT_DONE_3__\n");
+      assert.match(result.stderr, /Failed to wake parent %12: pane gone/);
+    });
+  });
+
+  it("wakes the parent before it closes the pane when a send-mode child is done", async () => {
+    await withTempDirAsync(async (dir) => {
+      const events: string[] = [];
+      const sessionFile = join(dir, "session.jsonl");
+      const sidecarPath = `${sessionFile}.exit`;
+      const code = await runSpec(
+        {
+          version: LAUNCH_SPEC_VERSION,
+          name: "worker-a",
+          env: {},
+          command: process.execPath,
+          // The child writes its `done` sidecar, so the pane qualifies for the
+          // close-on-done step after the wake-up.
+          args: [
+            "-e",
+            `require("fs").writeFileSync(${JSON.stringify(sidecarPath)}, '{"type":"done"}')`,
+          ],
+          sessionFile,
+          parent: "%12",
+          report: "send",
+          closeOnDone: { graceMs: 0 },
+        },
+        undefined,
+        {
+          env: { PATH: process.env.PATH, TMUX_PANE: "%77" },
+          stdout: () => {},
+          stderr: () => {},
+          sendToParent: (to) => events.push(`wake ${to}`),
+          closePane: (pane) => events.push(`close ${pane}`),
+        },
+      );
+      assert.equal(code, 0);
+      assert.deepEqual(events, ["wake %12", "close %77"]);
     });
   });
 

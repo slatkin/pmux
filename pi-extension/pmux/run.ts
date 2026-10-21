@@ -1,17 +1,17 @@
 /**
  * Pane-side run wrapper: start a child from a launch spec with no shell,
- * report its exit, and (skill launches only) close the pane after a `done`
- * or `handoff` sidecar.
+ * report its exit, wake the parent when a send-mode child left no report, and
+ * (skill launches only) close the pane after a `done` or `handoff` sidecar.
  *
  * This is the body of the CLI's `run` subcommand. `runSpec` returns the
  * child's exit code, so the CLI can exit with it.
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { buildPaneTitle, type LaunchSpec } from "./launch.ts";
-import { closeSurface } from "./tmux.ts";
+import { agentPrompt, closeSurface } from "./tmux.ts";
 import { exitSidecarPath, readExitSidecar, writeExitSidecar } from "./exit-sidecar.ts";
 import { isTerminalChildStatus, readChildStatus, writeChildStatus } from "./status-file.ts";
 
@@ -37,12 +37,55 @@ export interface RunSpecDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Pane close; defaults to the tmux backend. */
   closePane?: (pane: string) => void;
+  /** Parent wake-up; defaults to the tmux pane-input primitive. */
+  sendToParent?: (parent: string, text: string) => void;
+  /** The CLI path the send-mode wake-up message names for reading the session. */
+  cliPath?: string;
 }
 
 interface ChildOutcome {
   code: number | null;
   signal: NodeJS.Signals | null;
   error?: Error;
+}
+
+/**
+ * Count the child's reports to `parent` via the receipt file. The `send`
+ * subcommand, run inside the child (which inherits `PI_PMUX_SESSION`), appends
+ * one JSON line to `<session>.sent` per delivered report, so the count is
+ * form-independent: it does not care how the child quoted or built the send
+ * invocation. Only receipts addressed to the parent count: a report sent to
+ * some other pane does not tell the parent that this child is done, so it
+ * must not suppress the wake-up. A receipt line that does not parse is skipped
+ * for the same reason. A missing file counts as no reports.
+ */
+function countReports(sessionFile: string | undefined, parent?: string): number {
+  if (!sessionFile || !parent) return 0;
+  let content: string;
+  try {
+    content = readFileSync(`${sessionFile}.sent`, "utf8");
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const line of content.split("\n")) {
+    if (!line) continue;
+    let receipt: unknown;
+    try {
+      receipt = JSON.parse(line);
+    } catch {
+      // A malformed line proves nothing about the target: skip it.
+      continue;
+    }
+    if (
+      typeof receipt === "object" &&
+      receipt !== null &&
+      (receipt as { to?: unknown }).to === parent
+    ) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /** Map a finished child to its report code, printing why it could not start. */
@@ -88,6 +131,14 @@ export async function runSpec(
   // The spec is pane-independent: whichever pane runs it becomes the child's
   // surface.
   if (pane) env.PI_PMUX_SURFACE = pane;
+
+  // Only a send-mode spec with a parent may contact the parent. In `last`
+  // mode, and for any spec without a parent, the wrapper contacts nobody: the
+  // orchestrator's wake is the `wait` command, as before.
+  const wakeParent = spec.report === "send" && spec.parent !== undefined;
+  // The baseline matters because `resume` reuses the session file: receipts
+  // from earlier runs must not suppress the wake-up of this run.
+  const reportsBefore = wakeParent ? countReports(spec.sessionFile, spec.parent) : 0;
 
   const args = prompt ? [...spec.args, `@${prompt}`] : [...spec.args];
 
@@ -154,6 +205,28 @@ export async function runSpec(
         source: "wrapper",
         exitCode: code,
       });
+    }
+  }
+
+  // A send-mode child that exits without a report leaves the parent asleep
+  // forever; wake it with the exit state so it can read the session. A ping
+  // sidecar carries the question, so the wake-up quotes it directly.
+  if (wakeParent && countReports(spec.sessionFile, spec.parent) <= reportsBefore) {
+    const sidecar = spec.sessionFile ? readExitSidecar(spec.sessionFile) : undefined;
+    const cliHint = deps.cliPath ?? "<pmux-cli>";
+    let wake: string;
+    if (sidecar?.type === "ping" && typeof sidecar.message === "string") {
+      wake = `${spec.name} pinged: ${sidecar.message}`;
+    } else {
+      const state = sidecar?.type ?? (code === 0 ? "exited" : `crashed (code ${code})`);
+      wake = `${spec.name} ${state} without sending a report. Read its last message: node ${cliHint} last-message --session ${spec.sessionFile ?? "<session>"}`;
+    }
+    try {
+      (deps.sendToParent ?? agentPrompt)(spec.parent, wake);
+    } catch (error) {
+      writeErr(
+        `Failed to wake parent ${spec.parent}: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
     }
   }
 
