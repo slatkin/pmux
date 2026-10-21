@@ -198,9 +198,10 @@ your pane.
      the wrapper wrote the sidecar: the child crashed. Otherwise it is a
      provider failure — auto-retry exhausted. Either way the child ended
      before it could finish, so count on no report: only a wake-up already
-     typed into your pane tells you that one arrived. The pane stays open showing `__SUBAGENT_DONE_<n>__`; read the
-     last assistant message with `last-message --session <session>`, then
-     retry or resume, and close the pane once you are done with it.
+     typed into your pane tells you that one arrived. The pane stays open
+     showing `__SUBAGENT_DONE_<n>__`; read the last assistant message with
+     `last-message --session <session>`, then retry or resume, and close
+     the pane once you are done with it.
    - `ping` → the child asked a question with `caller_ping` instead of
      sending a report. The question is in the JSON (`ping.message`) and in
      the wake-up text the wrapper sent you. Answer it with a `resume`
