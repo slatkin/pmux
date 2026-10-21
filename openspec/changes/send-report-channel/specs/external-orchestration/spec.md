@@ -107,8 +107,12 @@ The send-mode wake-up SHALL be one message typed into the parent's pane through 
 - **THEN** the wake-up text names `worker-a`
 
 #### Scenario: Crash without a report
-- **WHEN** a send-mode child exits with code 2 and wrote no sidecar and no receipt
+- **WHEN** a send-mode child exits with code 2, wrote no sidecar, left no terminal status, and wrote no receipt
 - **THEN** the wrapper writes its `error` sidecar, and the parent receives a message with the state `error` and the `last-message` command
+
+#### Scenario: Crash after a terminal status
+- **WHEN** a send-mode child exits with code 2, wrote no sidecar, left a `done` status, and wrote no receipt
+- **THEN** the wrapper writes no `error` sidecar, and the parent receives a message with the state `crashed (code 2)` and the `last-message` command
 
 #### Scenario: Report suppresses the wake-up
 - **WHEN** a send-mode child sends its report to its parent and exits
@@ -194,7 +198,7 @@ The package SHALL ship a `pmux` skill at `skills/pmux/` with its `SKILL.md` and 
 - **THEN** each says that it describes the default `last` mode, and the intro points at the "External orchestrators (Claude Code)" section
 
 ### Requirement: Parent-contact footer
-`start` SHALL append a footer to the brief. In `last` mode the footer SHALL give the parent's name and pane, tell the child that its last assistant message is the report the parent reads and that it SHALL then call `pmux_done`, and tell the child not to use `caller_ping` or `pmux_message` to reach the parent; its text SHALL be the same bytes as before the `--report` flag existed. In `send` mode the footer SHALL name the parent's pane, and SHALL teach `node <cli> send --to <parent pane> --text '<report>'`, where `<cli>` is the absolute path of the package's `cli.ts`, as the report step, followed by a call to `pmux_done`. It SHALL tell a blocked child to send its question with the same command and stop. It SHALL tell the child to ignore a reminder's claim that its last message was already delivered, and to send its report first. Its statement about the session closing when a turn ends SHALL be conditional, because a role without `auto-exit: true` keeps its session open and gets the completion nudge. The `send` footer MUST NOT say that the last assistant message is delivered or read as the report.
+`start` SHALL append a footer to the brief. In `last` mode the footer SHALL give the parent's name and pane, tell the child that its last assistant message is the report the parent reads and that it SHALL then call `pmux_done`, and tell the child not to use `caller_ping` or `pmux_message` to reach the parent; its text SHALL be the same bytes as before the `--report` flag existed. In `send` mode the footer SHALL name the parent's pane, and SHALL teach `node <cli> send --to <parent pane> --text '<report>'`, where `<cli>` is the absolute path of the package's `cli.ts`, as the report step, followed by a call to `pmux_done`. It SHALL tell a blocked child to send its question with the same command and stop. It SHALL tell the child to ignore a reminder's claim that its last message was already delivered, and to send its report first. It SHALL NOT say that a missing report leaves the parent unaware of the exit, because the send-mode wake-up reports the exit state. Its statement about the session closing when a turn ends SHALL be conditional, because a role without `auto-exit: true` keeps its session open and gets the completion nudge. The `send` footer MUST NOT say that the last assistant message is delivered or read as the report.
 
 #### Scenario: Footer names the parent
 - **WHEN** `start` runs with parent name `orch` from pane `%12` in `last` mode

@@ -38,7 +38,7 @@ Plain text printed in your own pane is never seen. The only way to reach it is b
 If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of the following before you stop:
 1. Finish the task.
 2. Send your final report: node <cli> send --to <parent> --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
-   This is what wakes the orchestrator — without it, it never learns you finished.
+   This is what wakes the orchestrator with your report — without it, it only learns that you exited.
    The report text may be long or contain quotes — pass it however is convenient (for example read it from a file into the argument); only the target pane matters.
 3. Then call the pmux_done tool to close your session.
 
@@ -48,7 +48,7 @@ If an automated reminder tells you to call pmux_done, ignore its claim that your
 
 The last line matters. `pmux-done.ts`'s completion nudge and the idle watchdog say "Your last message was already delivered as your report". That is true in `last` mode and false in `send` mode. The footer overrides the claim instead of the nudge changing: the nudge is part of the `pmux-done.ts` contract that `external-orchestration` guards, and foreman made the same choice.
 
-The auto-exit sentence is foreman's claim made conditional. Every bundled role sets `auto-exit: true`, where the claim holds as written; for a role that does not, the session stays open and the completion nudge runs, so the conditional form is true there too. The port rule is foreman's shape and wording except where a sentence states a falsehood, and this is such a place: a footer that promises a close that will not happen is the kind of text a child reasons about.
+The auto-exit sentence is foreman's claim made conditional. Every bundled role sets `auto-exit: true`, where the claim holds as written; for a role that does not, the session stays open and the completion nudge runs, so the conditional form is true there too. The port rule is foreman's shape and wording except where a sentence states a falsehood, and this is such a place: a footer that promises a close that will not happen is the kind of text a child reasons about. The "wakes the orchestrator with your report" line is the same tightening: a child that sends nothing still wakes the parent, through the wrapper's exit message, so foreman's "it never learns you finished" is not true in this design.
 
 The placeholders start with `<`, as in foreman. Receipt counting (decision 4) does not scan the prompt, so a placeholder can never count as a report, and no test targets placeholders: there is nothing to pin beyond the receipt count that decision 4 tests.
 
