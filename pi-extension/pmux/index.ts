@@ -69,6 +69,7 @@ import {
   SIDEBAR_WORKTREE_OPTION,
   type SidebarWorktree,
 } from "./sidebar.ts";
+import { createTaskReminders, readSidebarTaskStore } from "./task-reminders.ts";
 
 // Survive /reload: the supervisor owns every timer, poll watcher and event
 // wiring this module load started. /reload re-imports this file, so shutting
@@ -504,6 +505,19 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   createSidebarEvents({
     publisher: sidebar,
     readWorktree: () => readSidebarWorktree(process.env.TMUX_PANE),
+  }).register(pi);
+
+  // ── Sidebar task reminders (openspec/changes/2026-10-22-sidebar-task-reminders) ──
+  //
+  // The reminder's wording is owned by the sidebar
+  // (tmux-agent-sidebar/src/task_reminders.rs); this extension is the pi
+  // pane's producer for it: one update-before-finish steer at a `turn_end`
+  // whose pane's task store holds open items. The store reader and the steer
+  // send are injected; every failure they hit is swallowed, and a session
+  // without the sidebar's task store gets nothing at all.
+  createTaskReminders(process.env, {
+    readStore: readSidebarTaskStore,
+    send: (text, options) => pi.sendUserMessage(text, options),
   }).register(pi);
 
   pi.on("session_start", (_event, ctx) => {

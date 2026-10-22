@@ -77,6 +77,8 @@ The pane's worktree comes from the sidebar's own window options, so a pi pane th
 
 Set `TMUX_AGENT_SIDEBAR=0` in the environment to turn the publishing off for a session that does have the sidebar.
 
+When the pane's Tasks tab holds open items — recorded through the sidebar's `task-set` and `task-update` commands — a turn that ends while items are still open also receives the sidebar's update-before-finish reminder, one steer message at the turn's end. The reminder is the extension's own delivery and is not touched by that switch. The agent writes the per-pane store only through those commands; the extension only reads it. A failed or aborted turn gets nothing, a subagent child never gets the reminder, and a pane whose store holds nothing open is never nudged to record a list: an empty list stays silent at every boundary. The wording is not decided here; it is the constant `UPDATE_BEFORE_FINISH_REMINDER` from the sidebar repository's `src/task_reminders.rs`, quoted verbatim so both repositories carry the same reminder.
+
 ---
 
 ## External orchestrators (Claude Code)

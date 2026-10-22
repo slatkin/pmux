@@ -77,9 +77,11 @@ interrupted turn — the cheaper failure.
 **D5: Update-before-finish fires at `turn_end`, guarded against repeat.**
 The anchor is the exact one `checkContextAlert` fires at. When the store
 already holds tasks and at least one of them is open (non-completed),
-after a run that is neither `error` nor `aborted` (the context alert's own
-skip rule: a failed turn gets no steer, which would only land on the next
-prompt), the update-before-finish text is injected. The guard follows the context
+after a run whose boundary `outcome` is `completed` (a failed or aborted
+turn gets no steer, which would only land on the next prompt — the
+context alert's own skip rule; the boundary's outcome is the one verdict,
+so the module keeps no stop-reason classifier of its own), the
+update-before-finish text is injected. The guard follows the context
 alert's `alertFired` shape: one flag per process, set when the reminder is
 injected, reset when the store's open set changes — the agent's
 `task-update` calls that the reminder asks for are the reset.
