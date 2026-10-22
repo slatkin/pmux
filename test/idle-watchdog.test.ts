@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import {
   IDLE_GONE_MS,
   IDLE_MAX_NUDGES,
+  IDLE_NUDGE_TEXT,
   IDLE_STEP_MS,
   decideGoneAction,
   decideIdleAction,
   type IdleWatchState,
 } from "../pi-extension/pmux/idle-watchdog.ts";
+import { COMPLETION_NUDGE_TEXT } from "../pi-extension/pmux/nudge.ts";
 
 const T0 = 1_000_000;
 
@@ -283,5 +285,13 @@ describe("idle-watchdog decideIdleAction", () => {
       if (action === "finish") break;
     }
     assert.deepEqual(actions, ["nudge", "nudge", "finish"]);
+  });
+});
+
+describe("the completion reminder", () => {
+  it("is the same text the child extension delivers", () => {
+    // One reminder, one home: the watchdog types into the child's pane the
+    // text the child's own extension delivers, so the two cannot drift.
+    assert.equal(IDLE_NUDGE_TEXT, COMPLETION_NUDGE_TEXT);
   });
 });

@@ -84,6 +84,7 @@ import {
   parseAgentDefinition,
 } from "../pi-extension/pmux/agent-defs.ts";
 import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
+import { COMPLETION_NUDGE_TEXT } from "../pi-extension/pmux/nudge.ts";
 // --- Fixture ---
 // Captured live via `$LUVUS_BIN_PATH pane split $LUVUS_PANE_ID --no-focus` on 2026-09-28
 // (design.md Decision 3): the new pane id is `result.pane`.
@@ -1227,7 +1228,7 @@ describe("status.ts", () => {
 
 describe("surface placement resolution", () => {
   it("modeHint names pmux_done for auto-exit agents too", () => {
-    assert.match(subagentsModule.resolveModeHint(true), /Call pmux_done when finished/);
+    assert.match(subagentsModule.resolveModeHint(true), /call pmux_done/);
     assert.match(subagentsModule.resolveModeHint(false), /call the pmux_done tool/);
     assert.match(subagentsModule.resolveModeHint(undefined), /call the pmux_done tool/);
   });
@@ -2022,7 +2023,7 @@ describe("pmux-done nudge", () => {
           assert.equal(sentMessages.length, 0);
           mock.timers.tick(1);
           assert.equal(sentMessages.length, 1);
-          assert.match(sentMessages[0].message, /pmux_done/);
+          assert.equal(sentMessages[0].message, COMPLETION_NUDGE_TEXT);
           assert.deepEqual(sentMessages[0].opts, { deliverAs: "followUp" });
         } finally {
           restoreEnv();

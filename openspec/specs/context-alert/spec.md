@@ -82,7 +82,7 @@ The alert message SHALL count as input after the first agent run, so it marks th
 - **THEN** no sidecar is written, the session stays open, and the completion nudge is scheduled
 
 ### Requirement: Nudge after the alert
-When the alert has fired, the completion nudge SHALL tell the child to end the session with `pmux_done` and the handoff text in its `handoff` parameter. It SHALL NOT say that the last message was already delivered as the report. Without an alert, the nudge text SHALL not change.
+When the alert has fired, the completion nudge SHALL tell the child to end the session with `pmux_done` and the handoff text in its `handoff` parameter. It SHALL NOT say that the last message was already delivered as the report. Without an alert, the nudge text SHALL be the shared reminder text of `pi-extension/pmux/nudge.ts`.
 
 #### Scenario: Nudge text after the alert
 - **WHEN** the alert has fired and the completion nudge is delivered
@@ -90,7 +90,7 @@ When the alert has fired, the completion nudge SHALL tell the child to end the s
 
 #### Scenario: Nudge text without an alert
 - **WHEN** the alert has not fired and the completion nudge is delivered
-- **THEN** the nudge text is the same as before this change
+- **THEN** the nudge text is the shared reminder text of `pi-extension/pmux/nudge.ts`
 
 ### Requirement: Handoff log
 The child SHALL append one JSON line to `handoffs.jsonl` in the extension config directory when the alert fires (`event` `alert`) and when it ends with a handoff (`event` `handoff`). Each line SHALL hold `at` (ISO time), `event`, `child`, `session`, and `tokens`. An `alert` line SHALL also hold `threshold`. Writing the log SHALL be best effort and SHALL NOT delay or prevent the alert, the sidecar write, or shutdown.

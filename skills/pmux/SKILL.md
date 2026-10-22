@@ -1,6 +1,6 @@
 ---
 name: pmux
-description: Delegated subagents for build, review, recon, or doc work across the rust-worker, reviewer, scout, worker, and advisor roles, each running as a pi process in its own tmux pane and reporting back through its session file. For an external orchestrator such as Claude Code it starts children with `--report send`, which get the report typed into the orchestrator's pane. Relevant to requests phrased as launching, spinning up, spawning, starting, or delegating to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, review-fix loops repeating until pass, or mbv-orchestrator campaign work.
+description: Delegated subagents for build, review, recon and doc work: each role runs as a pi process in its own tmux pane and reports back through its session file. For an external orchestrator such as Claude Code it starts children with `--report send`, so the report is typed into the orchestrator's pane. Use it when asked to launch, spawn, start or delegate work to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, or a review-fix loop until pass.
 ---
 
 # pi subagents via tmux
@@ -224,7 +224,8 @@ your pane.
    - `ping` → the child asked a question with `caller_ping` instead of
      sending a report. The question is in the JSON (`ping.message`) and in
      the wake-up text the wrapper sent you. Answer it with a `resume`
-     (below). The pane stays open until you close it.
+     (see [While it runs / after](#while-it-runs--after)). The pane stays
+     open until you close it.
    - No sidecar at all (timeout) and `__SUBAGENT_DONE_<n>__` at the tail of
      the child's pane → the wrapper itself was killed, so the child wrote
      no sidecar. The pane stays open. Read the last assistant message and
@@ -239,42 +240,29 @@ written. A `ping` is quoted as `<child> pinged: <message>`. A child that
 ignored its footer therefore still wakes you.
 
 A follow-up (a recheck, or the answer to the child's question) always runs
-in a **new** pane: `resume` clears the stale `.exit` sidecar of the session
-it relaunches and re-appends the send footer, so the resumed child still
-knows how to reach you:
-
-```bash
-node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child>]
-```
-
-`<spec>` is the `launch` field from the start JSON; `--name` defaults to the
-child name stored in the spec. `resume` rebuilds the launch spec from the
-session's launch record (`<session>.launch.json`, which holds the parent id
-`start` used) and writes the follow-up prompt under
-`artifacts/<parent id>/pmux-resume/`. A spec with no record beside its
-session file (one from an older version) cannot be resumed — `resume` exits
-1 and its message names `start`; run `start` again in that case. A fresh
-role or a correction lane → new child via `start`.
+in a **new** pane — the `resume` command is in
+[While it runs / after](#while-it-runs--after). In send mode `resume`
+re-appends the send footer, so the resumed child still knows how to reach
+you.
 
 ## While it runs / after
 
 - A follow-up (a recheck, or the answer to the child's question) always
   runs in a **new** pane: write the follow-up to a prompt file and run
-  (`resume` clears the stale `.exit` sidecar of the session it relaunches,
-  so there is nothing to remove by hand):
   ```bash
   node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child>]
   ```
   `<spec>` is the `launch` field from the start JSON; `--name` defaults to
-  the child name stored in the spec. `resume` rebuilds the launch spec from
-  the session's launch record (`<session>.launch.json`); a spec with no
-  record beside its session file (one from an older version) cannot be
-  resumed — `resume` exits 1 and its message names `start`, so run
-  `start` again. The role surface stored in the launch
-  spec applies — a resume keeps the role's surface — and then the
-  extension's `config.json`. The same session resumes with full
-  context and the child re-reports the same way. The old pane is not needed.
-  A fresh role or a correction lane → new child via `start`.
+  the child name stored in the spec. `resume` clears the stale `.exit`
+  sidecar of the session it relaunches, rebuilds the launch spec from the
+  session's launch record (`<session>.launch.json`) and writes the follow-up
+  prompt under `artifacts/<parent id>/pmux-resume/`. A spec with no record
+  beside its session file (one from an older version) cannot be resumed —
+  `resume` exits 1 and its message names `start`, so run `start` again. A
+  resume keeps the role's surface, then the extension's `config.json`
+  applies; the same session resumes with full context and the child
+  re-reports the same way. The old pane is not needed. A fresh role or a
+  correction lane → new child via `start`.
 - Idle child (you expected a report long ago; `last` mode — a send-mode
   child reports with the `send` command its footer teaches, see
   [External orchestrators (Claude Code)](#external-orchestrators-claude-code)):

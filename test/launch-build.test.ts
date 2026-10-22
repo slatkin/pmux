@@ -41,35 +41,35 @@ const MESSAGE = "Address the review findings.";
 const SESSION_FILE = "/tmp/scratch/w-1.jsonl";
 const ACTIVITY_FILE = "/tmp/scratch/w-1.activity.json";
 
-/** Today's `last` footer bytes, verbatim, for the pinned pair. */
+/** The `last` footer bytes, verbatim, for the pinned pair. */
 function lastFooterBytes(parent: string, pane: string): string {
   return `Your parent is a session named ${parent} (pane ${pane}).
 Plain text printed in your own pane is never seen. Your last assistant message is the report the parent reads.
 
-So do ALL of the following before you stop:
+Before you stop, do ALL of this:
 1. Finish the task.
-2. Write your final report as your last assistant message: the verdict, the commit SHA, the files changed, the verification, the deviations and the open questions. Put the verdict first.
+2. Make your last assistant message the report: the verdict, the commit SHA, the files changed, the verification, the deviations, the open questions. Verdict first.
 3. Then call the pmux_done tool to close your session.
 
-If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.
-If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.`;
+If you are blocked, make your last assistant message the question and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.
+If a reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.`;
 }
 
-/** Today's `send` footer bytes, verbatim, for the pinned pair. */
+/** The `send` footer bytes, verbatim, for the pinned pair. */
 function sendFooterBytes(parent: string, cliPath: string): string {
   return `Your parent is the tmux pane ${parent}.
 Plain text printed in your own pane is never seen. The only way to reach it is bash: node ${cliPath} send --to ${parent} --text '<text>'.
 
-If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of the following before you stop:
+If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of this before you stop:
 1. Finish the task.
 2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
-   This is what wakes the orchestrator with your report — without it, it only learns that you exited.
-   The report text may be long, may contain quotes and may span several lines — reading it from a file into the argument is fine; only the target pane matters. A line break arrives as the two characters \\n, so the orchestrator still reads the whole report as one message.
-   The command prints one confirmation line: the target pane, the size of the text it sent and the receipt file it wrote. That line is the delivery receipt. Do not send anything else to the parent to check whether the report arrived — a second message only gives the parent something to answer.
+   This wakes the orchestrator with your report; without it, it only learns that you exited.
+   The text may be long, contain quotes or span lines: read it from a file into the argument if you like. A line break arrives as the two characters \\n, so the orchestrator still reads one message.
+   The command prints one confirmation line — the target pane, the size of the text, the receipt file. That line is the delivery receipt. Do not send anything else to the parent to check whether the report arrived; a second message only gives the parent something to answer.
 3. Then call the pmux_done tool to close your session.
 
-If you are blocked, send your question with the send command and stop. The session closes; the parent resumes it with the answer. Do not try to reach the parent any other way.
-If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report with the send command first, then call pmux_done.`;
+If you are blocked, send your question with the same command and stop. The session closes; the parent resumes it with the answer. Do not reach the parent any other way.
+If a reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report first, then call pmux_done.`;
 }
 
 /** The 19-character timestamp of a context file name (row 5.2's shape). */
@@ -334,13 +334,39 @@ describe("pi parent contact (design D3)", () => {
       assert.equal(spec.report, undefined);
       assert.equal(spec.closeOnDone, undefined);
 
-      // Today's spawn prompt: role block, mode hint, messaging hint, task,
+      // The spawn prompt: role block, mode hint, messaging hint, task,
       // summary instruction.
       const artifact = taskArtifact(spec);
       assert.equal(
         artifact.content,
         "\n\nYou are a worker.\n\n" +
-          "Complete your task autonomously. Call pmux_done when finished.\n\n" +
+          "Complete your task autonomously, then call pmux_done.\n\n" +
+          "You can message `parent`, `Reviewer` with pmux_message; it does not end your session.\n\n" +
+          `${TASK}\n\n` +
+          "Your FINAL assistant message should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one.",
+      );
+    });
+  });
+
+  it("gives an interactive child the same report instruction as an auto-exit child", () => {
+    withTempDir((dir) => {
+      const spec = buildPiLaunch({
+        record: roleRecord({ autoExit: false, interactive: true }),
+        task: TASK,
+        localAgentDir: null,
+        artifactDir: join(dir, "artifacts", "sess1"),
+        parentContact: { kind: "pi", siblingNames: ["Reviewer"] },
+        surface: "%24",
+        launchBehavior: { inheritsConversationContext: false, taskDelivery: "artifact" },
+        run: { id: "abcd1234", sessionFile: SESSION_FILE, activityFile: ACTIVITY_FILE },
+      });
+
+      // The interactive child gets the same report instruction as the
+      // auto-exit one, in one wording: the launch prompt carries it once.
+      assert.equal(
+        taskArtifact(spec).content,
+        "\n\nYou are a worker.\n\n" +
+          "Complete your task, then call the pmux_done tool. The user can interact with you at any time.\n\n" +
           "You can message `parent`, `Reviewer` with pmux_message; it does not end your session.\n\n" +
           `${TASK}\n\n` +
           "Your FINAL assistant message should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one.",

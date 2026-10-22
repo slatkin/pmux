@@ -530,7 +530,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "pmux_spawn",
       label: "Subagent",
       description:
-        "Start a subagent. The tool is fire-and-forget: it returns only an acknowledgement. When the subagent finishes, its result arrives automatically as a steer message that starts a new turn. Do not poll, sleep, read logs, or call other tools to check status. Do not fabricate or guess the result. After the call, end your turn or do other independent work, for example start more subagents.",
+        "Start a subagent. Fire-and-forget: it returns only an acknowledgement, and the result arrives automatically as a steer message when the subagent finishes. Do not poll, sleep, read logs, or call other tools to check status, and do not fabricate or guess the result. After the call, end your turn or do other independent work.",
       promptSnippet: "Start an async subagent; its result arrives later as a steer message.",
       parameters: SubagentParams,
 
@@ -578,10 +578,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             {
               type: "text",
               text:
-                `Sub-agent "${params.name}" launched and is now running in the background. ` +
-                `Do NOT generate or assume any results — you have no idea what the sub-agent will do or produce. ` +
-                `The results will be delivered to you automatically as a steer message when the sub-agent finishes. ` +
-                `Until then, move on to other work or tell the user you're waiting.`,
+                `Sub-agent "${params.name}" launched. Its result arrives automatically as a ` +
+                `steer message when it finishes — do not generate or assume a result in the meantime. ` +
+                `Do other work or tell the user you are waiting.`,
             },
           ],
           details: {

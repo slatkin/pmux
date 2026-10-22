@@ -6,6 +6,7 @@
  * the parent instead: a non-interactive child stuck in `waiting` gets reminded
  * from outside, and is finished by the parent if it still does nothing.
  */
+import { COMPLETION_NUDGE_TEXT } from "./nudge.ts";
 
 /** Continuous `waiting` time before the first reminder, and between later steps. */
 export const IDLE_STEP_MS = 30_000;
@@ -21,12 +22,12 @@ export const IDLE_MAX_NUDGES = 2;
  */
 export const IDLE_GONE_MS = 180_000;
 
-export const IDLE_NUDGE_TEXT =
-  "[Automated reminder] Your last turn ended but this session is still open.\n" +
-  "If your task is complete, call the pmux_done tool now, with no other text. " +
-  "Your last message was already delivered as your report — do not repeat or summarise it.\n" +
-  "If you are blocked and need input from the caller, call caller_ping with your question.\n" +
-  "Otherwise, continue working.";
+/**
+ * The reminder this watchdog types into a stalled child's pane. It is the
+ * child's own completion reminder (`nudge.ts`), so the child never reads two
+ * different reminders and the two copies cannot drift apart.
+ */
+export const IDLE_NUDGE_TEXT = COMPLETION_NUDGE_TEXT;
 
 /**
  * Decide whether a child has stopped reporting and must be finished with an

@@ -326,8 +326,8 @@ export function buildLaunchMessagingHint(siblingNames: string[]): string {
 /** Task hint shown to the child: auto-exit agents are now told to exit explicitly too. */
 export function resolveModeHint(autoExit?: boolean): string {
   return autoExit
-    ? "Complete your task autonomously. Call pmux_done when finished."
-    : "Complete your task. When finished, call the pmux_done tool. The user can interact with you at any time.";
+    ? "Complete your task autonomously, then call pmux_done."
+    : "Complete your task, then call the pmux_done tool. The user can interact with you at any time.";
 }
 
 /**
@@ -394,18 +394,23 @@ export function buildSpawnEnvParts(params: {
 /**
  * The parent-contact footer appended to the brief. There is no send channel
  * back to the parent, so the report is the child's last assistant message.
+ *
+ * Every sentence here carries a rule the child would otherwise break: the
+ * report goes in the last assistant message, `pmux_done` closes the session,
+ * `caller_ping` and `pmux_message` do not reach the parent, and the
+ * completion reminder's "already delivered" claim is wrong in this mode.
  */
 export function parentFooter(parent: string, pane: string): string {
   return `Your parent is a session named ${parent} (pane ${pane}).
 Plain text printed in your own pane is never seen. Your last assistant message is the report the parent reads.
 
-So do ALL of the following before you stop:
+Before you stop, do ALL of this:
 1. Finish the task.
-2. Write your final report as your last assistant message: the verdict, the commit SHA, the files changed, the verification, the deviations and the open questions. Put the verdict first.
+2. Make your last assistant message the report: the verdict, the commit SHA, the files changed, the verification, the deviations, the open questions. Verdict first.
 3. Then call the pmux_done tool to close your session.
 
-If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.
-If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.`;
+If you are blocked, make your last assistant message the question and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.
+If a reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.`;
 }
 
 /**
@@ -417,17 +422,25 @@ export function sendFooter(parent: string, cliPath: string): string {
   return `Your parent is the tmux pane ${parent}.
 Plain text printed in your own pane is never seen. The only way to reach it is bash: node ${cliPath} send --to ${parent} --text '<text>'.
 
-If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of the following before you stop:
+If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of this before you stop:
 1. Finish the task.
 2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
-   This is what wakes the orchestrator with your report — without it, it only learns that you exited.
-   The report text may be long, may contain quotes and may span several lines — reading it from a file into the argument is fine; only the target pane matters. A line break arrives as the two characters \\n, so the orchestrator still reads the whole report as one message.
-   The command prints one confirmation line: the target pane, the size of the text it sent and the receipt file it wrote. That line is the delivery receipt. Do not send anything else to the parent to check whether the report arrived — a second message only gives the parent something to answer.
+   This wakes the orchestrator with your report; without it, it only learns that you exited.
+   The text may be long, contain quotes or span lines: read it from a file into the argument if you like. A line break arrives as the two characters \\n, so the orchestrator still reads one message.
+   The command prints one confirmation line — the target pane, the size of the text, the receipt file. That line is the delivery receipt. Do not send anything else to the parent to check whether the report arrived; a second message only gives the parent something to answer.
 3. Then call the pmux_done tool to close your session.
 
-If you are blocked, send your question with the send command and stop. The session closes; the parent resumes it with the answer. Do not try to reach the parent any other way.
-If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report with the send command first, then call pmux_done.`;
+If you are blocked, send your question with the same command and stop. The session closes; the parent resumes it with the answer. Do not reach the parent any other way.
+If a reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report first, then call pmux_done.`;
 }
+
+/**
+ * The report instruction the launch prompt carries. One text for both launch
+ * shapes: the interactive variant only added a parenthetical the
+ * `pmux_done` tool description already states.
+ */
+const SUMMARY_INSTRUCTION =
+  "Your FINAL assistant message should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one.";
 
 /**
  * The parent-contact footer of a report mode. `last` mode points the child at
@@ -576,9 +589,7 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
       task: request.task,
       roleBlock,
       modeHint: resolveModeHint(record.autoExit),
-      summaryInstruction: record.autoExit
-        ? "Your FINAL assistant message should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one."
-        : "Your FINAL assistant message (before calling pmux_done or before the user exits) should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one.",
+      summaryInstruction: SUMMARY_INSTRUCTION,
       messagingHint: buildLaunchMessagingHint(parentContact.siblingNames),
       inheritsConversationContext: launchBehavior.inheritsConversationContext,
     });

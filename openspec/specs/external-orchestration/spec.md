@@ -6,7 +6,7 @@ Defines the contract that lets an orchestrator that is not a pi session, such as
 ## Requirements
 
 ### Requirement: Packaged orchestration skill
-The package SHALL ship a `pmux` skill at `skills/pmux/` with its `SKILL.md` and a TypeScript launcher shim, `launch.ts`, which runs under `node`. The skill directory MUST NOT contain shell scripts. The skill MUST be installable with the `npx skills` CLI from the GitHub repository or a local checkout, and MUST work when the CLI copies the directory instead of linking it. It MUST be listed in the package manifest `files`, so a packaged install carries it. The pi manifest MUST NOT register the skill. `SKILL.md` SHALL document the tmux protocol: the launch commands, the `wait` command, the completion signal, the close-on-done behaviour and the report lookup. It SHALL tell the orchestrator to read `<session>.exit` after a wait, because the sidecar says whether the child finished, handed off, pinged or failed. The statement that there is no channel from the child back to the orchestrator, and the bullet that the report is the child's last assistant message, SHALL be scoped to the default `last` mode and SHALL point at the new section, so that neither reads as false in `send` mode. The shared recipes that assume a last-mode child SHALL say that they apply to `last` mode only: the idle-child nudge text in `SKILL.md`, the `wait` paragraph in `docs/guide.md`, and the external-orchestrator paragraph in `README.md`. `SKILL.md` SHALL have a section named "External orchestrators (Claude Code)" that documents the `send` mode: start with `--report send` and `--parent "$TMUX_PANE"`; the report arrives as text typed into the orchestrator's pane; wait with `--signal sidecar`; leave the sidecar in place, because the wrapper reads it after the child exits, `start` and `resume` clear it on relaunch, and `prune` reclaims it; and `resume --launch <spec> --prompt <file>` appends the footer again. The skill's frontmatter description SHALL say that the skill serves external orchestrators such as Claude Code.
+The package SHALL ship a `pmux` skill at `skills/pmux/` with its `SKILL.md` and a TypeScript launcher shim, `launch.ts`, which runs under `node`. The skill directory MUST NOT contain shell scripts. The skill MUST be installable with the `npx skills` CLI from the GitHub repository or a local checkout, and MUST work when the CLI copies the directory instead of linking it. It MUST be listed in the package manifest `files`, so a packaged install carries it. The pi manifest MUST NOT register the skill. `SKILL.md` SHALL document the tmux protocol: the launch commands, the `wait` command, the completion signal, the close-on-done behaviour and the report lookup. It SHALL tell the orchestrator to read `<session>.exit` after a wait, because the sidecar says whether the child finished, handed off, pinged or failed. The statement that there is no channel from the child back to the orchestrator, and the bullet that the report is the child's last assistant message, SHALL be scoped to the default `last` mode and SHALL point at the new section, so that neither reads as false in `send` mode. The shared recipes that assume a last-mode child SHALL say that they apply to `last` mode only: the idle-child nudge text in `SKILL.md`, the `wait` paragraph in `docs/guide.md`, and the external-orchestrator paragraph in `README.md`. `SKILL.md` SHALL have a section named "External orchestrators (Claude Code)" that documents the `send` mode: start with `--report send` and `--parent "$TMUX_PANE"`; the report arrives as text typed into the orchestrator's pane; wait with `--signal sidecar`; leave the sidecar in place, because the wrapper reads it after the child exits, `start` and `resume` clear it on relaunch, and `prune` reclaims it; and `resume --launch <spec> --prompt <file>` appends the footer again. The skill's frontmatter description SHALL say that the skill serves external orchestrators such as Claude Code. A recipe SHALL be stated once in `SKILL.md`: the follow-up `resume` recipe lives in "While it runs / after", and the "External orchestrators (Claude Code)" section points at it, keeping only the send-mode fact that `resume` re-appends the send footer.
 
 #### Scenario: Install from GitHub
 - **WHEN** a user runs `npx skills add slatkin/pmux -g -a claude-code`
@@ -27,6 +27,10 @@ The package SHALL ship a `pmux` skill at `skills/pmux/` with its `SKILL.md` and 
 #### Scenario: The last-mode claims are scoped
 - **WHEN** a reader reads the skill's intro, the "The report" bullet, or the idle-child nudge recipe
 - **THEN** each says that it describes the default `last` mode, and the intro points at the "External orchestrators (Claude Code)" section
+
+#### Scenario: The follow-up recipe is stated once
+- **WHEN** a reader reads the "External orchestrators (Claude Code)" section and then "While it runs / after"
+- **THEN** the `resume` command, the `<spec>` field and the "no launch record" rule appear once, in "While it runs / after", and the external-orchestrator section points at it and says that `resume` re-appends the send footer
 
 ### Requirement: Child extension lookup
 The skill launcher SHALL find the package root, meaning a directory that holds `pi-extension/pmux/cli.ts` and `pmux-done.ts`, in this order: the `PI_PMUX_DIR` directory, then the checkout containing the launcher's resolved real path, then pi's git install of this package under the pi agent directory (`PI_CODING_AGENT_DIR`, or `~/.pi/agent`, followed by `git/github.com/slatkin/pmux`). Paths SHALL be built with the platform's path rules. The child SHALL be launched with `-e` on that root's `pmux-done.ts`. When no candidate holds the files, the launcher MUST exit non-zero, print an error naming the `pi install` command and the candidates searched, and create no pane.
@@ -107,7 +111,7 @@ The skill launcher SHALL find the package root, meaning a directory that holds `
 - **THEN** no pane is addressed by title and no text is typed into any pane but the child's own
 
 ### Requirement: Parent-contact footer
-`start` SHALL append a footer to the brief. In `last` mode the footer SHALL give the parent's name and pane, tell the child that its last assistant message is the report the parent reads and that it SHALL then call `pmux_done`, and tell the child not to use `caller_ping` or `pmux_message` to reach the parent; its text SHALL be the same bytes as before the `--report` flag existed. In `send` mode the footer SHALL name the parent's pane, and SHALL teach `node <cli> send --to <parent pane> --text '<report>'`, where `<cli>` is the absolute path of the package's `cli.ts`, as the report step, followed by a call to `pmux_done`. It SHALL tell a blocked child to send its question with the same command and stop. It SHALL tell the child to ignore a reminder's claim that its last message was already delivered, and to send its report first. It SHALL NOT say that a missing report leaves the parent unaware of the exit, because the send-mode wake-up reports the exit state. Its statement about the session closing when a turn ends SHALL be conditional, because a role without `auto-exit: true` keeps its session open and gets the completion nudge. The `send` footer MUST NOT say that the last assistant message is delivered or read as the report.
+`start` SHALL append a footer to the brief. In `last` mode the footer SHALL give the parent's name and pane, tell the child that its last assistant message is the report the parent reads and that it SHALL then call `pmux_done`, and tell the child not to use `caller_ping` or `pmux_message` to reach the parent. In `send` mode the footer SHALL name the parent's pane, and SHALL teach `node <cli> send --to <parent pane> --text '<report>'`, where `<cli>` is the absolute path of the package's `cli.ts`, as the report step, followed by a call to `pmux_done`. It SHALL tell the child that the command prints one confirmation line, that the line is the delivery receipt, and that the child SHALL NOT send anything else to the parent to check whether the report arrived. It SHALL tell a blocked child to send its question with the same command and stop. It SHALL tell the child to ignore a reminder's claim that its last message was already delivered, and to send its report first. It SHALL NOT say that a missing report leaves the parent unaware of the exit, because the send-mode wake-up reports the exit state. Its statement about the session closing when a turn ends SHALL be conditional, because a role without `auto-exit: true` keeps its session open and gets the completion nudge. The `send` footer MUST NOT say that the last assistant message is delivered or read as the report. Each footer SHALL carry every rule it needs exactly once: a rule the footer states SHALL NOT be stated again in the same footer, and a rule the child's tool schema already states MAY be left out of it.
 
 #### Scenario: Footer names the parent
 - **WHEN** `start` runs with parent name `orch` from pane `%12` in `last` mode
@@ -120,6 +124,14 @@ The skill launcher SHALL find the package root, meaning a directory that holds `
 #### Scenario: Send footer overrides the nudge
 - **WHEN** a send-mode child reads its footer
 - **THEN** the footer tells it to ignore a reminder's claim that its last message was already delivered, and to send its report before it calls `pmux_done`
+
+#### Scenario: Send footer names the confirmation
+- **WHEN** a send-mode child reads its footer
+- **THEN** the footer names the confirmation line the `send` command prints, calls it the delivery receipt, and tells the child not to send anything else to the parent to check
+
+#### Scenario: The footer states each rule once
+- **WHEN** a reader reads either footer
+- **THEN** the rule about the report, the rule about `pmux_done`, the rule about a blocked child and the rule about the reminder each appear once in it
 
 ### Requirement: Close on done
 After the child exits, the skill-path run wrapper SHALL print `__SUBAGENT_DONE_<exit code>__`. It SHALL then close its own pane through tmux only when `<session>.exit` parses as JSON with `type` equal to `done` or `handoff`, and only after a grace period. The grace period SHALL default to 5000 ms, SHALL be set per launch with `start --close-grace-ms <n>`, and SHALL be stored in the launch spec so that a resume reuses it. A value of `0` closes at once. For any other `.exit` content, unparseable content, or no `.exit`, the pane MUST stay open with the sentinel visible. The wrapper MUST NOT delete the `.exit` file. In `last` mode the wrapper SHALL NOT contact the parent: it SHALL NOT address any pane by title and SHALL NOT type text into any other pane; the orchestrator's wake is the `wait` command, which polls the status file, and the report is the child's last assistant message, read with `last-message`. In `send` mode the wrapper SHALL contact the parent only by the send-mode wake-up, and SHALL NOT address any pane by title.
@@ -318,7 +330,7 @@ In `send` mode the launch spec SHALL hold `report` with the value `send`. In `la
 - **THEN** it exits non-zero naming the file, and no child starts
 
 ### Requirement: Send command
-The CLI SHALL provide `send --to <pane> --text <text>`. It SHALL type the text into the pane as literal input, followed by one Enter keypress, through the tmux backend's pane-input primitive, without a shell. Before it is typed, the text SHALL be encoded so that it holds no line terminator and no tab: a newline (U+000A) SHALL become the two characters `\n`, a carriage return (U+000D) the two characters `\r`, a tab (U+0009) the two characters `\t`, and any other C0 control character or DEL (U+007F) the four characters `\xNN` with two lowercase hex digits. Every other character, a backslash included, SHALL be typed as it is. The report therefore reaches the parent as one input, whatever the parent pane runs. A missing `--to` or `--text` MUST be a usage error: a message on stderr naming the flag, nothing on stdout, exit 1, and nothing is sent.
+The CLI SHALL provide `send --to <pane> --text <text>`. It SHALL type the text into the pane as literal input, followed by one Enter keypress, through the tmux backend's pane-input primitive, without a shell. Before it is typed, the text SHALL be encoded so that it holds no line terminator and no tab: a newline (U+000A) SHALL become the two characters `\n`, a carriage return (U+000D) the two characters `\r`, a tab (U+0009) the two characters `\t`, and any other C0 control character or DEL (U+007F) the four characters `\xNN` with two lowercase hex digits. Every other character, a backslash included, SHALL be typed as it is. The report therefore reaches the parent as one input, whatever the parent pane runs. When the text has been typed, the command SHALL print one JSON line on stdout: `{"sent":true,"to":<pane>,"bytes":<n>,"receipt":<path or null>}`, where `<n>` is the length in bytes of the text the command received, before the pane-input encoding, and `<path>` is the absolute path of the receipt file, or null when no receipt was written — the command ran outside a child, or the receipt write failed. A missing `--to` or `--text` MUST be a usage error: a message on stderr naming the flag, nothing on stdout, exit 1, and nothing is sent.
 
 #### Scenario: Report delivered
 - **WHEN** a child runs `send --to %12 --text 'PASS abc123'`
@@ -335,6 +347,18 @@ The CLI SHALL provide `send --to <pane> --text <text>`. It SHALL type the text i
 #### Scenario: Missing flag
 - **WHEN** `send` runs without `--text`
 - **THEN** it exits 1 with an error naming `--text` on stderr, stdout is empty, and tmux receives no call
+
+#### Scenario: The command answers
+- **WHEN** `send --to %12 --text 'PASS abc123'` delivers
+- **THEN** stdout holds one JSON line whose `sent` is `true`, whose `to` is `%12` and whose `bytes` is the UTF-8 length of the text as given, before the encoding
+
+#### Scenario: The confirmation names the receipt
+- **WHEN** `send --to %12 --text hi` runs with `PI_PMUX_SESSION=/s/w.jsonl` and the receipt is written
+- **THEN** the printed line's `receipt` is the absolute path of `/s/w.jsonl.sent`
+
+#### Scenario: No receipt to name
+- **WHEN** `send --to %12 --text hi` runs without `PI_PMUX_SESSION`, or the receipt cannot be written
+- **THEN** the printed line's `receipt` is null, and the command still exits 0
 
 ### Requirement: Report receipts
 When `send` runs with `PI_PMUX_SESSION` set, it SHALL append, after the delivery, one JSON line `{"at":<ISO time>,"to":<to>,"bytes":<text length in bytes>}` to `<PI_PMUX_SESSION>.sent`, where `<text length in bytes>` is the length in bytes of the text `send` received, before the pane-input encoding. When `PI_PMUX_SESSION` is not set, it SHALL write no receipt. A failed receipt write MUST NOT fail the send. `prune` SHALL treat `.sent` files as launcher files, so it deletes them past the retention and keeps them within it.
@@ -483,3 +507,14 @@ If no valid launch record exists beside the spec's session file, `resume` SHALL 
 #### Scenario: Spec from an older version
 - **WHEN** `resume` is given a launch spec whose session file has no `.launch.json`
 - **THEN** it exits 1 with a message that names `start`, and no pane is created
+
+### Requirement: Every command answers on success
+Every CLI command SHALL print at least one line on stdout when it succeeds, so an agent that ran it can read the result. A command that succeeds silently MUST NOT be added: an agent that cannot read a result either guesses at it or probes the host with another command. A usage error SHALL print its message on stderr, print nothing on stdout and exit non-zero.
+
+#### Scenario: The commands answer
+- **WHEN** `start`, `resume`, `send`, `wait`, `prune` or `last-message` succeeds
+- **THEN** it printed at least one line on stdout
+
+#### Scenario: A usage error stays on stderr
+- **WHEN** any of those commands runs with a missing or unusable flag
+- **THEN** it printed a message on stderr, printed nothing on stdout and exited non-zero

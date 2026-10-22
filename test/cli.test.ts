@@ -1136,13 +1136,13 @@ describe("cli.ts start", () => {
         `Your parent is a session named orch (pane %21).\n` +
           `Plain text printed in your own pane is never seen. Your last assistant message is the report the parent reads.\n` +
           `\n` +
-          `So do ALL of the following before you stop:\n` +
+          `Before you stop, do ALL of this:\n` +
           `1. Finish the task.\n` +
-          `2. Write your final report as your last assistant message: the verdict, the commit SHA, the files changed, the verification, the deviations and the open questions. Put the verdict first.\n` +
+          `2. Make your last assistant message the report: the verdict, the commit SHA, the files changed, the verification, the deviations, the open questions. Verdict first.\n` +
           `3. Then call the pmux_done tool to close your session.\n` +
           `\n` +
-          `If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.\n` +
-          `If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.\n`,
+          `If you are blocked, make your last assistant message the question and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.\n` +
+          `If a reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.\n`,
       ),
     );
   });
@@ -1159,11 +1159,11 @@ describe("cli.ts start", () => {
     assert.ok(promptText.includes(`send --to %12 --text`));
     assert.ok(promptText.includes("pmux_done"));
     assert.ok(
-      promptText.includes("If you are blocked, send your question with the send command and stop."),
+      promptText.includes("If you are blocked, send your question with the same command and stop."),
     );
     assert.ok(
       promptText.includes(
-        "ignore its claim that your last message was already delivered — send your report with the send command first",
+        "ignore its claim that your last message was already delivered — send your report first",
       ),
     );
     assert.ok(
@@ -1171,9 +1171,7 @@ describe("cli.ts start", () => {
         "If this session auto-exits, it closes the first time you stop generating:",
       ),
     );
-    assert.ok(
-      promptText.includes("Whether it does or not, do ALL of the following before you stop:"),
-    );
+    assert.ok(promptText.includes("Whether it does or not, do ALL of this before you stop:"));
     assert.doesNotMatch(promptText, /last assistant message is the report the parent reads/);
     // The report step and the wake-up hint name this checkout's CLI.
     assert.ok(promptText.includes(`node ${CLI} send --to %12 --text '<verdict`));
@@ -1762,8 +1760,8 @@ describe("cli.ts resume", () => {
     assert.doesNotMatch(sent, /last assistant message is the report the parent reads/);
     assert.ok(
       sent.endsWith(
-        "If you are blocked, send your question with the send command and stop. The session closes; the parent resumes it with the answer. Do not try to reach the parent any other way.\n" +
-          "If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report with the send command first, then call pmux_done.\n",
+        "If you are blocked, send your question with the same command and stop. The session closes; the parent resumes it with the answer. Do not reach the parent any other way.\n" +
+          "If a reminder tells you to call pmux_done, ignore its claim that your last message was already delivered — send your report first, then call pmux_done.\n",
       ),
     );
   });
@@ -1778,8 +1776,8 @@ describe("cli.ts resume", () => {
     assert.ok(sent.includes("Your parent is a session named orch (pane %21)."));
     assert.ok(
       sent.endsWith(
-        "If you are blocked, write your question as your last assistant message and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.\n" +
-          "If an automated reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.\n",
+        "If you are blocked, make your last assistant message the question and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.\n" +
+          "If a reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.\n",
       ),
     );
   });

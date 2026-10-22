@@ -38,6 +38,7 @@ import {
 import { loadStatusConfig } from "./status.ts";
 import { writeChildStatus, type ChildStatus } from "./status-file.ts";
 import { exitSidecarPath } from "./exit-sidecar.ts";
+import { COMPLETION_NUDGE_TEXT } from "./nudge.ts";
 
 export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
   return agentStarted;
@@ -183,12 +184,11 @@ export default function (pi: ExtensionAPI) {
   );
   /** Set to "1" to disable the nudge entirely. */
   const NUDGE_DISABLED = process.env.PI_PMUX_NUDGE_DISABLE === "1";
-  const NUDGE_TEXT =
-    "[Automated reminder] Your last turn ended but this session is still open.\n" +
-    "If your task is complete, call the pmux_done tool now, with no other text. " +
-    "Your last message was already delivered as your report — do not repeat or summarise it.\n" +
-    "If you are blocked and need input from the caller, call caller_ping with your question.\n" +
-    "Otherwise, continue working.";
+  /**
+   * The reminder. One text, shared with the parent-side idle watchdog
+   * (`nudge.ts`), so the child never reads two different reminders.
+   */
+  const NUDGE_TEXT = COMPLETION_NUDGE_TEXT;
 
   let doneCalled = false;
   let userInputAfterAgentEnd = false;

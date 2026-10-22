@@ -55,9 +55,8 @@ export function alertText(tokens: number, threshold: ContextAlertThreshold): str
   return [
     `[Context alert] This session has used ${tokens} context tokens (threshold: ${formatAlertThreshold(threshold)}).`,
     "Stop the task after this turn. Commit the finished work, or list the uncommitted changes.",
-    "Write a handoff that a fresh agent can continue from: the goal, what is done, what is left, and the current state.",
-    "Send it to the parent the way your instructions say.",
-    "Then end the session with the pmux_done tool, passing that handoff text in its `handoff` parameter.",
+    "Write a handoff that a fresh agent can continue from: the goal, what is done, what is left, the current state.",
+    "Send it to the parent the way your instructions say, then end the session with the pmux_done tool, passing that handoff text in its `handoff` parameter.",
   ].join("\n");
 }
 
@@ -70,8 +69,7 @@ export function handoffNudgeText(): string {
   return [
     "[Automated reminder] Your last turn ended but this session is still open, and your context crossed the alert threshold earlier.",
     "Call the pmux_done tool now, with your handoff text in its `handoff` parameter, to end the session and hand the task to a fresh agent.",
-    "If you are blocked and need input from the caller, call caller_ping with your question.",
-    "Otherwise, continue working.",
+    "If you are blocked, call caller_ping with your question. Otherwise, continue working.",
   ].join("\n");
 }
 

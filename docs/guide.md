@@ -424,9 +424,8 @@ If the user types into an auto-exit agent pane after its first run, the session 
 All other sessions exit through an explicit tool call: `pmux_done` to finish, or `caller_ping` to hand a question back to the parent. To make that reliable, the child extension nudges itself. When the agent finishes a turn normally without calling `pmux_done`, it receives a follow-up reminder after 5 seconds:
 
 > [Automated reminder] Your last turn ended but this session is still open.
-> If your task is complete, call the pmux_done tool now, with no other text. Your last message was already delivered as your report — do not repeat or summarise it.
-> If you are blocked and need input from the caller, call caller_ping with your question.
-> Otherwise, continue working.
+> If your task is complete, call the pmux_done tool now, with no other text — your last message was already delivered as your report, do not repeat or summarise it.
+> If you are blocked, call caller_ping with your question. Otherwise, continue working.
 
 These events cancel a pending nudge: the agent starts new work, the user types into the pane, or the agent calls `pmux_done` or `caller_ping`. Error stops never nudge. They still exit at once and report the failure to the parent.
 
@@ -437,11 +436,11 @@ Configure the nudge with environment variables (read by the child at launch):
 | `PI_PMUX_NUDGE_DELAY_MS` | `5000`  | Delay before the reminder (minimum 1000) |
 | `PI_PMUX_NUDGE_DISABLE`  | unset   | Set to `1` to disable the nudge entirely |
 
-Parent-side idle watchdog. The child nudge depends on the child and the model, so the parent backs it up. For non-interactive children, if the child activity file has said `waiting` (turn ended) for 30 seconds without the session exiting, the parent types a reminder into the pane itself. After two such reminders, if the child still waits another 30 seconds, the parent finishes it as if `pmux_done` had been called. The last assistant message becomes the result, and the pane closes. The parent never touches interactive children. The timings live in `pi-extension/pmux/idle-watchdog.ts`.
+Parent-side idle watchdog. The child nudge depends on the child and the model, so the parent backs it up. For non-interactive children, if the child activity file has said `waiting` (turn ended) for 30 seconds without the session exiting, the parent types a reminder into the pane itself — the same reminder text, which lives in `pi-extension/pmux/nudge.ts` so the two copies cannot drift apart. After two such reminders, if the child still waits another 30 seconds, the parent finishes it as if `pmux_done` had been called. The last assistant message becomes the result, and the pane closes. The parent never touches interactive children. The timings live in `pi-extension/pmux/idle-watchdog.ts`.
 
 What `auto-exit: true` does: it ends the session when the turn of the agent completes normally (see above), and it shapes defaults:
 
-- The task hint tells the agent upfront to call `pmux_done` when finished ("Complete your task autonomously. Call pmux_done when finished.").
+- The task hint tells the agent upfront to call `pmux_done` when finished ("Complete your task autonomously, then call pmux_done.").
 - It sets the default for `interactive` (see below). `auto-exit: true` agents count as autonomous and get stall pings. Agents without it count as interactive and stay quiet.
 
 ```yaml
