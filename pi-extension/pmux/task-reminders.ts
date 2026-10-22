@@ -36,8 +36,7 @@ import { isSubagentChild } from "./child-env.ts";
  * tmux-agent-sidebar's `src/task_reminders.rs`; the module header and the
  * wording test carry the drift mechanism (D1).
  */
-export const UPDATE_BEFORE_FINISH_REMINDER =
-  "Open tasks remain: before finishing your turn, update their statuses with task-update <id> <status>.";
+export const UPDATE_BEFORE_FINISH_REMINDER = "Reminder: make sure the task board is up to date.";
 
 /** Status of one stored task item (`task_store.rs`'s `TaskItemStatus`). */
 export type SidebarTaskStatus = "pending" | "in_progress" | "completed";
@@ -107,8 +106,8 @@ function byId(a: string, b: string): number {
  * The store's open set as one stable key: the sorted open ids, JSON-encoded —
  * encoding, not joining, is what keeps `"1,2"` and `["1", "2"]` different
  * keys. The D5 guard compares this key per turn end, so a reminder fires
- * again only after the store's open set changed — the `task-update` calls
- * the reminder asks for.
+ * again only after the store's open set changed — the store updates the
+ * reminder asks for.
  */
 export function openTaskKey(items: SidebarTaskItem[]): string {
   return JSON.stringify(

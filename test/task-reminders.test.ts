@@ -122,7 +122,7 @@ describe("the wording (D1)", () => {
   it("is byte for byte the sidebar's UPDATE_BEFORE_FINISH_REMINDER", () => {
     assert.equal(
       UPDATE_BEFORE_FINISH_REMINDER,
-      "Open tasks remain: before finishing your turn, update their statuses with task-update <id> <status>.",
+      "Reminder: make sure the task board is up to date.",
     );
   });
 

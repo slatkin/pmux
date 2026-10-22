@@ -85,8 +85,9 @@ sidebar's `src/task_reminders.rs`:
 - A turn that starts while the pane's todo list is empty may receive:
   `No tasks recorded yet: before starting work, record your todo list with task-set <subject>.`
 - A turn that ends while items are still open receives:
-  `Open tasks remain: before finishing your turn, update their statuses with task-update <id> <status>.`
+  `Reminder: make sure the task board is up to date.`
 
-Both are commands you already have; follow their instruction with the forms
-above. Which reminders reach you depends on the harness: the
-update-before-finish one is delivered to pi panes by the pmux extension.
+The update reminder points at the whole board, not at a command form —
+bring it in step with the `task-update` forms above. Which reminders reach
+you depends on the harness: the update-before-finish one is delivered to
+pi panes by the pmux extension.
