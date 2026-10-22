@@ -382,6 +382,18 @@ export function readWindowOptions(pane: string, names: string[]): string[] {
   return names.map((_, i) => values[i] ?? "");
 }
 
+/** Read one pane user option. `show -pv` reads the pane's own scope, so an
+ * option no pane has set fails there and reads as no value.
+ */
+export function readPaneOption(pane: string, name: string): string | null {
+  try {
+    const value = tmux(["show", "-pv", "-t", pane, name]).trim();
+    return value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Read the visible contents of a pane (sync). */
 export function readScreen(surface: string, lines = 50): string {
   return tailLines(

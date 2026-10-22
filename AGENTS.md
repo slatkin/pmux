@@ -27,10 +27,10 @@ The pre-commit hook (`.githooks/pre-commit`) runs format:check, lint, typecheck 
 
 ### Two ways to launch a child
 
-Both paths end in the same pane command: `node pi-extension/pmux/cli.ts run <spec>`.
+Both paths end in the same pane command: `node pi-extension/pmux/cli.ts run <spec>`, and one module, `pi-extension/pmux/launch-build.ts`, builds the pi launch spec for both paths. The module holds the spec builder (`buildPiLaunch`), the parent-contact input (`ParentContact`), the prompt and role-prompt files (written with `writeRunContextFile`), the launch-record resolution (`resolveLaunchRecord`) and the parent footers (`reportFooter`, `parentFooter`, `sendFooter`).
 
-- **pi parent.** The `pmux_spawn`, `pmux_resume`, `pmux_message`, `pmux_interrupt` and `pmux_list` tools in `index.ts` call `supervisor.ts`. The supervisor resolves the role, writes a launch spec, creates and names the pane, runs the pane command, and polls for exit. It also owns the status widget, the idle watchdog and message delivery.
-- **External orchestrator (Claude Code).** `skills/pmux/launch.ts` finds the package and passes its argv to `cli.ts start` or `cli.ts resume`. The CLI does the same steps: role resolution, parent footer, pane split, launch spec.
+- **pi parent.** The `pmux_spawn`, `pmux_resume`, `pmux_message`, `pmux_interrupt` and `pmux_list` tools in `index.ts` call `supervisor.ts`. The supervisor resolves the role through `resolveLaunchRecord`, writes the launch spec it gets from `buildPiLaunch`, builds its own `RunningSubagent`, creates and names the pane, runs the pane command, and polls for exit. It also owns the status widget, the idle watchdog and message delivery.
+- **External orchestrator (Claude Code).** `skills/pmux/launch.ts` finds the package and passes its argv to `cli.ts start` or `cli.ts resume`. The CLI does the same steps through the shared builder: role resolution, parent footer, pane split, launch spec. `cli.ts start` writes `<session>.launch.json` beside the session file, the same launch record `pmux_spawn` writes. `cli.ts resume` rebuilds the spec from that record and refuses a spec without one, exiting 1 with a message that names `start`.
 
 The pane runs `cli.ts run`. It starts the child from the spec with no shell, reports the exit code, wakes the parent when a send-mode child exits without a delivered report, and, for skill launches only, closes the pane after a `done` or `handoff` sidecar.
 

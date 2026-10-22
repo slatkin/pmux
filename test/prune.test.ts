@@ -1,3 +1,4 @@
+import "./host-env.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 
@@ -67,6 +68,56 @@ describe("pruneScratch", () => {
     assert.equal(result.scanned, 2);
     assert.deepEqual(result.deleted, [old]);
     assert.equal(existsSync(fresh), true);
+  });
+
+  it("prunes the launcher's artifact prompt files past the retention", () => {
+    const dir = mkdtempSync(join(workdir, "artifacts-"));
+    const context = join(dir, "artifacts", "abc", "context");
+    const resume = join(dir, "artifacts", "abc", "pmux-resume");
+    mkdirSync(context, { recursive: true });
+    mkdirSync(resume, { recursive: true });
+    mkdirSync(join(dir, "artifacts", "abc", "other"), { recursive: true });
+    // The stamped names `writeRunContextFile` creates.
+    const oldPrompt = seed(context, "w2-2026-10-21T20-15-30.md", 8 * DAY_MS);
+    const oldSysprompt = seed(context, "w2-sysprompt-2026-10-21T20-15-30.md", 8 * DAY_MS);
+    const oldResume = seed(resume, "w2-2026-10-21T20-15-31.md", 8 * DAY_MS);
+    const freshPrompt = seed(context, "w2-2026-10-21T23-59-59.md", DAY_MS);
+    // A file the launcher did not write stays: unstamped, and in another
+    // folder of the same id.
+    const unstamped = seed(context, "w2-notes.md", 30 * DAY_MS);
+    const foreignFolderFile = seed(
+      join(dir, "artifacts", "abc", "other"),
+      "w2-2026-10-21T20-15-30.md",
+      30 * DAY_MS,
+    );
+    const foreignRoot = seed(dir, "scout-deadbeef.jsonl", 8 * DAY_MS);
+
+    const result = pruneScratch(dir, { maxAgeMs: 7 * DAY_MS });
+
+    assert.equal(existsSync(oldPrompt), false);
+    assert.equal(existsSync(oldSysprompt), false);
+    assert.equal(existsSync(oldResume), false);
+    assert.equal(existsSync(freshPrompt), true);
+    assert.equal(existsSync(unstamped), true);
+    assert.equal(existsSync(foreignFolderFile), true);
+    // The top-level rule still covers its own suffixes: the receipt-shaped
+    // root file was old and managed, so it went too.
+    assert.equal(existsSync(foreignRoot), false);
+    // `deleted` is sorted by path: the artifacts tree sorts before the root
+    // file, and `w2-2…` before `w2-s…` inside the context folder.
+    assert.deepEqual(result.deleted, [oldPrompt, oldSysprompt, oldResume, foreignRoot]);
+  });
+
+  it("prunes artifact files under every parent id", () => {
+    const dir = mkdtempSync(join(workdir, "artifacts-ids-"));
+    const first = join(dir, "artifacts", "%21", "context");
+    const second = join(dir, "artifacts", "sess-abc", "context");
+    mkdirSync(first, { recursive: true });
+    mkdirSync(second, { recursive: true });
+    const oldFirst = seed(first, "w2-2026-10-21T20-15-30.md", 8 * DAY_MS);
+    const oldSecond = seed(second, "w2-2026-10-21T20-15-30.md", 8 * DAY_MS);
+    const result = pruneScratch(dir, { maxAgeMs: 7 * DAY_MS });
+    assert.deepEqual(result.deleted, [oldFirst, oldSecond]);
   });
 
   it("lists without deleting on dry run", () => {
@@ -195,6 +246,8 @@ describe("cli.ts prune", () => {
     );
     assert.equal(code, 0);
     assert.equal(existsSync(old), false);
-    assert.ok(readdirSync(scratch).some((file) => file.endsWith(".prompt.md")));
+    // The fresh launch files survive the prune; the prompt now lives under
+    // artifacts/<id>/context/, so the record beside the session file marks it.
+    assert.ok(readdirSync(scratch).some((file) => file.endsWith(".launch.json")));
   });
 });

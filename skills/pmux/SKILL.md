@@ -66,8 +66,21 @@ with user consent).
    node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>]
    ```
    `<cwd>` is the child's working directory; `--scratch` (default
-   `${TMPDIR:-/tmp}/pmux`) holds the generated prompt, role prompt
-   and launch spec. Each `start` deletes scratch files older than 7 days,
+   `${TMPDIR:-/tmp}/pmux`) holds the generated context files. `start`
+   writes the task prompt to
+   `<scratch>/artifacts/<parent id>/context/<name>-<timestamp>.md`
+   and the role prompt to
+   `<scratch>/artifacts/<parent id>/context/<name>-sysprompt-<timestamp>.md`,
+   both names carrying a 19-character timestamp, and hands the child the
+   task prompt as `@<path>`. The parent id is your own pane's
+   `@pane_session_id`, not the `--parent` value; when that read fails or
+   comes back empty, your pane id stands in and the launch continues.
+   The launch spec, the session file and the launch record stay beside
+   each other at `<scratch>/<base>.*`; `<session>.launch.json` is the
+   launch record. `resume` rebuilds the spec from that record and writes
+   the follow-up prompt to
+   `<scratch>/artifacts/<parent id>/pmux-resume/<name>-<timestamp>.md`.
+   Each `start` deletes scratch files older than 7 days,
    so the folder stays bounded; recent sessions stay for resume. To clean
    on demand (add `--dry-run` to only list):
    ```bash
@@ -112,8 +125,11 @@ with user consent).
      close the pane once you are done with it.
    - `{"type":"ping",...}` → the child ignored the footer and used
      `caller_ping`; the question is in the file. `rm` it, write your
-     answer to a prompt file, and run `resume` with that prompt. The
-     pane stays open until you close it.
+     answer to a prompt file, and run `resume` with that prompt. A spec
+     with no launch record beside its session file (one from an older
+     version) cannot be resumed — `resume` exits 1 and its message names
+     `start`, so run `start` again. The pane stays open until you close
+     it.
    - `.exit` absent + `__SUBAGENT_DONE_<n>__` at the tail of the child's
      pane → the wrapper itself was killed, so it wrote no sidecar (a child
      crash now writes an `error` sidecar). The pane stays open. Read the last
@@ -230,8 +246,13 @@ node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child
 ```
 
 `<spec>` is the `launch` field from the start JSON; `--name` defaults to the
-child name stored in the spec. A fresh role or a correction lane → new child
-via `start`.
+child name stored in the spec. `resume` rebuilds the launch spec from the
+session's launch record (`<session>.launch.json`, which holds the parent id
+`start` used) and writes the follow-up prompt under
+`artifacts/<parent id>/pmux-resume/`. A spec with no record beside its
+session file (one from an older version) cannot be resumed — `resume` exits
+1 and its message names `start`; run `start` again in that case. A fresh
+role or a correction lane → new child via `start`.
 
 ## While it runs / after
 
@@ -243,7 +264,11 @@ via `start`.
   node <skill-dir>/launch.ts resume --launch <spec> --prompt <file> [--name <child>]
   ```
   `<spec>` is the `launch` field from the start JSON; `--name` defaults to
-  the child name stored in the spec. The role surface stored in the launch
+  the child name stored in the spec. `resume` rebuilds the launch spec from
+  the session's launch record (`<session>.launch.json`); a spec with no
+  record beside its session file (one from an older version) cannot be
+  resumed — `resume` exits 1 and its message names `start`, so run
+  `start` again. The role surface stored in the launch
   spec applies — a resume keeps the role's surface — and then the
   extension's `config.json`. The same session resumes with full
   context and the child re-reports the same way. The old pane is not needed.

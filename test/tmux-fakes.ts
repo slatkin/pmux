@@ -25,6 +25,14 @@ export interface TmuxPaneFake {
    * `@pmux_parent` prints as an empty field.
    */
   placementRows: string | null;
+  /**
+   * The `@pane_session_id` the caller pane answers on a `show -pv` read: a
+   * string returned verbatim, `null` making the read fail, unset answering
+   * empty. A `show` read is answered but not logged, like the placement
+   * plumbing, so `lines` stays the pane-mutating call sequence the launch
+   * tests assert; an unset or empty answer reads as no id.
+   */
+  paneSessionId?: string | null;
 }
 
 /**
@@ -71,6 +79,13 @@ export function useTmuxPaneFake(): TmuxPaneFake {
   const fake: TmuxPaneFake = { lines, placementRows: null };
   __setTmuxExecForTests__((args) => {
     const joined = args.join(" ");
+    if (args[0] === "show") {
+      if (args.includes("@pane_session_id") && fake.paneSessionId !== undefined) {
+        if (fake.paneSessionId === null) throw new Error("no such pane: simulated read failure");
+        return fake.paneSessionId;
+      }
+      return "";
+    }
     // The placement plumbing is answered but not logged, so `lines` stays the
     // sequence of pane-mutating calls the launch tests assert.
     if (args[0] === "list-panes" && joined.includes("#{pane_width}")) {

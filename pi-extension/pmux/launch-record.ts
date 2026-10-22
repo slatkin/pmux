@@ -33,6 +33,12 @@ export interface LaunchRecord {
   autoExit: boolean;
   interactive: boolean;
   claudeSessionId?: string;
+  /** The parent session id of an external launch (design D5): the pi parent
+   * resolves nothing, so it keeps none. Only `validateLaunchRecord` and a
+   * future external writer read them; absence stays valid (design D6). */
+  parentSessionId?: string;
+  /** The close grace of an external launch spec, in milliseconds. */
+  closeGraceMs?: number;
 }
 
 /** `<session>.launch.json`: the record sits beside the child session file. */
@@ -47,6 +53,12 @@ function invalid(message: string): never {
 function optionalString(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") invalid(`${field} must be a string`);
+  return value;
+}
+
+function optionalNumber(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number") invalid(`${field} must be a number`);
   return value;
 }
 
@@ -93,6 +105,8 @@ export function validateLaunchRecord(data: unknown): LaunchRecord {
   const tools = optionalString(record.tools, "tools");
   const rolePrompt = optionalString(record.rolePrompt, "rolePrompt");
   const claudeSessionId = optionalString(record.claudeSessionId, "claudeSessionId");
+  const parentSessionId = optionalString(record.parentSessionId, "parentSessionId");
+  const closeGraceMs = optionalNumber(record.closeGraceMs, "closeGraceMs");
 
   // The stored surface is parsed, not validated: an unknown value is dropped
   // and does not make the file invalid, matching the role key's treatment.
@@ -114,6 +128,8 @@ export function validateLaunchRecord(data: unknown): LaunchRecord {
     ...(systemPromptMode !== undefined ? { systemPromptMode } : {}),
     ...(surface !== undefined ? { surface } : {}),
     ...(claudeSessionId !== undefined ? { claudeSessionId } : {}),
+    ...(parentSessionId !== undefined ? { parentSessionId } : {}),
+    ...(closeGraceMs !== undefined ? { closeGraceMs } : {}),
   };
 }
 
@@ -132,14 +148,8 @@ export function writeLaunchRecord(recordFile: string, record: LaunchRecord): voi
 
 /** Read a record; a missing, unreadable or invalid file reads as no record. */
 export function readLaunchRecord(recordFile: string): LaunchRecord | null {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(recordFile, "utf8"));
-  } catch {
-    return null;
-  }
-  try {
-    return validateLaunchRecord(parsed);
+    return validateLaunchRecord(JSON.parse(readFileSync(recordFile, "utf8")));
   } catch {
     return null;
   }

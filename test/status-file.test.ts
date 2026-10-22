@@ -14,6 +14,11 @@ import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
 import { exitSidecarPath, readExitSidecar } from "../pi-extension/pmux/exit-sidecar.ts";
 import { runSpec } from "../pi-extension/pmux/run.ts";
 import { main } from "../pi-extension/pmux/cli.ts";
+import {
+  getLaunchRecordFile,
+  writeLaunchRecord,
+  type LaunchRecord,
+} from "../pi-extension/pmux/launch-record.ts";
 import { writeLaunchSpec, LAUNCH_SPEC_VERSION } from "../pi-extension/pmux/launch.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 import { useTmuxPaneFake } from "./tmux-fakes.ts";
@@ -393,6 +398,8 @@ describe("cli resume removes a stale status", () => {
     await withTempDirAsync(async (dir) => {
       // The launch spec is written directly: the removal lives in `resume`,
       // so minting it through a full first launch adds nothing to the check.
+      // The record beside the session file is required since resume rebuilds
+      // from it, so the test writes the smallest valid one.
       const scratch = join(dir, "scratch");
       const sessionFile = join(scratch, "scout-1.jsonl");
       const launchPath = join(scratch, "scout-1.json");
@@ -405,6 +412,15 @@ describe("cli resume removes a stale status", () => {
         sessionFile,
         parent: "orch",
       });
+      const record: LaunchRecord = {
+        version: 1,
+        backend: "pi",
+        name: "scout-1",
+        denyTools: [],
+        autoExit: true,
+        interactive: true,
+      };
+      writeLaunchRecord(getLaunchRecordFile(sessionFile), record);
       const followup = join(dir, "followup.md");
       writeFileSync(followup, "Continue.\n");
 
