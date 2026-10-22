@@ -1,6 +1,6 @@
 ---
 name: pmux
-description: Delegated subagents for build, review, recon and doc work: each role runs as a pi process in its own tmux pane and reports back through its session file. For an external orchestrator such as Claude Code it starts children with `--report send`, so the report is typed into the orchestrator's pane. Use it when asked to launch, spawn, start or delegate work to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, or a review-fix loop until pass.
+description: "Delegated subagents for build, review, recon and doc work: each role runs as a pi process in its own tmux pane and reports back through its session file. For an external orchestrator such as Claude Code it starts children with `--report send`, so the report is typed into the orchestrator's pane. Use it when asked to launch, spawn, start or delegate work to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, or a review-fix loop until pass."
 ---
 
 # pi subagents via tmux
