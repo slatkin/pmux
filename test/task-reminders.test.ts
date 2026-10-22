@@ -20,7 +20,6 @@ import { tempDirHelpers } from "./temp-dir.ts";
 import {
   UPDATE_BEFORE_FINISH_REMINDER,
   createTaskReminders,
-  isEmptyStore,
   openTaskKey,
   openTasks,
   parseSidebarTaskStore,
@@ -34,25 +33,28 @@ import {
 
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-// A suite run inside a real pi/tmux pane inherits live identity vars. The
-// factory reads the env it is handed, so this only guards the one index-level
-// test below, which wires process.env for real.
-for (const key of Object.keys(process.env)) {
-  if (
-    key.startsWith("LUVUS_") ||
-    key.startsWith("PI_LUVUS_") ||
-    key.startsWith("PI_PMUX_") ||
-    key === "TMUX" ||
-    key === "TMUX_PANE"
-  ) {
-    delete process.env[key];
-  }
-}
+// host-env.ts has already scrubbed the live identity vars (TMUX, TMUX_PANE,
+// PI_PMUX_*) from this process; each test below sets exactly what it needs.
 
 const PANE_ENV = { TMUX: "/tmp/tmux-0/default", TMUX_PANE: "%7" };
-const STOP = { message: { role: "assistant", stopReason: "stop" }, turnIndex: 0 };
-const ERROR_END = { message: { role: "assistant", stopReason: "error" }, turnIndex: 0 };
-const ABORTED_END = { message: { role: "assistant", stopReason: "aborted" }, turnIndex: 0 };
+// What a settled turn boundary carries: the boundary's `outcome` verdict plus
+// the last message. The skip reads the outcome, so the message is only here
+// for realism.
+const STOP = {
+  outcome: "completed",
+  message: { role: "assistant", stopReason: "stop" },
+  turnIndex: 0,
+};
+const ERROR_END = {
+  outcome: "error",
+  message: { role: "assistant", stopReason: "error" },
+  turnIndex: 0,
+};
+const ABORTED_END = {
+  outcome: "aborted",
+  message: { role: "assistant", stopReason: "aborted" },
+  turnIndex: 0,
+};
 
 const item = (id: string, status: SidebarTaskStatus = "pending"): SidebarTaskItem => ({
   id,
@@ -190,14 +192,15 @@ describe("the store reader (D2)", () => {
   it("keeps only the open statuses in the open set", () => {
     const items = [item("1", "pending"), item("2", "in_progress"), item("3", "completed")];
     assert.deepEqual(openTasks(items), [item("1"), item("2", "in_progress")]);
-    assert.deepEqual(openTaskKey(items), "1,2");
-    assert.deepEqual(openTaskKey([item("2"), item("1")]), "1,2", "the key is order-independent");
+    assert.equal(openTaskKey(items), '["1","2"]');
+    assert.equal(openTaskKey([item("2"), item("1")]), '["1","2"]', "the key is order-independent");
   });
 
-  it("names the empty predicate", () => {
-    assert.equal(isEmptyStore([]), true);
-    assert.equal(isEmptyStore([item("1")]), false);
-    assert.equal(isEmptyStore(parseSidebarTaskStore("not json at all")), true);
+  it("cannot encode two different open sets as one key", () => {
+    // A comma-joined key would make ["1","2"] and the single id "1,2"
+    // collide, hiding a changed set from the guard; the JSON encoding keeps
+    // every shape its own key.
+    assert.notEqual(openTaskKey([item("1"), item("2")]), openTaskKey([item("1,2")]));
   });
 
   it("reads a readable, missing and unreadable file at a path", () => {
@@ -248,8 +251,30 @@ describe("the settlement anchor", () => {
     const store = [item("1", "pending"), item("2", "in_progress"), item("3", "completed")];
     const { fire, reads, sent } = makeHarness({ readStore: () => store });
     fire("turn_end", STOP);
-    assert.deepEqual(reads, ["%7"], "the read is the pane's own store, synchronously");
+    // Both happened inside the synchronous handler call — the pane's own
+    // store was read and the injection recorded with nothing awaited in
+    // between, so the read never delays the handler's return.
+    assert.deepEqual(reads, ["%7"]);
     assert.deepEqual(sent, delivered(), "one steer with the wording, and no triggerTurn option");
+  });
+
+  it("a stop that does not settle completed is skipped by the outcome alone", () => {
+    // The decision is the boundary's `outcome`: even a turn whose last
+    // message stopped normally gets nothing when the settlement is `error`
+    // or `aborted` (and anything else pi adds there in the future).
+    const { fire, reads, sent } = makeHarness({ readStore: () => [item("1")] });
+    fire("turn_end", {
+      outcome: "error",
+      message: { role: "assistant", stopReason: "stop" },
+      turnIndex: 0,
+    });
+    fire("turn_end", {
+      outcome: "aborted",
+      message: { role: "assistant", stopReason: "stop" },
+      turnIndex: 0,
+    });
+    assert.deepEqual(reads, []);
+    assert.deepEqual(sent, []);
   });
 
   it("never reads the store at all when the pane has no TMUX_PANE", () => {
@@ -334,13 +359,6 @@ describe("delivery never disturbs the session (D6, D7)", () => {
     assert.deepEqual(appends, [], "nothing went to the session output");
   });
 
-  it("reads the store synchronously: the read and the injection both happen inside fire", () => {
-    const { fire, reads, sent } = makeHarness({ readStore: () => [item("1")] });
-    fire("turn_end", STOP);
-    assert.deepEqual(reads, ["%7"]);
-    assert.deepEqual(sent, delivered(), "delivered without awaiting anything");
-  });
-
   it("swallows a throwing injection", () => {
     const { fire } = makeHarness({
       readStore: () => [item("1")],
@@ -399,7 +417,11 @@ describe("the index.ts registration (D7)", () => {
       } as never);
 
       for (const fn of handlers.get("turn_end") ?? []) {
-        fn({ message: { role: "assistant", stopReason: "stop" }, turnIndex: 0 });
+        fn({
+          outcome: "completed",
+          message: { role: "assistant", stopReason: "stop" },
+          turnIndex: 0,
+        });
       }
     } finally {
       for (const fn of handlers.get("session_shutdown") ?? []) fn(undefined);

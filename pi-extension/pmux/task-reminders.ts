@@ -9,9 +9,9 @@
  * `pnpm test` when they drift apart.
  *
  * This module only decides when the reminder is injected: at the `turn_end`
- * whose pane's sidebar task store holds open items (D5), after a run that is
- * neither `error` nor `aborted`, for a pi session that is not a subagent
- * child (D4). An empty store is silent at every boundary: no
+ * whose pane's sidebar task store holds open items (D5), after a run that
+ * settled `completed`, for a pi session that is not a subagent child (D4).
+ * An empty store is silent at every boundary: no
  * `before_agent_start` anchor is registered, because recording tasks is a
  * human-prompted action, not a default tag (D3). The injection is one steer
  * message and never spawns a turn of its own (D6). Per registration there are
@@ -26,7 +26,7 @@
  * — no tmux call, no subprocess, nothing awaited (D2); a missing or unreadable
  * file reads as empty, exactly like the sidebar's own reader.
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, TurnEndEvent } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { isSubagentChild } from "./child-env.ts";
 
@@ -106,21 +106,21 @@ function byId(a: string, b: string): number {
 }
 
 /**
- * The store's open set as one stable key: the sorted open ids. The D5 guard
- * compares this key per turn end, so a reminder fires again only after the
- * store's open set changed — the `task-update` calls the reminder asks for.
+ * The store's open set as one stable key: the sorted open ids, JSON-encoded —
+ * encoding, not joining, is what keeps `"1,2"` and `["1", "2"]` different
+ * keys. The D5 guard compares this key per turn end, so a reminder fires
+ * again only after the store's open set changed — the `task-update` calls
+ * the reminder asks for.
  */
 export function openTaskKey(items: SidebarTaskItem[]): string {
-  return openTasks(items)
-    .map((item) => item.id)
-    .sort(byId)
-    .join(",");
+  return JSON.stringify(
+    openTasks(items)
+      .map((item) => item.id)
+      .sort(byId),
+  );
 }
 
-/** The "empty" predicate: a store that holds no items at all. */
-export function isEmptyStore(items: SidebarTaskItem[]): boolean {
-  return items.length === 0;
-}
+/** The "empty" predicate: a store read that holds no items at all reads as `[]`. */
 
 /**
  * Read a store file at a path. A missing, unreadable or malformed file reads
@@ -175,21 +175,17 @@ export function createTaskReminders(
 
   return {
     register(pi: ExtensionAPI): void {
-      pi.on("turn_end", (event: unknown) => {
+      pi.on("turn_end", (event: TurnEndEvent) => {
         // A subagent child's attention is owned by its parent; its turn ends
         // reach the parent through the exit sidecar and `pmux_done` (D4).
         if (isSubagentChild(env)) return;
 
-        // Error and aborted turns end without the steer read; a steer sent
-        // for them would only land on the next prompt — the context alert's
-        // own skip rule (D5).
-        const message = (event as { message?: { role?: string; stopReason?: string } })?.message;
-        if (
-          message?.role === "assistant" &&
-          (message.stopReason === "error" || message.stopReason === "aborted")
-        ) {
-          return;
-        }
+        // A settlement that is not `completed` — `error` or `aborted` — ends
+        // the run without the steer read; a steer sent for it would only land
+        // on the next prompt (the context alert's own skip rule, D5). The
+        // boundary's `outcome` carries the verdict, so the skip needs no
+        // second stop-reason classifier of its own to keep in step.
+        if (event.outcome !== "completed") return;
 
         // Outside tmux there is no pane and no store; the store read never
         // runs for one (the spec's "no store at all").
@@ -214,8 +210,9 @@ export function createTaskReminders(
         remindedOpenKey = openKey;
 
         // An open set that is empty is the "empty" condition: silent, with
-        // the guard now reset for the next turn start (D3).
-        if (openKey === "") return;
+        // the guard now reset for the next turn start (D3). The JSON key of
+        // an empty set is `"[]"`.
+        if (openKey === "[]") return;
 
         // D6: one steer, queued to the turn the agent next runs; no run is
         // started for it. A thrown or rejected send is swallowed (D7).
