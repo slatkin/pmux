@@ -3,28 +3,29 @@
 ## Context
 
 The sidebar repo's `tasks-tab` change (spec `agent-tasks`, "Reminders are
-conditional with common wording") defines two reminders and fixes their
-wording in `src/task_reminders.rs`: record-first when a turn starts with an
-empty todo list, update-before-finish when a turn ends with open items. Its
-`docs/agent-protocol.md` section "The task reminders" documents both,
-verbatim. Tasks reach the store only through the sidebar's task commands;
-this extension never writes the store.
+conditional with common wording") defines the reminder wording in
+`src/task_reminders.rs`: update-before-finish, fired when a turn ends with
+open items. Its `docs/agent-protocol.md` section "The task reminders"
+documents it verbatim. Tasks reach the store only through the sidebar's
+task commands; this extension never writes the store.
 
-This extension already sits at both boundaries the reminders hang off: it
-maps pi's `input` event to the sidebar's `user-prompt-submit`
-(`sidebar-events.ts`), and it ends work per run. The delivery mechanism
-precedent is the context alert (`pmux-done.ts`): a `turn_end` check runs
+This change delivers that one reminder only. The record-first reminder is
+deliberately not delivered: recording tasks is a human-prompted action,
+not a default tag, so a pane that has recorded nothing must stay quiet.
+
+This extension already sits at the settlement boundary the reminder hangs
+off: it ends work per run. The delivery mechanism precedent is the context
+alert (`pmux-done.ts`): a `turn_end` check runs
 `pi.sendUserMessage(text, { deliverAs: "steer" })` — a steer message the
 model reads, with no `triggerTurn`, so delivery never spawns a run of its
-own. And pi distinguishes a user prompt from an injected steer turn at
-`before_agent_start` via the event's `messageType` (the check
-`live-title.ts` uses so steer turns cannot claim the first-prompt title).
+own.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Each reminder fires exactly in its condition and only then, for a pi pane.
+- The reminder fires exactly in its condition and only then, for a pi pane
+  that already holds tasks.
 - The wording is the sidebar's, byte-for-byte, with the source named.
 - Delivery never disturbs the session (the `sidebar-events` rule).
 
@@ -39,11 +40,11 @@ own. And pi distinguishes a user prompt from an injected steer turn at
 ## Decisions
 
 **D1: The wording is copied once, and the source is named.** A new module
-holds the two reminder texts as constants, byte-identical to the sidebar's
-`RECORD_FIRST_REMINDER` and `UPDATE_BEFORE_FINISH_REMINDER`, with a
-comment naming `src/task_reminders.rs` in the tmux-agent-sidebar
-repository as their single source. A wording test asserts the copy against
-a literal, so an unsynced wording edit fails CI. The modules are
+holds the reminder text as a constant, byte-identical to the sidebar's
+`UPDATE_BEFORE_FINISH_REMINDER`, with a comment naming
+`src/task_reminders.rs` in the tmux-agent-sidebar repository as its single
+source. A wording test asserts the copy against a literal, so an unsynced
+wording edit fails CI. The modules are
 cross-repo, so they cannot import; a byte-identical copy with a named
 source is the smallest honest mechanism. (The alternative — a build step
 reading the other checkout — needs a second repository on disk and fails
@@ -57,15 +58,12 @@ encodes both its log and store filenames (`%` becomes `_`). One
 missing or unreadable file is the empty condition, which matches the
 sidebar semantics that a fresh pane starts empty.
 
-**D3: Record-first fires at `before_agent_start` on user turns.** The
-anchor is the same event `live-title.ts` uses, with the same
-`messageType` check: only an event whose `messageType` is `user` (or is
-absent, on older pi types) counts as a user prompt starting a turn; steer
-turns from `pi.sendMessage` are skipped, which also removes the loop a
-self-injected steer would cause. When the check fires and the pane's store
-holds no items, the record-first text is injected as a steer beside the
-turn — the model reads it in the same turn, so the recording it asks for
-happens before work is planned.
+**D3: There is no record-first reminder, and an empty store is silent.**
+The extension registers no `before_agent_start` anchor at all. Recording
+is a human-prompted action: an agent that has recorded nothing gets no
+nudge to record, so the extension never argues for a task list the human
+did not ask for. The absence also removes the only steer-vs-user-turn
+ambiguity in the design, because no reminder is injected at a turn start.
 
 **D4: pmux children never get reminders.** A subagent child's attention is
 owned by its parent — the `turn-notify.ts` rule ("Subagent children stay
@@ -78,16 +76,16 @@ interrupted turn — the cheaper failure.
 
 **D5: Update-before-finish fires at `turn_end`, guarded against repeat.**
 The anchor is the exact one `checkContextAlert` fires at. When the store
-still holds open (non-completed) items after a run that is neither
-`error` nor `aborted` (the context alert's own skip rule: a failed turn
-gets no steer, which would only land on the next prompt), the
-update-before-finish text is injected. The guard follows the context
+already holds tasks and at least one of them is open (non-completed),
+after a run that is neither `error` nor `aborted` (the context alert's own
+skip rule: a failed turn gets no steer, which would only land on the next
+prompt), the update-before-finish text is injected. The guard follows the context
 alert's `alertFired` shape: one flag per process, set when the reminder is
 injected, reset when the store's open set changes — the agent's
 `task-update` calls that the reminder asks for are the reset.
 
 **D6: Delivery rides the steer channel and never spawns a turn.** One
-primitive delivers both reminders: `pi.sendUserMessage(text, {
+primitive delivers the reminder: `pi.sendUserMessage(text, {
 deliverAs: "steer" })`, without `triggerTurn` — the exact call the
 context alert makes. Delivery therefore never costs a run while the agent
 is idle: a steer injected after a settled turn is read as leading context
@@ -109,16 +107,16 @@ follow.
   repositories change independently. Mitigation: the wording test pins the
   copy against literals and the comment names the source file; an unsynced
   wording edit fails `pnpm test` on the next CI run.
-- [Reminder loops] A steer that arrives as a steer turn could re-fire the
-  record-first check, whose condition still holds. Mitigation: D3's
-  `messageType` check keeps steer turns out of the anchor, and D5's flag
-  keeps a settled state from re-reminding.
+- [Reminder loops] A reminder read in the next turn must not re-fire at
+  that turn's end while the open set is unchanged. Mitigation: D5's flag
+  keeps a settled state from re-reminding until the store's open set
+  changes.
 - [The file race] A store written mid-turn is only seen at the next
   boundary. Mitigation: the checks run only at turn boundaries, so what
   they see is by definition the state at the boundary, which is the
   firing condition the spec names — the reminder is not asked to be live
   during a turn.
-- [Payload cost] Two short single-line strings, each shown at most once
+- [Payload cost] One short single-line string, shown at most once
   per state change; the wording's own brevity cap (120 characters) is
   owned by the sidebar's source-of-truth module.
 

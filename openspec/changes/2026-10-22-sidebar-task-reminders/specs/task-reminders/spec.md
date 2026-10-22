@@ -2,46 +2,42 @@
 
 ## ADDED Requirements
 
-### Requirement: the extension delivers the sidebar's task reminders
+### Requirement: the extension delivers the sidebar's update-before-finish reminder
 
-The extension SHALL inject the two task reminders of the
-tmux-agent-sidebar's agent-tasks spec into the pi session at the turn
-boundaries, each one exactly when its condition holds. The wording SHALL
-be the two reminder constants `RECORD_FIRST_REMINDER` and
-`UPDATE_BEFORE_FINISH_REMINDER`, copied byte-for-byte from
-`src/task_reminders.rs` in the tmux-agent-sidebar repository.
-
-#### Scenario: an empty store at turn start
-- **WHEN** a user prompt starts a turn and the pane's sidebar task store holds no items
-- **THEN** the record-first reminder is injected into that turn
-
-#### Scenario: a fresh store at turn start
-- **WHEN** a user prompt starts a turn and the pane's sidebar task store already holds items
-- **THEN** no reminder is injected
-
-#### Scenario: a steer turn is not a user turn
-- **WHEN** a run starts from an injected steer rather than a user prompt
-- **THEN** no reminder is injected at its start, so a delivered reminder cannot re-fire the condition that delivered it
-
-#### Scenario: a failed turn gets no steer
-- **WHEN** a turn ends in `error`, or the user aborted it
-- **THEN** no update-before-finish reminder is injected for that turn
+The extension SHALL inject the update-before-finish reminder at the
+settlement boundary, exactly when its condition holds. The wording SHALL be
+the reminder constant `UPDATE_BEFORE_FINISH_REMINDER`, copied byte-for-byte
+from `src/task_reminders.rs` in the tmux-agent-sidebar repository.
 
 #### Scenario: open items at turn end
-- **WHEN** the turn ends and the pane's store still holds pending or in-progress items
+- **WHEN** the turn ends and the pane's store holds pending or in-progress items
 - **THEN** the update-before-finish reminder is injected
 
 #### Scenario: nothing open at turn end
 - **WHEN** the turn ends and no item is open
 - **THEN** no reminder is injected and the next turn start starts clean
 
+#### Scenario: a failed turn gets no steer
+- **WHEN** a turn ends in `error`, or the user aborted it
+- **THEN** no update-before-finish reminder is injected for that turn
+
 #### Scenario: a child stays quiet
 - **WHEN** the pi session is a pmux subagent child
 - **THEN** no reminder is injected, whatever the store holds
 
 #### Scenario: the wording matches the source
-- **WHEN** the two injected texts are compared with `RECORD_FIRST_REMINDER` and `UPDATE_BEFORE_FINISH_REMINDER` in `src/task_reminders.rs` of the tmux-agent-sidebar repository
-- **THEN** both match byte for byte
+- **WHEN** the injected text is compared with `UPDATE_BEFORE_FINISH_REMINDER` in `src/task_reminders.rs` of the tmux-agent-sidebar repository
+- **THEN** it matches byte for byte
+
+### Requirement: an empty store is never nudged
+
+The extension SHALL NOT deliver the record-first reminder, and SHALL NOT
+inject anything at a turn start. Recording tasks is a human-prompted action,
+not a default tag.
+
+#### Scenario: an empty store stays silent
+- **WHEN** the pane's store holds no tasks, at any turn boundary
+- **THEN** no reminder is injected, so the agent is never told to record a list it was not asked to keep
 
 ### Requirement: delivery never disturbs the session
 
