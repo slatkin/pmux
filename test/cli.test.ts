@@ -2091,7 +2091,15 @@ describe("cli.ts send", () => {
       tmuxEnv(),
     );
     assert.equal(res.code, 0);
-    assert.equal(res.stdout, "");
+    // The command answers. A silent command reads as a failure to an agent,
+    // and an agent that cannot read the result probes the parent with a
+    // second message.
+    assert.deepEqual(JSON.parse(res.stdout), {
+      sent: true,
+      to: "%3",
+      bytes: Buffer.byteLength("worker done: commit abc", "utf8"),
+      receipt: null,
+    });
     assert.deepEqual(paneCalls, [
       "send-keys -t %3 -l worker done: commit abc",
       "send-keys -t %3 Enter",
@@ -2104,6 +2112,9 @@ describe("cli.ts send", () => {
   it("encodes multiline text into one line", async () => {
     const res = await runCli(["send", "--to", "%3", "--text", "line one\nline two"], tmuxEnv());
     assert.equal(res.code, 0);
+    // The byte count is the text as given, the same unit the receipt uses,
+    // so the child can compare the two numbers.
+    assert.equal(JSON.parse(res.stdout).bytes, Buffer.byteLength("line one\nline two", "utf8"));
     assert.deepEqual(paneCalls, [
       "send-keys -t %3 -l line one\\nline two",
       "send-keys -t %3 Enter",
@@ -2142,6 +2153,14 @@ describe("cli.ts send", () => {
         PI_PMUX_SESSION: sessionFile,
       });
       assert.equal(child.code, 0);
+      // The confirmation names the receipt it wrote, so the child can see
+      // that the delivery was recorded.
+      assert.deepEqual(JSON.parse(child.stdout), {
+        sent: true,
+        to: "%3",
+        bytes: Buffer.byteLength(text, "utf8"),
+        receipt: resolve(`${sessionFile}.sent`),
+      });
       const lines = readFileSync(`${sessionFile}.sent`, "utf8").trimEnd().split("\n");
       assert.equal(lines.length, 1);
       const receipt = JSON.parse(lines[0]) as { at: string; to: string; bytes: number };
@@ -2186,6 +2205,14 @@ describe("cli.ts send", () => {
       assert.equal(res.code, 0);
       assert.deepEqual(paneCalls, ["send-keys -t %3 -l hi", "send-keys -t %3 Enter"]);
       assert.equal(existsSync(`${sessionFile}.sent`), false);
+      // The delivery happened, so the command says so; the receipt did not
+      // land, so there is no receipt path to report.
+      assert.deepEqual(JSON.parse(res.stdout), {
+        sent: true,
+        to: "%3",
+        bytes: 2,
+        receipt: null,
+      });
     });
   });
 });

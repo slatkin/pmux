@@ -65,6 +65,7 @@ If this session auto-exits, it closes the first time you stop generating: the mo
 2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
    This is what wakes the orchestrator with your report — without it, it only learns that you exited.
    The report text may be long, may contain quotes and may span several lines — reading it from a file into the argument is fine; only the target pane matters. A line break arrives as the two characters \\n, so the orchestrator still reads the whole report as one message.
+   The command prints one confirmation line: the target pane, the size of the text it sent and the receipt file it wrote. That line is the delivery receipt. Do not send anything else to the parent to check whether the report arrived — a second message only gives the parent something to answer.
 3. Then call the pmux_done tool to close your session.
 
 If you are blocked, send your question with the send command and stop. The session closes; the parent resumes it with the answer. Do not try to reach the parent any other way.
@@ -378,6 +379,16 @@ describe("reportFooter dispatch", () => {
     assert.equal(reportFooter("orch", "send", "%21"), sendFooter("orch", SUBAGENTS_CLI_PATH));
     assert.equal(reportFooter("orch", "last", "%21"), parentFooter("orch", "%21"));
     assert.equal(reportFooter("orch", undefined, "%21"), parentFooter("orch", "%21"));
+  });
+
+  // A child that cannot tell a delivery from a no-op probes the parent with
+  // a second message. The footer names the confirmation line so the child
+  // reads it instead of asking.
+  it("the send footer names the confirmation line and forbids a second message", () => {
+    const footer = sendFooter("%12", "/pkg/cli.ts");
+    assert.match(footer, /prints one confirmation line/);
+    assert.match(footer, /That line is the delivery receipt/);
+    assert.match(footer, /Do not send anything else to the parent to check/);
   });
 });
 

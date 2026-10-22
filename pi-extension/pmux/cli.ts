@@ -36,7 +36,7 @@ import {
 } from "./exit-sidecar.ts";
 import { resolvePlacement } from "./placement.ts";
 import { encodePaneText } from "./pane-input.ts";
-import { appendReportReceipt } from "./report-receipt.ts";
+import { appendReportReceipt, reportReceiptPath } from "./report-receipt.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
@@ -479,15 +479,21 @@ function pruneCommand(values: CliValues, deps: CliDeps): number {
  * not care how the child quoted or built the send invocation. A failed
  * receipt write never fails the send; losing one only risks a spurious
  * wake-up.
+ *
+ * It returns the absolute path of the receipt file, or null when there is
+ * no receipt: outside a child there is no session file, and a failed write
+ * leaves none behind. The path is what the `send` command prints, so the
+ * child can see that the delivery was recorded.
  */
-function writeReportReceipt(env: NodeJS.ProcessEnv, to: string, text: string): void {
+function writeReportReceipt(env: NodeJS.ProcessEnv, to: string, text: string): string | null {
   const session = env.PI_PMUX_SESSION;
-  if (!session) return;
-  appendReportReceipt(session, {
+  if (!session) return null;
+  const written = appendReportReceipt(session, {
     at: new Date().toISOString(),
     to,
     bytes: Buffer.byteLength(text, "utf8"),
   });
+  return written ? resolve(reportReceiptPath(session)) : null;
 }
 
 /**
@@ -504,6 +510,7 @@ function usageFailure(error: unknown, writeErr: (text: string) => void): number 
 
 /** `send`: deliver one report into a pane as one input (type it, then Enter). */
 function sendCommand(values: CliValues, deps: CliDeps): number {
+  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
   const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
   try {
     const to = required("--to", values.to);
@@ -512,7 +519,19 @@ function sendCommand(values: CliValues, deps: CliDeps): number {
     // newline would end the line in the parent's pane, and the rest of the
     // report would arrive as separate input.
     agentPrompt(to, encodePaneText(text));
-    writeReportReceipt(deps.env ?? process.env, to, text);
+    const receipt = writeReportReceipt(deps.env ?? process.env, to, text);
+    // The command answers, because the caller is an agent: silence reads as
+    // failure, and an agent that cannot read the result either guesses or
+    // probes the parent with a second message. The line names the pane it
+    // typed into, the size of the text it sent and the receipt it wrote.
+    write(
+      JSON.stringify({
+        sent: true,
+        to,
+        bytes: Buffer.byteLength(text, "utf8"),
+        receipt,
+      }) + "\n",
+    );
     return 0;
   } catch (error) {
     return usageFailure(error, writeErr);

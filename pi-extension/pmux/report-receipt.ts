@@ -30,15 +30,17 @@ export function reportReceiptPath(sessionFile: string): string {
 }
 
 /**
- * Append one receipt line. Never throws and never reports failure: the
- * delivery already happened, and a lost receipt only costs the parent a
- * spurious wake-up.
+ * Append one receipt line. Never throws: the delivery already happened, and a
+ * lost receipt only costs the parent a spurious wake-up. It reports whether
+ * the line was written, so the caller can tell a receipt from no receipt.
  */
-export function appendReportReceipt(sessionFile: string, receipt: ReportReceipt): void {
+export function appendReportReceipt(sessionFile: string, receipt: ReportReceipt): boolean {
   try {
     appendFileSync(reportReceiptPath(sessionFile), `${JSON.stringify(receipt)}\n`);
+    return true;
   } catch {
     // Best effort; see above.
+    return false;
   }
 }
 

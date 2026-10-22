@@ -173,7 +173,9 @@ your pane.
 3. End the turn. The report arrives as a new message in your prompt — that
    is the child running the `send` command from its footer. A line break in
    the report arrives as the two characters `\n`, so the whole report is one
-   message. Do NOT sit in a polling loop instead of ending your turn; the
+   message. The `send` command prints its own confirmation line in the
+   child's pane, so a child does not come back to ask whether its report
+   arrived. Do NOT sit in a polling loop instead of ending your turn; the
    wake-up is the message, not the file.
 4. When you are awake again (the report arrived, or you want the child's
    final state), wait for the sidecar and read it:
