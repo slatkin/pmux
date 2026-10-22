@@ -308,7 +308,6 @@ export interface Supervisor {
 }
 
 export { resolveDenyTools } from "./child-env.ts";
-export { resolveSubagentPaths } from "./launch-build.ts";
 
 function sessionDirSlugFor(cwd: string): string {
   return cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");

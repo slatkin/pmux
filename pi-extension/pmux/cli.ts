@@ -51,7 +51,12 @@ import {
   type ChildStatus,
 } from "./status-file.ts";
 import { slugifyName } from "./slug.ts";
-import { SUBAGENTS_CLI_PATH, buildPiLaunch, resolveLaunchRecord } from "./launch-build.ts";
+import {
+  SUBAGENTS_CLI_PATH,
+  artifactDirFor,
+  buildPiLaunch,
+  resolveLaunchRecord,
+} from "./launch-build.ts";
 import { getLaunchRecordFile, readLaunchRecord, writeLaunchRecord } from "./launch-record.ts";
 
 /** Pane-side entry point; the pane runs this file with `node`. */
@@ -265,7 +270,7 @@ function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): num
   // stop the launch; the id goes into the record, so a resume uses the same
   // artifact directory.
   const parentSessionId = readPaneOption(callerPane, "@pane_session_id") ?? callerPane;
-  const artifactDir = join(scratch, "artifacts", parentSessionId);
+  const artifactDir = artifactDirFor(scratch, parentSessionId);
 
   mkdirSync(scratch, { recursive: true });
   autoPrune(scratch);
@@ -351,7 +356,7 @@ function resumeCommand(values: CliValues, deps: CliDeps): number {
     // without the field (a non-external launch) falls back to the caller pane.
     const scratch = dirname(launchPath);
     const parentSessionId = record.parentSessionId ?? callerPaneId(env);
-    const artifactDir = join(scratch, "artifacts", parentSessionId);
+    const artifactDir = artifactDirFor(scratch, parentSessionId);
 
     // Per-run values are created again for every run, as the pi parent's
     // resume does: a fresh child id and its own activity file.

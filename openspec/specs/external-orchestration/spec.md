@@ -478,7 +478,7 @@ When the timeout of a sidecar wait passes before the sidecar exists, `wait` SHAL
 - **THEN** the launch succeeds and the prompt path holds `artifacts/%5/`
 
 ### Requirement: Resume needs a launch record
-If no valid launch record exists beside the spec's session file, `resume` SHALL refuse the launch spec. It SHALL print a message on stderr that tells the caller to run `start` again, print nothing on stdout, exit 1 and split no pane.
+If no valid launch record exists beside the spec's session file, `resume` SHALL refuse the launch spec. It SHALL print a message on stderr that tells the caller to run `start` again, print nothing on stdout, exit 1 and split no pane. A launch spec that has a valid record but no parent SHALL also be refused: `resume` SHALL print a message on stderr that names `pmux_resume`, print nothing on stdout, exit 1 and split no pane, because the external parent-contact needs a parent and every launch spec `start` writes carries one.
 
 #### Scenario: Spec from an older version
 - **WHEN** `resume` is given a launch spec whose session file has no `.launch.json`

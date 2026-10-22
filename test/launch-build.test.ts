@@ -138,7 +138,8 @@ describe("external parent contact (design D3)", () => {
       const artifact = taskArtifact(spec);
 
       assert.equal(artifact.content, `${TASK}\n${lastFooterBytes("orch", "%12")}\n`);
-      assert.match(artifact.path, new RegExp(`${dir}/artifacts/abc/context/worker-${STAMP}\\.md$`));
+      assert.ok(artifact.path.startsWith(`${dir}/artifacts/abc/context/`));
+      assert.match(artifact.path, new RegExp(`worker-${STAMP}\\.md$`));
     });
   });
 
@@ -233,10 +234,8 @@ describe("external parent contact (design D3)", () => {
       const artifact = taskArtifact(spec);
 
       assert.equal(artifact.content, `${MESSAGE}\n${sendFooterBytes("%12", CLI_PATH)}\n`);
-      assert.match(
-        artifact.path,
-        new RegExp(`${dir}/artifacts/abc/pmux-resume/worker-${STAMP}\\.md$`),
-      );
+      assert.ok(artifact.path.startsWith(`${dir}/artifacts/abc/pmux-resume/`));
+      assert.match(artifact.path, new RegExp(`worker-${STAMP}\\.md$`));
       // The rebuilt spec keeps the mode and the close grace.
       assert.equal(spec.report, "send");
       assert.deepEqual(spec.closeOnDone, { graceMs: 5000 });

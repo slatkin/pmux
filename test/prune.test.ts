@@ -1,3 +1,4 @@
+import "./host-env.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 

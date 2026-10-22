@@ -255,6 +255,31 @@ export function resolveLaunchRecord(params: {
   };
 }
 
+/** The run-context folders the launcher itself writes into (design D4):
+ * spawn-task and system-prompt files under `context`, resume-message files
+ * under `pmux-resume`. These are the launcher's own artifact names; prune.ts
+ * imports them, so the cleanup and the writer cannot name the folders
+ * differently. */
+export const LAUNCH_CONTEXT_FOLDER = "context";
+export const LAUNCH_RESUME_FOLDER = "pmux-resume";
+
+/** The file-name stamp every launcher-written run-context file ends with:
+ * `<stem>-<19-char timestamp>.md`, the format `writeRunContextFile` puts on
+ * every file it creates. prune.ts keys the artifact cleanup on it. */
+export const LAUNCHER_ARTIFACT_FILE = /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.md$/;
+
+/** The per-parent artifact directory the launcher writes its run-context
+ * files into; prune.ts walks the same tree. */
+export function artifactDirFor(scratch: string, id: string): string {
+  return join(scratch, "artifacts", id);
+}
+
+/** The run-context file stem: the record name, slugified, falling back to
+ * `fallback` when the record has no name (each launch kind keeps its own). */
+function contextStem(record: LaunchRecord, fallback: string): string {
+  return slugifyName(record.name, { hyphenate: false }) || fallback;
+}
+
 /** Write one run's context file under the artifact directory and return its path. */
 export function writeRunContextFile(
   artifactDir: string,
@@ -426,8 +451,9 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
   // Send mode is the one exemption (AGENTS.md): the report is a bash command,
   // so the child must keep the bash tool on both sides. The allowlist below
   // gains it and the denied set loses it (`PI_DENY_TOOLS` wins over `--tools`).
+  const sendMode = parentContact.kind === "external" && parentContact.report === "send";
   const denied = new Set(record.denyTools);
-  if (parentContact.kind === "external" && parentContact.report === "send") {
+  if (sendMode) {
     denied.delete("bash");
   }
 
@@ -453,8 +479,8 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
     const flag = systemPromptMode === "replace" ? "--system-prompt" : "--append-system-prompt";
     const syspromptPath = writeRunContextFile(
       request.artifactDir,
-      "context",
-      `${slugifyName(record.name, { hyphenate: false }) || "subagent"}-sysprompt`,
+      LAUNCH_CONTEXT_FOLDER,
+      `${contextStem(record, "subagent")}-sysprompt`,
       identity,
     );
     piArgs.push(flag, syspromptPath);
@@ -462,10 +488,9 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
 
   // The tools: the recorded allowlist with the control tools appended. Send
   // mode adds bash, matching the removal from the denied set above.
-  const toolAllowlist =
-    parentContact.kind === "external" && parentContact.report === "send"
-      ? buildSubagentToolAllowlist(record.tools, ["bash"])
-      : buildSubagentToolAllowlist(record.tools);
+  const toolAllowlist = sendMode
+    ? buildSubagentToolAllowlist(record.tools, ["bash"])
+    : buildSubagentToolAllowlist(record.tools);
   if (toolAllowlist) {
     piArgs.push("--tools", toolAllowlist);
   }
@@ -512,8 +537,8 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
     const isResume = resume?.message !== undefined;
     const promptPath = writeRunContextFile(
       request.artifactDir,
-      isResume ? "pmux-resume" : "context",
-      slugifyName(record.name, { hyphenate: false }) || (isResume ? "resume" : "subagent"),
+      isResume ? LAUNCH_RESUME_FOLDER : LAUNCH_CONTEXT_FOLDER,
+      contextStem(record, isResume ? "resume" : "subagent"),
       isResume ? `${resume?.message}\n${footer}\n` : `${request.task}\n${footer}\n`,
     );
     // The recorded `--name` stays where today's external launch put it.
@@ -524,8 +549,8 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
     if (resume.message) {
       const promptPath = writeRunContextFile(
         request.artifactDir,
-        "pmux-resume",
-        slugifyName(record.name, { hyphenate: false }) || "resume",
+        LAUNCH_RESUME_FOLDER,
+        contextStem(record, "resume"),
         `${buildLaunchMessagingHint(parentContact.siblingNames)}\n\n${resume.message}`,
       );
       piArgs.push(`@${promptPath}`);
@@ -559,8 +584,8 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
     } else {
       const artifactPath = writeRunContextFile(
         request.artifactDir,
-        "context",
-        slugifyName(record.name, { hyphenate: false }) || "subagent",
+        LAUNCH_CONTEXT_FOLDER,
+        contextStem(record, "subagent"),
         fullTask,
       );
       taskArg = `@${artifactPath}`;

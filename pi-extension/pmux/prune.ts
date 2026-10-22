@@ -15,6 +15,11 @@ import { readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { REPORT_RECEIPT_SUFFIX } from "./report-receipt.ts";
+import {
+  LAUNCH_CONTEXT_FOLDER,
+  LAUNCH_RESUME_FOLDER,
+  LAUNCHER_ARTIFACT_FILE,
+} from "./launch-build.ts";
 
 /** Default retention for scratch files: a week keeps recent resumes working. */
 export const DEFAULT_PRUNE_MAX_AGE_DAYS = 7;
@@ -102,14 +107,11 @@ function pruneDir(
 
 /**
  * The artifact folders the launcher writes its prompt files into (design
- * D4). Files elsewhere under an artifacts id are not launcher-written, so
- * they are left alone.
+ * D4), imported from the launcher itself (`launch-build.ts`), so the cleanup
+ * and the writer cannot name the folders differently. Files elsewhere under
+ * an artifacts id are not launcher-written, so they are left alone.
  */
-const LAUNCHER_ARTIFACT_FOLDERS = new Set(["context", "pmux-resume"]);
-
-/** A launcher prompt file: `<name>-<19-char timestamp>.md`, the stamp the
- * shared writer (`writeRunContextFile`) puts on every file it creates. */
-const LAUNCHER_ARTIFACT_FILE = /-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.md$/;
+const LAUNCHER_ARTIFACT_FOLDERS = new Set([LAUNCH_CONTEXT_FOLDER, LAUNCH_RESUME_FOLDER]);
 
 /** The launcher-owned files under `artifacts/<id>/{context,pmux-resume}`. */
 function isManagedArtifactFile(name: string): boolean {
