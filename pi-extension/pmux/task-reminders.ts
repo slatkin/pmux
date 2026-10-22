@@ -31,12 +31,10 @@ import { readFileSync } from "node:fs";
 import { isSubagentChild } from "./child-env.ts";
 
 /**
- * The sidebar's update-before-finish wording, copied byte for byte.
- *
- * Single source: `src/task_reminders.rs` in the tmux-agent-sidebar repository,
- * the constant `UPDATE_BEFORE_FINISH_REMINDER`. A wording edit in the source
- * must land here too; the wording test pins this copy against a literal and
- * fails `pnpm test` when the two sides drift apart.
+ * The sidebar's update-before-finish wording, copied byte for byte. Single
+ * source: the `UPDATE_BEFORE_FINISH_REMINDER` constant in the
+ * tmux-agent-sidebar's `src/task_reminders.rs`; the module header and the
+ * wording test carry the drift mechanism (D1).
  */
 export const UPDATE_BEFORE_FINISH_REMINDER =
   "Open tasks remain: before finishing your turn, update their statuses with task-update <id> <status>.";
@@ -53,8 +51,8 @@ export interface SidebarTaskItem {
 
 /**
  * The pane's store path, the path `task_store.rs`'s `store_file_path`
- * builds: the pane id encoded the same way the sidebar encodes its activity
- * log filename, so `%5` and `%5` name the same file on both sides.
+ * builds: the pane id encoded the same way the sidebar encodes its log and
+ * store filenames, so pane `%5` names the same file on both sides.
  */
 export function sidebarTaskStorePath(pane: string): string {
   return `/tmp/tmux-agent-tasks${pane.replace(/%/g, "_")}.json`;
@@ -120,8 +118,6 @@ export function openTaskKey(items: SidebarTaskItem[]): string {
   );
 }
 
-/** The "empty" predicate: a store read that holds no items at all reads as `[]`. */
-
 /**
  * Read a store file at a path. A missing, unreadable or malformed file reads
  * as empty, never as an error — exactly like the sidebar's own reader.
@@ -135,9 +131,8 @@ export function readSidebarTaskStorePath(path: string): SidebarTaskItem[] {
 }
 
 /**
- * Read the pane's sidebar task store (D2). One synchronous read of a small
- * file: no tmux call, no subprocess, nothing awaited. A pane with no store —
- * an empty pane id, a missing or unreadable file — reads as empty.
+ * Read the pane's sidebar task store (D2). A pane with no store — an empty
+ * pane id, a missing or unreadable file — reads as empty.
  */
 export function readSidebarTaskStore(pane: string): SidebarTaskItem[] {
   if (!pane) return [];
