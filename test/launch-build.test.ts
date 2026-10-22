@@ -305,7 +305,6 @@ describe("pi parent contact (design D3)", () => {
         kind: "pi",
         siblingNames: ["Reviewer"],
         parentRosterFile: join(dir, "roster.json"),
-        surface: "%24",
       };
       const spec = buildPiLaunch({
         record: roleRecord(),
@@ -313,6 +312,7 @@ describe("pi parent contact (design D3)", () => {
         localAgentDir,
         artifactDir,
         parentContact: contact,
+        surface: "%24",
         launchBehavior: { inheritsConversationContext: false, taskDelivery: "artifact" },
         run: { id: "abcd1234", sessionFile: SESSION_FILE, activityFile: ACTIVITY_FILE },
       });
@@ -355,9 +355,8 @@ describe("pi parent contact (design D3)", () => {
           {
             kind: "pi",
             siblingNames: ["Reviewer"],
-            surface: "%24",
           },
-          { resume: { message: MESSAGE } },
+          { surface: "%24", resume: { message: MESSAGE } },
         ),
       );
       const artifact = taskArtifact(spec);

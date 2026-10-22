@@ -56,6 +56,12 @@ function optionalString(value: unknown, field: string): string | undefined {
   return value;
 }
 
+function optionalNumber(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number") invalid(`${field} must be a number`);
+  return value;
+}
+
 /**
  * Check an unknown JSON payload and return it as a LaunchRecord. A payload
  * that fails any check is not a record, so `readLaunchRecord` treats it as
@@ -100,11 +106,7 @@ export function validateLaunchRecord(data: unknown): LaunchRecord {
   const rolePrompt = optionalString(record.rolePrompt, "rolePrompt");
   const claudeSessionId = optionalString(record.claudeSessionId, "claudeSessionId");
   const parentSessionId = optionalString(record.parentSessionId, "parentSessionId");
-  const rawCloseGraceMs = record.closeGraceMs;
-  if (rawCloseGraceMs !== undefined && typeof rawCloseGraceMs !== "number") {
-    invalid("closeGraceMs must be a number");
-  }
-  const closeGraceMs = typeof rawCloseGraceMs === "number" ? rawCloseGraceMs : undefined;
+  const closeGraceMs = optionalNumber(record.closeGraceMs, "closeGraceMs");
 
   // The stored surface is parsed, not validated: an unknown value is dropped
   // and does not make the file invalid, matching the role key's treatment.
@@ -146,14 +148,8 @@ export function writeLaunchRecord(recordFile: string, record: LaunchRecord): voi
 
 /** Read a record; a missing, unreadable or invalid file reads as no record. */
 export function readLaunchRecord(recordFile: string): LaunchRecord | null {
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(recordFile, "utf8"));
-  } catch {
-    return null;
-  }
-  try {
-    return validateLaunchRecord(parsed);
+    return validateLaunchRecord(JSON.parse(readFileSync(recordFile, "utf8")));
   } catch {
     return null;
   }

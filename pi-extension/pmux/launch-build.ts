@@ -13,7 +13,7 @@
  * cannot resolve a role differently.
  */
 import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   agentDefinitionPaths,
@@ -37,19 +37,22 @@ export const SUBAGENTS_DIR = dirname(fileURLToPath(import.meta.url));
  */
 export const SUBAGENTS_CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
 
+/** The completion tool every pi child loads. */
+const SUBAGENTS_DONE_PATH = join(SUBAGENTS_DIR, "pmux-done.ts");
+
 /**
  * How the launch reaches its parent (design D3): one tagged input, so the pi
  * parent and the external orchestrator cannot name the contact differently.
  *
  * - `pi`: a child of this pi session. The contact carries the peer names the
- *   child gets at spawn time, the parent's roster file, and the pane the
- *   child runs in (the child env names it as the surface).
+ *   child gets at spawn time and the parent's roster file. The pane the child
+ *   runs in is the request's own `surface`.
  * - `external`: a child of an external orchestrator (the packaged skill). The
  *   footer names the parent and the pane it launched from; the spec carries
  *   the report mode and the close-on-done grace.
  */
 export type ParentContact =
-  | { kind: "pi"; siblingNames: string[]; parentRosterFile?: string; surface: string }
+  | { kind: "pi"; siblingNames: string[]; parentRosterFile?: string }
   | {
       kind: "external";
       parent: string;
@@ -74,6 +77,9 @@ export interface PiLaunchRequest {
   /** The target cwd's `.pi/agent` directory, when it has one. */
   localAgentDir: string | null;
   artifactDir: string;
+  /** The pane the child runs in. A pi parent sets it; an external launch
+   * omits it, and the run wrapper writes it from `TMUX_PANE` at runtime. */
+  surface?: string;
   /** How the launch reaches its parent (design D3). */
   parentContact: ParentContact;
   /** Set when the run continues an existing session (design D5). */
@@ -133,7 +139,8 @@ export interface ResolvedLaunchRole {
   paths: ResolvedLaunchPaths;
 }
 
-function isFilePath(path: string): boolean {
+/** True when the path names an existing file. */
+export function isFile(path: string): boolean {
   try {
     return statSync(path).isFile();
   } catch {
@@ -154,7 +161,7 @@ export function resolveSubagentPaths(
   const rawCwd = cwd ?? definition?.cwd ?? null;
   const cwdIsFromAgent = !cwd && definition?.cwd != null;
   const cwdBase = cwdIsFromAgent ? getAgentConfigDir() : baseCwd;
-  const effectiveCwd = rawCwd ? (rawCwd.startsWith("/") ? rawCwd : join(cwdBase, rawCwd)) : null;
+  const effectiveCwd = rawCwd ? (isAbsolute(rawCwd) ? rawCwd : join(cwdBase, rawCwd)) : null;
   const localAgentDir = effectiveCwd ? join(effectiveCwd, ".pi", "agent") : null;
   const effectiveAgentDir =
     localAgentDir && existsSync(localAgentDir) ? localAgentDir : getAgentConfigDir();
@@ -202,7 +209,7 @@ export function resolveLaunchRecord(params: {
       throw new Error(`unknown role '${params.role}' (searched: ${rolePaths.join(" ")})`);
     }
     if (!definition.model && overrides.model === undefined) {
-      const rolePath = rolePaths.find(isFilePath) ?? rolePaths[0];
+      const rolePath = rolePaths.find(isFile) ?? rolePaths[0];
       throw new Error(`role '${params.role}' has an empty model (${rolePath})`);
     }
   }
@@ -210,6 +217,8 @@ export function resolveLaunchRecord(params: {
   const paths = resolveSubagentPaths(overrides.cwd, definition, params.anchor);
   // The role body is the role; the call's system prompt only fills a gap, and
   // for a Claude Code child it wins (that backend kept the old precedence).
+  // This is the only place the precedence lives: the record carries the
+  // result, so a later resume and every launch path read the same bytes.
   const rolePrompt =
     definition?.cli === "claude"
       ? (overrides.systemPrompt ?? definition.body)
@@ -220,8 +229,8 @@ export function resolveLaunchRecord(params: {
 
   const record: LaunchRecord = {
     version: LAUNCH_RECORD_VERSION,
-    // The backend follows the role's `cli:` value, like the supervisor's
-    // backend table does.
+    // The backend follows the role's `cli:` value; the supervisor's backend
+    // table is keyed by this name.
     backend: definition?.cli === "claude" ? "claude" : "pi",
     name: overrides.name,
     ...(params.role ? { agent: params.role } : {}),
@@ -446,7 +455,7 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
   const { record, run, parentContact } = request;
   const resume = request.resume;
 
-  const identity = record.rolePrompt ?? null;
+  const identity = record.rolePrompt;
 
   // Send mode is the one exemption (AGENTS.md): the report is a bash command,
   // so the child must keep the bash tool on both sides. The allowlist below
@@ -460,8 +469,7 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
   // Build pi argv (no shell: every value stays exactly one argument).
   const piArgs: string[] = ["--session", run.sessionFile];
 
-  const subagentDonePath = join(SUBAGENTS_DIR, "pmux-done.ts");
-  piArgs.push("-e", subagentDonePath);
+  piArgs.push("-e", SUBAGENTS_DONE_PATH);
 
   if (record.model) {
     const model = record.thinking ? `${record.model}:${record.thinking}` : record.model;
@@ -510,7 +518,7 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
     denySet: denied,
     ...(piMode
       ? {
-          surface: parentContact.surface,
+          surface: request.surface,
           parentRosterFile: parentContact.parentRosterFile,
           // The target cwd's own .pi/agent/ wins over the parent's.
           codingAgentDir:

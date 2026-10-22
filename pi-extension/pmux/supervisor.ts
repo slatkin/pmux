@@ -45,8 +45,10 @@ import {
   type LaunchRecord,
 } from "./launch-record.ts";
 import {
+  SUBAGENTS_CLI_PATH,
   SUBAGENTS_DIR,
   buildPiLaunch,
+  resolveInteractiveDefault,
   resolveLaunchRecord,
   type PiLaunchRequest,
 } from "./launch-build.ts";
@@ -83,8 +85,6 @@ import {
 } from "./idle-watchdog.ts";
 
 /** Pane-side entry point every pi-parent launch spec runs through. */
-const SUBAGENTS_CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
-
 // The shared launch builder lives in launch-build.ts (design D1); the moved
 // names are re-exported so the tests and the extension keep their import path.
 export {
@@ -395,8 +395,7 @@ export function resolveEffectiveInteractive(
   agentDefs: AgentDefaults | null,
 ): boolean {
   if (params.interactive != null) return params.interactive;
-  if (agentDefs?.interactive != null) return agentDefs.interactive;
-  return !(agentDefs?.autoExit ?? false);
+  return resolveInteractiveDefault(agentDefs);
 }
 
 export function formatElapsed(seconds: number): string {
@@ -830,11 +829,6 @@ interface SubagentBackend {
   name: LaunchBackendName;
   /** True when the backend publishes an activity snapshot that status reads. */
   observes: boolean;
-  /** Role-prompt precedence; the spawn resolves it once into the record. */
-  resolveRolePrompt(
-    params: Static<typeof SubagentParams>,
-    agentDefs: AgentDefaults | null,
-  ): string | undefined;
   buildLaunch(request: BackendLaunchRequest): BackendLaunch;
   /** Null when Escape interrupts this backend; otherwise the refusal result. */
   interrupt(running: RunningSubagent): BackendInterruptRefusal | null;
@@ -1035,8 +1029,6 @@ const BACKENDS: Record<LaunchBackendName, SubagentBackend> = {
   pi: {
     name: "pi",
     observes: true,
-    // The agent body is the role; an explicit parameter only fills a gap.
-    resolveRolePrompt: (params, agentDefs) => agentDefs?.body ?? params.systemPrompt,
     buildLaunch: buildPiBackendLaunch,
     interrupt: () => null,
     extractResult: extractPiResult,
@@ -1045,8 +1037,6 @@ const BACKENDS: Record<LaunchBackendName, SubagentBackend> = {
   claude: {
     name: "claude",
     observes: false,
-    // An explicit parameter wins over the agent body, as Claude Code did before.
-    resolveRolePrompt: (params, agentDefs) => params.systemPrompt ?? agentDefs?.body,
     buildLaunch: buildClaudeLaunch,
     interrupt: refuseClaudeInterrupt,
     extractResult: extractClaudeResult,
@@ -1337,7 +1327,12 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
 
     // The role resolves once (design D6); the launch records what it resolved
     // and the pane opens after that, so nothing is written on a thrown error.
-    const resolved = resolveLaunchRecord({
+    const {
+      record,
+      definition: agentDefs,
+      skills: effectiveSkills,
+      paths,
+    } = resolveLaunchRecord({
       role: params.agent,
       // The pi parent resolves roles and relative cwds against the process
       // cwd, exactly pre-change. The context type names a `cwd` field, but
@@ -1354,9 +1349,6 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
         systemPrompt: params.systemPrompt,
       },
     });
-    const { record, definition } = resolved;
-    const agentDefs = definition;
-    const effectiveSkills = resolved.skills;
 
     const sessionFile = ctx.sessionManager.getSessionFile();
     if (!sessionFile) throw new Error("No session file");
@@ -1364,9 +1356,9 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     const artifactDir = getArtifactDir(ctx.sessionManager.getSessionDir(), sessionId);
     ensureRosterContext(ctx);
 
-    const { localAgentDir, effectiveAgentDir } = resolved.paths;
+    const { localAgentDir, effectiveAgentDir, effectiveCwd } = paths;
 
-    const targetCwdForSession = resolved.paths.effectiveCwd ?? ctx.cwd;
+    const targetCwdForSession = effectiveCwd ?? ctx.cwd;
     const sessionDir = getDefaultSessionDirFor(targetCwdForSession, effectiveAgentDir);
 
     // Generate a deterministic session file path for this subagent.
@@ -1388,7 +1380,8 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     const paneLine = paneCommandLine(SUBAGENTS_CLI_PATH, launchScriptFile);
 
     const launchBehavior = resolveLaunchBehavior(params, agentDefs);
-    const backend = backendFor(agentDefs);
+    // The record names the backend, so the table lookup reads one source.
+    const backend = BACKENDS[record.backend];
 
     // Resolve the placement after the role is loaded: the role's `surface:`
     // wins over the configured default; there is no per-call value.
@@ -1428,7 +1421,6 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
           kind: "pi",
           siblingNames: Array.from(runningSubagents.values(), (agent) => agent.name),
           parentRosterFile: rosterContext?.file,
-          surface,
         },
         surface,
         run: {
@@ -1756,7 +1748,6 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
             kind: "pi",
             siblingNames: Array.from(runningSubagents.values(), (agent) => agent.name),
             parentRosterFile: rosterContext?.file,
-            surface,
           },
           surface,
           resume: { message: params.message },

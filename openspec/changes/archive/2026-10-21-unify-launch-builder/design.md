@@ -42,11 +42,11 @@ Today it returns `{ spec, running }`. The `RunningSubagent` part is supervisor-o
 
 ```ts
 type ParentContact =
-  | { kind: "pi"; siblingNames: string[]; parentRosterFile?: string; surface: string }
+  | { kind: "pi"; siblingNames: string[]; parentRosterFile?: string }
   | { kind: "external"; parent: string; callerPane: string; report: ReportMode; closeGraceMs: number };
 ```
 
-For a spawn, the `pi` kind keeps today's prompt: role block, mode hint, messaging hint, task and summary instruction. The `external` kind makes the prompt `task + "\n" + reportFooter(...)`, which is today's external bytes. The footer replaces the hints and the summary because the `last` footer forbids `pmux_message`, and the pi messaging hint recommends it. On a resume, the `pi` kind puts the messaging hint before the message. The `external` kind puts the footer after the message. The `external` kind adds `externalParent: true`, `parent`, `report` (send mode only) and `closeOnDone`. It also applies the send-mode bash rule: `bash` goes into the allowlist and out of the denied set. The `pi` kind adds `surface`, `parentRosterFile` and `PI_CODING_AGENT_DIR`. `reportFooter`, `parentFooter` and `sendFooter` move from `cli.ts` into the module.
+For a spawn, the `pi` kind keeps today's prompt: role block, mode hint, messaging hint, task and summary instruction. The `external` kind makes the prompt `task + "\n" + reportFooter(...)`, which is today's external bytes. The footer replaces the hints and the summary because the `last` footer forbids `pmux_message`, and the pi messaging hint recommends it. On a resume, the `pi` kind puts the messaging hint before the message. The `external` kind puts the footer after the message. The `external` kind adds `externalParent: true`, `parent`, `report` (send mode only) and `closeOnDone`. It also applies the send-mode bash rule: `bash` goes into the allowlist and out of the denied set. The `pi` kind adds the run's `surface`, `parentRosterFile` and `PI_CODING_AGENT_DIR`. The pane the child runs in is the launch request's own field, so it is passed once, not once per contact kind. `reportFooter`, `parentFooter` and `sendFooter` move from `cli.ts` into the module.
 
 ### D4. External launches use `taskDelivery: "artifact"` and append mode
 

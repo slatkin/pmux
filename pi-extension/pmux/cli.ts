@@ -55,6 +55,7 @@ import {
   SUBAGENTS_CLI_PATH,
   artifactDirFor,
   buildPiLaunch,
+  isFile,
   resolveLaunchRecord,
 } from "./launch-build.ts";
 import { getLaunchRecordFile, readLaunchRecord, writeLaunchRecord } from "./launch-record.ts";
@@ -156,14 +157,6 @@ function isDirectory(path: string): boolean {
   }
 }
 
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Require a tmux pane: the launch must know which pane to split from.
  */
@@ -242,10 +235,11 @@ function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): num
   // first) — so a role placed there resolves. The per-call cwd is resolved
   // once here, against the launcher's own cwd, so a relative --cwd joins
   // once and the search stays where it belongs.
+  const targetCwd = resolve(cwd);
   const { record, definition } = resolveLaunchRecord({
     role,
-    anchor: resolve(cwd),
-    overrides: { name, cwd: resolve(cwd) },
+    anchor: targetCwd,
+    overrides: { name, cwd: targetCwd },
     strict: true,
   });
   // The role is known only here, so the placement resolves here: the role's
@@ -355,7 +349,8 @@ function resumeCommand(values: CliValues, deps: CliDeps): number {
     // The artifact id is the one `start` used (designs D5 and D7). A record
     // without the field (a non-external launch) falls back to the caller pane.
     const scratch = dirname(launchPath);
-    const parentSessionId = record.parentSessionId ?? callerPaneId(env);
+    const callerPane = callerPaneId(env);
+    const parentSessionId = record.parentSessionId ?? callerPane;
     const artifactDir = artifactDirFor(scratch, parentSessionId);
 
     // Per-run values are created again for every run, as the pi parent's
@@ -381,7 +376,7 @@ function resumeCommand(values: CliValues, deps: CliDeps): number {
       parentContact: {
         kind: "external",
         parent: spec.parent,
-        callerPane: callerPaneId(env),
+        callerPane,
         report: spec.report,
         closeGraceMs: record.closeGraceMs ?? DEFAULT_CLOSE_GRACE_MS,
       },
@@ -396,7 +391,7 @@ function resumeCommand(values: CliValues, deps: CliDeps): number {
     removeExitSidecar(spec.sessionFile);
 
     // `--name` renames the pane only; the rebuilt spec keeps the record's name.
-    const pane = createSurface(values.name ?? rebuilt.name, placement, callerPaneId(env));
+    const pane = createSurface(values.name ?? rebuilt.name, placement, callerPane);
     runInPane(pane, paneCommandLine(CLI_PATH, launchPath));
 
     write(JSON.stringify({ pane, launch: launchPath }) + "\n");
