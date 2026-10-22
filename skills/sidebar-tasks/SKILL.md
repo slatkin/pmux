@@ -90,4 +90,7 @@ sidebar's `src/task_reminders.rs`:
 The update reminder points at the whole board, not at a command form —
 bring it in step with the `task-update` forms above. Which reminders reach
 you depends on the harness: the update-before-finish one is delivered to
-pi panes by the pmux extension.
+pi panes by the pmux extension, and it is buffered: it does not fire turn
+after turn. It waits until the pane's store file has been untouched for
+five minutes and three turn ends have passed since its last write, so a
+turn spent actively updating the list is not nagged at its own end.

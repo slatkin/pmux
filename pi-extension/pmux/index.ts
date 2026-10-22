@@ -71,7 +71,11 @@ import {
   SIDEBAR_WORKTREE_OPTION,
   type SidebarWorktree,
 } from "./sidebar.ts";
-import { createTaskReminders, readSidebarTaskStore } from "./task-reminders.ts";
+import {
+  createTaskReminders,
+  readSidebarTaskStore,
+  readSidebarTaskStoreMtime,
+} from "./task-reminders.ts";
 import { ensureSidebarTasksSkill } from "./skill-install.ts";
 
 // Survive /reload: the supervisor owns every timer, poll watcher and event
@@ -536,6 +540,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   // without the sidebar's task store gets nothing at all.
   createTaskReminders(process.env, {
     readStore: readSidebarTaskStore,
+    readStoreMtime: readSidebarTaskStoreMtime,
     send: (text, options) => pi.sendUserMessage(text, options),
   }).register(pi);
 
