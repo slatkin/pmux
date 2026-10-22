@@ -40,6 +40,10 @@
   "pi": {
     "extensions": [
       "./pi-extension/pmux/index.ts"
+    ],
+    "skills": [
+      "./skills",
+      "!./skills/pmux"
     ]
   },
   "devDependencies": {
