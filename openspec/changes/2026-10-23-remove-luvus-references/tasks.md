@@ -8,23 +8,23 @@
 
 ## 2. Host spec and env guards
 
-- [ ] 2.1 Remove the `LUVUS_*` and `PI_LUVUS_*` prefixes from `test/host-env.ts` and `test/turn-notify.test.ts`, keeping the `PI_PMUX_*`, `TMUX` and `TMUX_PANE` keys, and change the `host-env.ts` header comment so it does not name Luvus; verify with `node --test test/turn-notify.test.ts` (design D4)
-- [ ] 2.2 Remove the `LUVUS_` loops and their comments from `test/prune.test.ts` and `test/cli.test.ts`, remove the CLI test "ignores the Luvus variables when tmux is absent", and change the `bare` option comment; verify with `node --test test/prune.test.ts test/cli.test.ts` (design D4; spec: pmux-host "tmux is the only host")
-- [ ] 2.3 Change `pi-luvus` in the `isSentinelFile` negative case of `test/prune.test.ts` to a name with no Luvus reference; verify with `node --test test/prune.test.ts`
-- [ ] 2.4 Change the `AGENTS.md` line that lists the keys `host-env.ts` removes; verify that it names the same keys as the file
+- [x] 2.1 Remove the `LUVUS_*` and `PI_LUVUS_*` prefixes from `test/host-env.ts` and `test/turn-notify.test.ts`, keeping the `PI_PMUX_*`, `TMUX` and `TMUX_PANE` keys, and change the `host-env.ts` header comment so it does not name Luvus; verify with `node --test test/turn-notify.test.ts` (design D4)
+- [x] 2.2 Remove the `LUVUS_` loops and their comments from `test/prune.test.ts` and `test/cli.test.ts`, remove the CLI test "ignores the Luvus variables when tmux is absent", and change the `bare` option comment; verify with `node --test test/prune.test.ts test/cli.test.ts` (design D4; spec: pmux-host "tmux is the only host")
+- [x] 2.3 Change `pi-luvus` in the `isSentinelFile` negative case of `test/prune.test.ts` to a name with no Luvus reference; verify with `node --test test/prune.test.ts`
+- [x] 2.4 Change the `AGENTS.md` line that lists the keys `host-env.ts` removes; verify that it names the same keys as the file
 
 ## 3. Legacy config fallback
 
-- [ ] 3.1 In `pi-extension/pmux/status.ts`, remove the `pi-luvus` extension-directory path from `legacyConfigPaths`, and keep the package-root path; verify with a test that a config only in `extensions/pi-luvus/` is not read and the default `surface` applies, and that the package-root migration test still passes (design D3)
-- [ ] 3.2 Remove the test "falls back to the pre-rename extensions dir config when the pmux config is absent" from `test/test.ts`, keeping its "new directory wins, `down` reads as `pane`" check in a test that does not create `pi-luvus`; verify with `node --test test/test.ts`
-- [ ] 3.3 Remove the `pi-luvus` sentence from `README.md` (Configuration) and from `docs/guide.md`, and keep the package-root fallback sentence in `docs/guide.md`; verify that `rg -i luvus README.md docs` finds nothing
+- [x] 3.1 In `pi-extension/pmux/status.ts`, remove the `pi-luvus` extension-directory path from `legacyConfigPaths`, and keep the package-root path; verify with a test that a config only in `extensions/pi-luvus/` is not read and the default `surface` applies, and that the package-root migration test still passes (design D3)
+- [x] 3.2 Remove the test "falls back to the pre-rename extensions dir config when the pmux config is absent" from `test/test.ts`, keeping its "new directory wins, `down` reads as `pane`" check in a test that does not create `pi-luvus`; verify with `node --test test/test.ts`
+- [x] 3.3 Remove the `pi-luvus` sentence from `README.md` (Configuration) and from `docs/guide.md`, and keep the package-root fallback sentence in `docs/guide.md`; verify that `rg -i luvus README.md docs` finds nothing
 
 ## 4. Comments, names and stray files
 
-- [ ] 4.1 In `test/test.ts`, rewrite the header comment without the Luvus backend, delete the dead Luvus fixture comment under `// --- Fixture ---`, and rename the test "delivers child and sibling messages through Luvus with the header" to name tmux; verify with `node --test test/test.ts`
-- [ ] 4.2 Remove the two `luvusSession` assertions and their comment from `test/context-alert.test.ts`; verify with `node --test test/context-alert.test.ts`
-- [ ] 4.3 Remove "and the Luvus CLI" from the comment in `eslint.config.js`; verify with `pnpm run lint`
-- [ ] 4.4 Delete `package-lock.json`; verify that `pnpm install --frozen-lockfile` still succeeds (design D5)
+- [x] 4.1 In `test/test.ts`, rewrite the header comment without the Luvus backend, delete the dead Luvus fixture comment under `// --- Fixture ---`, and rename the test "delivers child and sibling messages through Luvus with the header" to name tmux; verify with `node --test test/test.ts`
+- [x] 4.2 Remove the two `luvusSession` assertions and their comment from `test/context-alert.test.ts`; verify with `node --test test/context-alert.test.ts`
+- [x] 4.3 Remove "and the Luvus CLI" from the comment in `eslint.config.js`; verify with `pnpm run lint`
+- [x] 4.4 Delete `package-lock.json`; verify that `pnpm install --frozen-lockfile` still succeeds (design D5)
 
 ## 5. Gates
 
