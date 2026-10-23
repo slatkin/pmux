@@ -161,7 +161,7 @@ flowchart LR
     E -.-> S
 ```
 
-The sections below hold the details. Child exit rules live under `auto-exit` and the completion nudge. Parent backstop rules live under the idle watchdog. External orchestrator rules live in `skills/pmux/SKILL.md`. The normative spec is `openspec/specs/luvus-completion/spec.md`.
+The sections below hold the details. Child exit rules live under `auto-exit` and the completion nudge. Parent backstop rules live under the idle watchdog. External orchestrator rules live in `skills/pmux/SKILL.md`. The normative spec is `openspec/specs/subagent-completion/spec.md`.
 
 ### In-progress status updates
 
