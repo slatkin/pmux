@@ -2,10 +2,10 @@
 
 ## 1. Spawn requires a known role
 
-- [ ] 1.1 In `launch-build.ts`, add a `resolveLaunchRecord` option that throws `unknown role '<name>' (searched: ...)` when a given role does not resolve, without the empty-model check of `strict`; verify with tests that an unknown role throws before any file is written and that a role with no `model:` resolves (design D1)
-- [ ] 1.2 In `supervisor.ts`, make `SubagentParams.agent` a required string and pass the new option from `launchSubagent`; verify with a test that the schema rejects a call without `agent` (spec: Spawn requires a known role, "Missing role")
-- [ ] 1.3 In `index.ts`, catch the resolution error in `pmux_spawn` and return it as an error result; verify with a test that agent `wroker` returns an error naming `wroker` and the searched paths, splits no pane and writes no launch record, and that a role with no `model:` still launches (spec: "Misspelled role", "Role without a model")
-- [ ] 1.4 Update the `agent` parameter description, and any README or `docs/guide.md` text that calls `agent` optional; verify that `rg -n -i "agent" README.md docs/guide.md` shows no optional-agent claim
+- [x] 1.1 In `launch-build.ts`, add a `resolveLaunchRecord` option that throws `unknown role '<name>' (searched: ...)` when a given role does not resolve, without the empty-model check of `strict`; verify with tests that an unknown role throws before any file is written and that a role with no `model:` resolves (design D1)
+- [x] 1.2 In `supervisor.ts`, make `SubagentParams.agent` a required string and pass the new option from `launchSubagent`; verify with a test that the schema rejects a call without `agent` (spec: Spawn requires a known role, "Missing role")
+- [x] 1.3 In `index.ts`, catch the resolution error in `pmux_spawn` and return it as an error result; verify with a test that agent `wroker` returns an error naming `wroker` and the searched paths, splits no pane and writes no launch record, and that a role with no `model:` still launches (spec: "Misspelled role", "Role without a model")
+- [x] 1.4 Update the `agent` parameter description, and any README or `docs/guide.md` text that calls `agent` optional; verify that `rg -n -i "agent" README.md docs/guide.md` shows no optional-agent claim
 
 ## 2. The skill reads the exit through `wait`
 
