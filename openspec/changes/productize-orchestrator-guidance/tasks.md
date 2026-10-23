@@ -9,10 +9,10 @@
 
 ## 2. The skill reads the exit through `wait`
 
-- [ ] 2.1 Rewrite the `last`-mode wait step in `skills/pmux/SKILL.md`: after the status wait, run `wait --session <file> --signal sidecar` and act on its reason; remove every direct read of `<session>.exit` and every `rm` of it; verify that `rg -n '\brm\b|read `<session>\.exit`' skills/pmux/SKILL.md` finds nothing (design D2; spec: The skill waits through the CLI)
-- [ ] 2.2 Make the handoff and "pane gone" text in `SKILL.md` read the exit through `wait --signal sidecar`; verify against the "Pane gone after the grace" scenario (spec: Skill documents the handoff sidecar)
-- [ ] 2.3 Shorten the send-mode "LEAVE the sidecar" paragraph and its cleanup list to one sentence that says `wait` never deletes the sidecar and the orchestrator must leave it too; verify that the "Packaged orchestration skill" requirement text is still met (design D3)
-- [ ] 2.4 Make the `wait` paragraph in `docs/guide.md` match the new `last`-mode recipe, if it reads `.exit` directly; verify that `rg -n '\.exit' docs/guide.md` shows no direct read
+- [x] 2.1 Rewrite the `last`-mode wait step in `skills/pmux/SKILL.md`: after the status wait, run `wait --session <file> --signal sidecar` and act on its reason; remove every direct read of `<session>.exit` and every `rm` of it; verify that `rg -n '\brm\b|read `<session>\.exit`' skills/pmux/SKILL.md` finds nothing (design D2; spec: The skill waits through the CLI)
+- [x] 2.2 Make the handoff and "pane gone" text in `SKILL.md` read the exit through `wait --signal sidecar`; verify against the "Pane gone after the grace" scenario (spec: Skill documents the handoff sidecar)
+- [x] 2.3 Shorten the send-mode "LEAVE the sidecar" paragraph and its cleanup list to one sentence that says `wait` never deletes the sidecar and the orchestrator must leave it too; verify that the "Packaged orchestration skill" requirement text is still met (design D3)
+- [x] 2.4 Make the `wait` paragraph in `docs/guide.md` match the new `last`-mode recipe, if it reads `.exit` directly; verify that `rg -n '\.exit' docs/guide.md` shows no direct read
 
 ## 3. Gates
 
