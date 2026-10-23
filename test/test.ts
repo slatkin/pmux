@@ -3539,6 +3539,50 @@ describe("pmux_spawn role resolution (required-role spec)", () => {
     });
   });
 
+  it("rejects a blank agent with an error that names agent, and writes nothing", async () => {
+    await withTempDir(async (dir) => {
+      const calls: string[][] = [];
+      __setTmuxExecForTests__((args) => {
+        calls.push(args);
+        if (args[0] === "split-window") return "%24";
+        return "";
+      });
+      const saved = roleResolutionEnv(dir);
+      const target = makeRecordingPi();
+      try {
+        subagentsModule.default(target.pi);
+
+        // The schema's Type.String() has no minLength, so an empty or
+        // blank agent passes validation and must fail in the launch
+        // resolution (review P2).
+        for (const agent of ["", "   "]) {
+          const result = await spawnToolOf(target).execute(
+            "call-1",
+            { name: "Scout", task: "survey the repo", agent },
+            undefined,
+            undefined,
+            roleContext(dir),
+          );
+
+          // The error names `agent`...
+          assert.match(result.content[0].text, /agent must name an agent role/);
+          assert.deepEqual(result.details, { error: "unknown role", agent });
+
+          // ...and nothing runs or lands: no pane, no record, no spec file.
+          assert.equal(
+            calls.some((args) => args[0] === "split-window"),
+            false,
+          );
+          assert.deepEqual(readdirSync(dir, { recursive: true }), []);
+        }
+      } finally {
+        target.fire("session_shutdown", undefined, undefined);
+        for (const [name, value] of saved) restoreEnvVar(name, value);
+        __setTmuxExecForTests__(null);
+      }
+    });
+  });
+
   it("launches a role whose definition sets no model", async () => {
     await withTempDir(async (dir) => {
       const calls: string[][] = [];

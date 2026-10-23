@@ -715,7 +715,7 @@ describe("surface precedence", () => {
       // A call may still carry a stray `surface` key; the supervisor must not
       // read it, so the configured default decides and the record holds none.
       const running = await h.supervisor.spawn(
-        { name: "Scout", task: "look around", surface: "float" } as never,
+        { name: "Scout", task: "look around", agent: "plain-role", surface: "float" } as never,
         env.ctx,
         { fallback: "tab" },
       );

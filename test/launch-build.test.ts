@@ -518,14 +518,31 @@ describe("resolveLaunchRecord (design D6)", () => {
       assert.equal("model" in resolved.record, false);
       assert.equal(resolved.record.tools, "read");
 
-      // And a role without a name is not this option's business: the schema
-      // rejects the missing value before the call resolves anything.
-      const nameless = resolveLaunchRecord({
-        anchor: dir,
-        overrides: { name: "NoRole" },
-        requireRole: true,
-      });
-      assert.equal(nameless.definition, null);
+      // A blank value names nothing: the schema's Type.String() has no
+      // minLength, so the missing-value case throws here too, naming
+      // `agent` (review P2) — under requireRole and strict alike.
+      for (const blank of ["", "   "]) {
+        assert.throws(
+          () =>
+            resolveLaunchRecord({
+              role: blank,
+              anchor: dir,
+              overrides: { name: "Blank" },
+              requireRole: true,
+            }),
+          (error: unknown) => error instanceof UnknownRoleError && /agent/.test(error.message),
+        );
+        assert.throws(
+          () =>
+            resolveLaunchRecord({
+              role: blank,
+              anchor: dir,
+              overrides: { name: "Blank" },
+              strict: true,
+            }),
+          (error: unknown) => error instanceof UnknownRoleError && /agent/.test(error.message),
+        );
+      }
     });
   });
 
