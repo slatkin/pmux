@@ -241,7 +241,7 @@ The CLI SHALL provide `last-message --session <file>`, which prints the text of 
 - **THEN** stdout is the text blocks of the last assistant message that has non-empty text
 
 ### Requirement: Skill documents the handoff sidecar
-`SKILL.md` SHALL tell the orchestrator that a child can end with `{"type":"handoff","message":...}` in `<session>.exit`. It SHALL say that the task is not complete, that the handoff text is in the sidecar, that the pane closes itself after the close grace as for `done`, and that the orchestrator continues the task with a new child through `start`, with the handoff text in the brief.
+`SKILL.md` SHALL tell the orchestrator that a child can end with `{"type":"handoff","message":...}` in `<session>.exit`, which `wait --signal sidecar` reports with the reason `handoff` and the handoff message. It SHALL say that the task is not complete, that the handoff text is in the sidecar, that the pane closes itself after the close grace as for `done`, and that the orchestrator continues the task with a new child through `start`, with the handoff text in the brief.
 
 #### Scenario: Orchestrator reads a handoff
 - **WHEN** an orchestrator follows `SKILL.md` and finds a `handoff` sidecar
@@ -249,7 +249,7 @@ The CLI SHALL provide `last-message --session <file>`, which prints the text of 
 
 #### Scenario: Pane gone after the grace
 - **WHEN** the wait on a child's status ends and no pane is left after the close grace
-- **THEN** the skill tells the orchestrator to read `<session>.exit`, where `done` means finished and `handoff` means continue with a new child
+- **THEN** the skill tells the orchestrator to run `wait --session <file> --signal sidecar`, where `done` means finished and `handoff` means continue with a new child
 
 ### Requirement: tmux is required for launch
 
@@ -260,11 +260,11 @@ The CLI SHALL provide `last-message --session <file>`, which prints the text of 
 - **THEN** it exits non-zero with an error saying it must run inside a tmux pane, and creates nothing
 
 ### Requirement: The skill waits through the CLI
-`SKILL.md` SHALL tell the orchestrator to wait for a child with the CLI `wait` command, run through the launcher. For the `last` mode it SHALL use `node <skill-dir>/launch.ts wait --session <file> --status done,blocked --timeout <seconds>`, tell the orchestrator to read the report with `last-message --session <file>`, and to read `<session>.exit` when the wait ends. For the `send` mode it SHALL use `node <skill-dir>/launch.ts wait --session <file> --signal sidecar [--timeout <seconds>]` and tell the orchestrator to act on the printed reason without deleting the sidecar. It SHALL NOT document a multiplexer command for the wait or for reading a report.
+`SKILL.md` SHALL tell the orchestrator to wait for a child with the CLI `wait` command, run through the launcher. For the `last` mode it SHALL use `node <skill-dir>/launch.ts wait --session <file> --status done,blocked --timeout <seconds>`, then `node <skill-dir>/launch.ts wait --session <file> --signal sidecar` to read the exit, and tell the orchestrator to read the report with `last-message --session <file>`. For the `send` mode it SHALL use `node <skill-dir>/launch.ts wait --session <file> --signal sidecar [--timeout <seconds>]` and tell the orchestrator to act on the printed reason. In both modes the orchestrator SHALL read the exit only through `wait --signal sidecar`: `SKILL.md` SHALL NOT tell it to read `<session>.exit` directly, or to delete, move or write that file. It SHALL NOT document a multiplexer command for the wait or for reading a report.
 
 #### Scenario: The orchestrator waits for a child
 - **WHEN** the orchestrator follows `SKILL.md` and waits for a last-mode child
-- **THEN** it runs the CLI `wait` command with the child's session file and the `done,blocked` statuses, and reads the sidecar when the wait ends
+- **THEN** it runs the CLI `wait` command with the child's session file and the `done,blocked` statuses, and then runs `wait --signal sidecar` to read the exit
 
 #### Scenario: The orchestrator reads the report
 - **WHEN** the wait returns `done` for a last-mode child
@@ -273,6 +273,10 @@ The CLI SHALL provide `last-message --session <file>`, which prints the text of 
 #### Scenario: The orchestrator waits on the sidecar
 - **WHEN** the orchestrator follows the send-mode section and is woken by a report
 - **THEN** it runs `wait --session <file> --signal sidecar`, reads the printed reason, and leaves the sidecar in place
+
+#### Scenario: No recipe touches the sidecar file
+- **WHEN** a reader reads every recipe in `SKILL.md` that handles a child's exit
+- **THEN** no recipe reads `<session>.exit` directly, and none tells the orchestrator to `rm` it
 
 ### Requirement: No surface flag
 `start` and `resume` SHALL NOT accept a `--surface` flag. An invocation that carries the flag MUST fail before a pane is created. A launch's surface SHALL come from the role's `surface:` frontmatter when it names `pane`, `tab` or `float`, and from the configured default otherwise.
