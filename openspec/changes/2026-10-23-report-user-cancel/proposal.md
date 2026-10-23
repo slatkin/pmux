@@ -38,7 +38,7 @@ None.
 
 ### Modified Capabilities
 
-- `luvus-completion`: the abort path gains the `cancelled` sidecar write
+- `subagent-completion`: the abort path gains the `cancelled` sidecar write
   and its self-clear on the next turn start.
 - `subagent-supervision`: the delivery contract gains a fifth message
   kind (cancel), and the exit poll gains the non-terminal cancel
