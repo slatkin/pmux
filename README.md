@@ -2,25 +2,27 @@
 
 pi integration for [tmux](https://github.com/tmux/tmux).
 
-Subagent panes open in the caller's own tmux window. The split anchors on the
-caller's newest living child pane, or on the caller's own pane (`$TMUX_PANE`)
-when it has none — the first child opens beside its parent, later children
-beside the previous child. The anchor is always the caller's own pane id,
-never a client-dependent current pane, so a subagent still opens in the
-caller's window even when another client is attached to another window of
-the same server.
+pmux runs pi subagents as child pi processes in tmux panes beside their
+parent, in the caller's own window, where you can watch them work. Each child
+reports back through files next to its session: a status file with live state
+(`working`, `idle`, `done`, `blocked`), a final report, and an exit sidecar the
+parent polls. The parent supervises the whole life of a child — spawn, message,
+interrupt, resume — and a watchdog finishes a stuck child instead of waiting
+forever. A pane outlives its child, so nothing is lost to inspection.
 
-A role can set `surface:` in its frontmatter to `pane`, `tab` or `float` as
-its default placement; the role's `surface:` wins over the configured default.
-`float` opens a floating pane in the
-caller's window, half the window's width and height, at the top right, while
-the caller keeps the focus; successive floats cascade down and left. A resume
-keeps the role's surface: the launch record and the launch spec store it, and
-a resume uses it.
+Children get roles: the package bundles a scout, a worker, a reviewer, a
+visual tester and a self-driving Claude Code session. A role is just a
+frontmatter file, so a project or the user can add or override any of them,
+including where its pane opens: a split, a tab, or a floating pane. An
+external orchestrator that is not a pi session — Claude Code, for example —
+drives the same children through a packaged skill.
 
-- Reports live status per pane. Each child writes `working` or `idle` (and `done` or `blocked` at exit) to a status file next to its session file, and an unfocused parent pane pushes a tmux status-line notification when its turn ends.
-
-- Adopts the subagent system from [HazAT/pi-interactive-subagents](https://github.com/HazAT/pi-interactive-subagents) — with the completion nudge from [maplezzk's port](https://github.com/maplezzk) — and implements it for tmux panes. On top of it, this package adds: messages between running agents (`pmux_message`), a skill and launcher that let a non-pi orchestrator such as Claude Code drive pi children, context alert with handoff to a fresh agent, pane placement (automatic dwindle placement in the caller's window, a tab, or a floating pane; a role can set its own `surface:` preference), live pane titles, spawn-time role records so a resume restores the role as it was at spawn, and a parent-side watchdog that finishes a stuck child instead of waiting forever.
+pmux adopts the subagent system from
+[HazAT/pi-interactive-subagents](https://github.com/HazAT/pi-interactive-subagents)
+— with the completion nudge from [maplezzk's port](https://github.com/maplezzk) —
+and implements it for tmux panes, with pane placement, live pane titles,
+messages between running agents, context handoff to a fresh agent, spawn-time
+role records, and the parent-side watchdog on top.
 
 ## Install
 
@@ -32,7 +34,8 @@ pi install /path/to/pmux
 
 ## External orchestrators (Claude Code)
 
-If the orchestrator is not a pi session (for example Claude Code), drive pi subagents through the packaged `pmux` skill. Install it from GitHub or from a local checkout:
+If the orchestrator is not a pi session, drive the same children through the
+packaged `pmux` skill:
 
 ```bash
 npx skills add slatkin/pmux -g -a claude-code
@@ -40,11 +43,16 @@ npx skills add slatkin/pmux -g -a claude-code
 npx skills add /path/to/pmux -g -a claude-code
 ```
 
-The skill launches each child in its own pane. In the default `last` mode it waits for the child's status file to reach a terminal status and then reads the `.exit` sidecar, which says whether the child finished, handed off, pinged, failed or was cancelled by the user. A child started with `--report send` instead types its report into the orchestrator's pane; the skill's "External orchestrators (Claude Code)" section documents that mode. For the launcher commands, the completion signal, and close-on-done behavior, read [External orchestrators](docs/guide.md#external-orchestrators-claude-code).
+The skill waits for a child to finish and reads back its report; a child
+started with `--report send` instead types the report into the orchestrator's
+pane. The [guide](docs/guide.md#external-orchestrators-claude-code) covers the
+launcher commands, the completion signal and close-on-done behavior.
 
 ## Configuration
 
-The extension reads `config.json` from `~/.pi/agent/extensions/pmux/` (under `$PI_CODING_AGENT_DIR` when that variable is set). Seed it from `config.json.example`.
+The extension reads `config.json` from `~/.pi/agent/extensions/pmux/` (under
+`$PI_CODING_AGENT_DIR` when that variable is set). Seed it from
+`config.json.example`.
 
 ## Bundled Agents
 
@@ -56,21 +64,25 @@ The extension reads `config.json` from `~/.pi/agent/extensions/pmux/` (under `$P
 | `reviewer`      | `openrouter/deepseek/deepseek-v4.1-flash` | Reviews code for bugs, security issues, and correctness.                          |
 | `visual-tester` | `openrouter/deepseek/deepseek-v4.1-flash` | Visual QA through Chrome CDP. Screenshots, responsive checks, interaction tests.  |
 
-Agent discovery uses this order: project-local (`.pi/agents/`), global (`~/.pi/agent/agents/`, or `$PI_CODING_AGENT_DIR/agents/` when that variable is set), package-bundled. To override a bundled agent, place a file with the same name in a higher-priority location. These models are defaults from each agent frontmatter. Pi resolves the name through its provider configuration. Override one spawn with the `model` parameter on the `pmux_spawn` tool, or permanently in frontmatter.
+Agent discovery uses this order: project-local (`.pi/agents/`), global
+(`~/.pi/agent/agents/`, or `$PI_CODING_AGENT_DIR/agents/` when that variable
+is set), package-bundled. To override a bundled agent, place a file with the
+same name in a higher-priority location. These models are defaults from each
+agent frontmatter. Pi resolves the name through its provider configuration.
+Override one spawn with the `model` parameter on the `pmux_spawn` tool, or
+permanently in frontmatter.
 
 ## Documentation
 
-The [guide](docs/guide.md) holds the full reference:
-
-- [Async subagent flow](docs/guide.md#async-subagent-flow): the decision model, status labels, and configuration.
-- [Spawning subagents](docs/guide.md#spawning-subagents): the `pmux_spawn` tool parameters.
-- [Resuming a subagent](docs/guide.md#resuming-a-subagent): the launch record, the `pmux_resume` parameters, and the fallback without a record.
-- [Interrupting](docs/guide.md#interrupting-a-running-subagent), [messaging](docs/guide.md#messaging-other-agents), and [`caller_ping`](docs/guide.md#caller_ping-child-to-parent-help-request).
-- [Custom agents](docs/guide.md#custom-agents): frontmatter, `session-mode`, `auto-exit`, the completion nudge, and `interactive`.
-- [Tool access control](docs/guide.md#tool-access-control), [role folders](docs/guide.md#role-folders), and the [tools widget](docs/guide.md#tools-widget).
+The [guide](docs/guide.md) is the full reference: the async subagent flow and
+its decision model, spawning and resuming subagents, interrupting, messaging
+and `caller_ping`, custom agent frontmatter (`session-mode`, `surface`,
+`auto-exit`, the completion nudge, `interactive`), tool access control, role
+folders, and the tools widget.
 
 ---
 
 ## License
 
-Released under the [MIT License](LICENSE). The LICENSE file carries HazAT's copyright from the upstream code this package descends from.
+Released under the [MIT License](LICENSE). The LICENSE file carries HazAT's
+copyright from the upstream code this package descends from.
