@@ -131,6 +131,7 @@ export interface LaunchRecordOverrides {
  */
 export interface ResolvedLaunchRole {
   record: LaunchRecord;
+
   /** The role definition, when one loaded: null when `role` is absent or
    * did not resolve. */
   definition: AgentDefaults | null;
@@ -180,12 +181,24 @@ export function resolveInteractiveDefault(definition: AgentDefaults | null): boo
   return !(definition?.autoExit ?? false);
 }
 
+/** The error an unresolved role throws: only this one is caught and turned
+ * into an error result (design D1); every other throw must surface directly.
+ */
+export class UnknownRoleError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnknownRoleError";
+  }
+}
+
 /**
  * Resolve one launch's role into the record a later resume reads (design D6).
  * `strict` fails before any file is written when the role does not resolve or
  * has an empty model and no override supplies one; an external launch sets it
  * because its role name comes from a `--role` flag, while a pi parent's miss
- * reads as a task-only launch.
+ * reads as a task-only launch. `requireRole` fails only the unresolved role —
+ * the pi parent sets it, because its schema requires `agent` (design D1), and
+ * a role with no `model:` still launches on pi's default model.
  */
 export function resolveLaunchRecord(params: {
   role?: string;
@@ -199,16 +212,21 @@ export function resolveLaunchRecord(params: {
   overrides: LaunchRecordOverrides;
   /** Fail loudly on an unknown role or an empty effective model. */
   strict?: boolean;
+  /** Fail loudly on an unresolved role, without `strict`'s empty-model
+   * check (design D1: the spawn requires the role to exist only). */
+  requireRole?: boolean;
 }): ResolvedLaunchRole {
   const overrides = params.overrides;
   const definition = params.role ? loadAgentDefaults(params.role, params.anchor) : null;
 
-  if (params.strict && params.role) {
+  if ((params.strict || params.requireRole) && params.role) {
     const rolePaths = agentDefinitionPaths(params.role, params.anchor);
     if (definition === null) {
-      throw new Error(`unknown role '${params.role}' (searched: ${rolePaths.join(" ")})`);
+      throw new UnknownRoleError(
+        `unknown role '${params.role}' (searched: ${rolePaths.join(" ")})`,
+      );
     }
-    if (!definition.model && overrides.model === undefined) {
+    if (params.strict && !definition.model && overrides.model === undefined) {
       const rolePath = rolePaths.find(isFile) ?? rolePaths[0];
       throw new Error(`role '${params.role}' has an empty model (${rolePath})`);
     }

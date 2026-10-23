@@ -13,12 +13,14 @@ import {
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { Value } from "@sinclair/typebox/value";
 import { tempDirHelpers } from "./temp-dir.ts";
 
 import {
   createSupervisor,
   getArtifactDir,
   getRosterFile,
+  SubagentParams,
   type RunningSubagent,
   type SendOptions,
   type SteerMessage,
@@ -83,6 +85,10 @@ function createEnv(): TestEnv {
   process.env.PI_PMUX_SHELL_READY_DELAY_MS = "0";
   process.env.PI_PMUX_NAME = "parent";
   process.env.TMUX_PANE = "%21";
+  // The post-change world (required-role spec): every spawn names a role.
+  // `plain-role` carries no model, tools or surface, so the mechanics tests
+  // below launch the same bytes a role-less spawn produced.
+  writeAgentFile(join(dir, "agent", "agents"), "plain-role", "", "You are a plain test agent.");
   const ctx: SupervisorContext = {
     cwd: dir,
     sessionManager: {
@@ -369,11 +375,21 @@ describe("launch record", () => {
   });
 });
 
+describe("the required-role schema", () => {
+  it("rejects a call without an agent and accepts one that names a role", () => {
+    assert.equal(Value.Check(SubagentParams, { name: "Scout", task: "survey" }), false);
+    assert.equal(
+      Value.Check(SubagentParams, { name: "Scout", agent: "scout", task: "survey" }),
+      true,
+    );
+  });
+});
+
 describe("supervisor launch", () => {
   it("writes a launch spec and runs one node line, with no shell script", async () => {
     await withHarness(async (h, env) => {
       const running = await h.supervisor.spawn(
-        { name: "Scout", task: "Fix the login bug", model: "test-model" },
+        { name: "Scout", task: "Fix the login bug", model: "test-model", agent: "plain-role" },
         env.ctx,
         { fallback: "pane" },
       );
@@ -846,7 +862,10 @@ describe("supervisor resume", () => {
       const sessionPath = join(env.dir, "child.jsonl");
       writePiSession(sessionPath);
       writeRecord(sessionPath, { cwd: undefined });
-      await h.supervisor.spawn({ name: "Reviewer", task: "review the work" }, env.ctx);
+      await h.supervisor.spawn(
+        { name: "Reviewer", task: "review the work", agent: "plain-role" },
+        env.ctx,
+      );
 
       const result = await h.supervisor.resume(
         { sessionPath, message: "Address the review findings" },
@@ -965,7 +984,10 @@ describe("supervisor watcher", () => {
   it("keeps the session summary when the pane is already gone (pi)", async () => {
     await withHarness(
       async (h, env) => {
-        const running = await h.supervisor.spawn({ name: "Scout", task: "survey" }, env.ctx);
+        const running = await h.supervisor.spawn(
+          { name: "Scout", task: "survey", agent: "plain-role" },
+          env.ctx,
+        );
         writeFileSync(
           running.sessionFile,
           [SESSION_HEADER, MODEL_CHANGE, USER_MSG, ASSISTANT_MSG]
@@ -1210,9 +1232,12 @@ describe("supervisor watcher", () => {
 describe("supervisor interrupt", () => {
   it("resolves interrupt targets by exact id and reports name ambiguity", async () => {
     await withHarness(async (h, env) => {
-      await h.supervisor.spawn({ name: "Worker", task: "" }, env.ctx);
-      await h.supervisor.spawn({ name: "Worker", task: "" }, env.ctx);
-      const scout = await h.supervisor.spawn({ name: "Scout", task: "" }, env.ctx);
+      await h.supervisor.spawn({ name: "Worker", task: "", agent: "plain-role" }, env.ctx);
+      await h.supervisor.spawn({ name: "Worker", task: "", agent: "plain-role" }, env.ctx);
+      const scout = await h.supervisor.spawn(
+        { name: "Scout", task: "", agent: "plain-role" },
+        env.ctx,
+      );
 
       const byId = h.supervisor.interrupt({ id: scout.id, name: "Worker" });
       assert.match(byId.content[0].text, /Interrupt requested for subagent "Scout"\./);
@@ -1224,7 +1249,10 @@ describe("supervisor interrupt", () => {
 
   it("returns an explicit error when Escape delivery fails", async () => {
     await withHarness(async (h, env) => {
-      const running = await h.supervisor.spawn({ name: "Worker", task: "" }, env.ctx);
+      const running = await h.supervisor.spawn(
+        { name: "Worker", task: "", agent: "plain-role" },
+        env.ctx,
+      );
 
       const result = h.supervisor.interrupt({ name: "Worker" }, () => {
         throw new Error("mux write failed");
@@ -1238,7 +1266,10 @@ describe("supervisor interrupt", () => {
 
   it("leaves status unchanged when Escape delivery fails in the tool path", async () => {
     await withHarness(async (h, env) => {
-      const running = await h.supervisor.spawn({ name: "Worker", task: "" }, env.ctx);
+      const running = await h.supervisor.spawn(
+        { name: "Worker", task: "", agent: "plain-role" },
+        env.ctx,
+      );
       running.statusState = observeStatus(
         createStatusState({ source: "pi", startTimeMs: 0 }),
         activeObservation(),
@@ -1258,7 +1289,10 @@ describe("supervisor interrupt", () => {
 
   it("sends Escape without aborting or mutating running state", async () => {
     await withHarness(async (h, env) => {
-      const running = await h.supervisor.spawn({ name: "Worker", task: "" }, env.ctx);
+      const running = await h.supervisor.spawn(
+        { name: "Worker", task: "", agent: "plain-role" },
+        env.ctx,
+      );
       let sentSurface = "";
 
       const result = h.supervisor.interrupt({ name: "Worker" }, (surface: string) => {
@@ -1274,7 +1308,10 @@ describe("supervisor interrupt", () => {
 
   it("refreshes the latest activity snapshot before forcing local interrupt waiting", async () => {
     await withHarness(async (h, env) => {
-      const running = await h.supervisor.spawn({ name: "Worker", task: "" }, env.ctx);
+      const running = await h.supervisor.spawn(
+        { name: "Worker", task: "", agent: "plain-role" },
+        env.ctx,
+      );
       writeFileSync(
         running.activityFile as string,
         `${JSON.stringify({
@@ -1308,7 +1345,10 @@ describe("supervisor interrupt", () => {
 
   it("acknowledges Pi-backed interrupt requests and forces local status waiting", async () => {
     await withHarness(async (h, env) => {
-      const running = await h.supervisor.spawn({ name: "Worker", task: "" }, env.ctx);
+      const running = await h.supervisor.spawn(
+        { name: "Worker", task: "", agent: "plain-role" },
+        env.ctx,
+      );
       running.statusState = observeStatus(
         createStatusState({ source: "pi", startTimeMs: 0 }),
         activeObservation(),
@@ -1337,7 +1377,10 @@ describe("supervisor interrupt", () => {
 
   it("sends Escape again for repeated interrupt requests", async () => {
     await withHarness(async (h, env) => {
-      const running = await h.supervisor.spawn({ name: "Worker", task: "" }, env.ctx);
+      const running = await h.supervisor.spawn(
+        { name: "Worker", task: "", agent: "plain-role" },
+        env.ctx,
+      );
       const surfaces: string[] = [];
 
       h.supervisor.interrupt({ name: "Worker" }, (surface: string) => surfaces.push(surface));
@@ -1389,7 +1432,10 @@ describe("supervisor roster", () => {
         "cli: claude",
         "You are Claude.",
       );
-      const worker = await h.supervisor.spawn({ name: "Worker", task: "" }, env.ctx);
+      const worker = await h.supervisor.spawn(
+        { name: "Worker", task: "", agent: "plain-role" },
+        env.ctx,
+      );
       const scout = await h.supervisor.spawn(
         { name: "Scout", task: "", agent: "claude-role" },
         env.ctx,
@@ -1430,7 +1476,7 @@ describe("supervisor shutdown", () => {
 
         try {
           const running: RunningSubagent = await h.supervisor.spawn(
-            { name: "Worker", task: "" },
+            { name: "Worker", task: "", agent: "plain-role" },
             env.ctx,
           );
           assert.equal(created.length, 2);
@@ -1475,7 +1521,7 @@ describe("supervisor shutdown", () => {
         assert.deepEqual(second.supervisor.running(), []);
         assert.equal(second.supervisor.getAbortController().signal.aborted, false);
 
-        await second.supervisor.spawn({ name: "Scout", task: "" }, env.ctx);
+        await second.supervisor.spawn({ name: "Scout", task: "", agent: "plain-role" }, env.ctx);
         assert.deepEqual(pollSignals, [false]);
       } finally {
         second.supervisor.shutdown();
