@@ -16,6 +16,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   SUBAGENTS_CLI_PATH,
+  UnknownRoleError,
   buildPiLaunch,
   parentFooter,
   reportFooter,
@@ -484,6 +485,64 @@ describe("resolveLaunchRecord (design D6)", () => {
         overrides: { name: "Ghost" },
       });
       assert.equal(lenient.definition, null);
+    });
+  });
+
+  it("requireRole fails an unresolved role and still resolves a role without a model (design D1)", () => {
+    withTempDir((dir) => {
+      // The same unknown-role message `strict` throws, as the typed error the
+      // spawn's tool result is built from.
+      const searched = agentDefinitionPaths("ghost-role", dir).join(" ");
+      assert.throws(
+        () =>
+          resolveLaunchRecord({
+            role: "ghost-role",
+            anchor: dir,
+            overrides: { name: "Ghost" },
+            requireRole: true,
+          }),
+        (error: unknown) =>
+          error instanceof UnknownRoleError &&
+          error.message === `unknown role 'ghost-role' (searched: ${searched})`,
+      );
+
+      // Only the existence is checked: a role with no `model:` resolves.
+      writeRoleFile(join(dir, ".pi", "agents"), "no-model-role", "tools: read");
+      const resolved = resolveLaunchRecord({
+        role: "no-model-role",
+        anchor: dir,
+        overrides: { name: "NM" },
+        requireRole: true,
+      });
+      assert.ok(resolved.definition, "expected the no-model role to resolve");
+      assert.equal("model" in resolved.record, false);
+      assert.equal(resolved.record.tools, "read");
+
+      // A blank value names nothing: the schema's Type.String() has no
+      // minLength, so the missing-value case throws here too, naming
+      // `agent` (review P2) — under requireRole and strict alike.
+      for (const blank of ["", "   "]) {
+        assert.throws(
+          () =>
+            resolveLaunchRecord({
+              role: blank,
+              anchor: dir,
+              overrides: { name: "Blank" },
+              requireRole: true,
+            }),
+          (error: unknown) => error instanceof UnknownRoleError && /agent/.test(error.message),
+        );
+        assert.throws(
+          () =>
+            resolveLaunchRecord({
+              role: blank,
+              anchor: dir,
+              overrides: { name: "Blank" },
+              strict: true,
+            }),
+          (error: unknown) => error instanceof UnknownRoleError && /agent/.test(error.message),
+        );
+      }
     });
   });
 

@@ -111,7 +111,13 @@ node <skill-dir>/launch.ts wait --session <file> --status done,blocked --timeout
 
 The command polls the status file at a fixed interval; a missing file counts as no status yet. It exits 0 when the status matches, and prints the matched status line on stdout. It exits 2 when the timeout passes first, printing the last content it saw (or `{"status":null}` when there was none) on stdout and an error that names that status on stderr. It exits 1 on a usage error. `--status` is a comma-separated list of `working`, `idle`, `done` and `blocked`, and defaults to `done,blocked`; `--timeout` defaults to 600 seconds.
 
-Read the `<session>.exit` sidecar after every wait: it says whether the child finished (`done`), handed off (`handoff`), pinged (`ping`) or failed (`error`). The status file is the wake-up signal; the `.exit` sidecar stays the authoritative lifecycle record.
+After the status wait, run the sidecar wait and act on the reason it prints; never read or delete the sidecar file yourself:
+
+```bash
+node <skill-dir>/launch.ts wait --session <file> --signal sidecar
+```
+
+The sidecar wait polls the `<session>.exit` file and never removes it — the run wrapper reads the same file after the child exits. It exits 0 when the sidecar appears, printing the decoded sidecar plus the sidecar's absolute path on one JSON line: `reason` is `done` (finished), `handoff` (handed off, with the continuation text as `handoff.message`), `ping` (the question as `ping.message`) or `error`, with `errorSource` at `"wrapper"` when the wrapper wrote the sidecar. It exits 2 when the timeout passes first, printing `{"sidecar":null}` on stdout. The status file is the wake-up signal; the `.exit` sidecar stays the authoritative lifecycle record.
 
 A child started with `--report send` is different: it types its report into your pane, and you wait for its `.exit` sidecar with `node <skill-dir>/launch.ts wait --session <file> --signal sidecar [--timeout <seconds>]`. The child's `send` command prints one confirmation line in the child's own pane — the target pane, the size of the text it sent and the receipt file it wrote — so a child never has to ask whether its report arrived. That mode is documented in the skill's "External orchestrators (Claude Code)" section (`skills/pmux/SKILL.md`).
 
@@ -221,7 +227,7 @@ Git ignores `config.json`. Local overrides stay uncommitted.
 pmux_spawn({ name: "Scout", agent: "scout", task: "Analyze the codebase..." });
 
 // Force a full-context fork for this spawn
-pmux_spawn({ name: "Fork", fork: true, task: "Fix the bug where..." });
+pmux_spawn({ name: "Fork", agent: "worker", fork: true, task: "Fix the bug where..." });
 
 // Custom working directory
 pmux_spawn({ name: "Designer", agent: "game-designer", cwd: "agents/game-designer", task: "..." });
@@ -233,7 +239,7 @@ pmux_spawn({ name: "Designer", agent: "game-designer", cwd: "agents/game-designe
 | -------------- | ------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `name`         | string  | required                | The display name. It appears in the widget and the pane title.                                                                                                                                                                                                                                     |
 | `task`         | string  | required                | The task prompt for the child.                                                                                                                                                                                                                                                                     |
-| `agent`        | string  | —                       | It loads defaults from the agent definition.                                                                                                                                                                                                                                                       |
+| `agent`        | string  | required                | It loads defaults from the agent definition. A name that resolves to no agent definition is an error, and the call starts no child; a role with no `model:` launches on pi's default model.                                                                                                        |
 | `fork`         | boolean | `false`                 | It forces the full-context fork mode for this spawn. It overrides any agent `session-mode` frontmatter.                                                                                                                                                                                            |
 | `interactive`  | boolean | derived                 | It marks this spawn as interactive (it does not wake the parent on stall or recovery). It defaults to the `interactive` frontmatter of the agent, otherwise to the inverse of `auto-exit`.                                                                                                         |
 | `model`        | string  | —                       | It overrides the default model of the agent.                                                                                                                                                                                                                                                       |
@@ -458,7 +464,7 @@ auto-exit: true
 
 It controls whether status transitions (`stalled`, `recovered`) wake the parent session with a steer message.
 
-Default: the inverse of `auto-exit`. Autonomous agents (`auto-exit: true`) are non-interactive and ping the parent on stall and recovery. Agents without `auto-exit` are interactive and stay quiet. Bare spawns with no agent definitions (for example a bare spawn with `fork: true`) count as interactive.
+Default: the inverse of `auto-exit`. Autonomous agents (`auto-exit: true`) are non-interactive and ping the parent on stall and recovery. Agents without `auto-exit` are interactive and stay quiet. A role whose definition sets no `interactive` or `auto-exit` (for example a plain role with `fork: true`) counts as interactive.
 
 Why it exists: interactive agents can run for minutes or hours while the user thinks, types, and reads in the child pane. Child snapshots still update the widget. Stalled and recovered supervision messages rarely need to wake the parent for user-driven sessions. Skipped steers keep the parent quiet until the child actually finishes.
 
@@ -536,8 +542,8 @@ project/
 ```
 
 ```typescript
-pmux_spawn({ name: "Game Designer", cwd: "agents/game-designer", task: "Design the combat system" });
-pmux_spawn({ name: "SRE", cwd: "agents/sre", task: "Review deployment pipeline" });
+pmux_spawn({ name: "Game Designer", agent: "game-designer", cwd: "agents/game-designer", task: "Design the combat system" });
+pmux_spawn({ name: "SRE", agent: "sre", cwd: "agents/sre", task: "Review deployment pipeline" });
 ```
 
 To set a default `cwd`, put it in the agent frontmatter:

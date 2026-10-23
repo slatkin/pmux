@@ -26,6 +26,7 @@ import { parseSurfaceDefault, type SurfaceDefault } from "./placement.ts";
 import {
   createSupervisor,
   SubagentParams,
+  UnknownRoleError,
   borderLine,
   buildLaunchMessagingHint,
   buildPiPromptArgs,
@@ -606,9 +607,21 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
         // Launch the subagent (creates pane or tab, sends command) and start
         // watching it in the background; the supervisor delivers the result.
-        const running = await currentSupervisor().spawn(params, ctx, {
-          fallback: getSurfaceDefault(),
-        });
+        // The schema requires `agent`, and an unresolved role throws from the
+        // launch resolution before any pane, record or child exists (design
+        // D1): the call is that error, not a crash.
+        let running: RunningSubagent;
+        try {
+          running = await currentSupervisor().spawn(params, ctx, {
+            fallback: getSurfaceDefault(),
+          });
+        } catch (error) {
+          if (!(error instanceof UnknownRoleError)) throw error;
+          return {
+            content: [{ type: "text", text: errorText(error) }],
+            details: { error: "unknown role", agent: params.agent },
+          };
+        }
 
         // Return immediately
         return {

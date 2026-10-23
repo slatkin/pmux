@@ -17,6 +17,7 @@ import {
   readFileSync,
   appendFileSync,
   mkdirSync,
+  readdirSync,
   rmSync,
   existsSync,
 } from "node:fs";
@@ -39,6 +40,7 @@ import { readLaunchSpec } from "../pi-extension/pmux/launch.ts";
 import {
   LAUNCH_RECORD_VERSION,
   getLaunchRecordFile,
+  readLaunchRecord,
   writeLaunchRecord,
 } from "../pi-extension/pmux/launch-record.ts";
 import {
@@ -3358,6 +3360,13 @@ describe("subagent child status ownership", () => {
       process.env.PI_PMUX_SHELL_READY_DELAY_MS = "0";
       process.env.TMUX = "/tmp/tmux-0/default";
       process.env.TMUX_PANE = "%21";
+      // The required-role spec: the spawn names a role, and a plain role
+      // with no model keeps the launch on pi's default model.
+      mkdirSync(join(dir, "agent", "agents"), { recursive: true });
+      writeFileSync(
+        join(dir, "agent", "agents", "plain-role.md"),
+        "---\nname: plain-role\n---\n\nYou are a plain test agent.\n",
+      );
       const testApi = (subagentsModule as any).__test__;
       const target = makeRecordingPi();
       try {
@@ -3380,7 +3389,7 @@ describe("subagent child status ownership", () => {
         };
         const result = await spawnTool.execute(
           "call-1",
-          { name: "Scout", task: "survey the repo" },
+          { name: "Scout", task: "survey the repo", agent: "plain-role" },
           undefined,
           undefined,
           ctx,
@@ -3416,6 +3425,211 @@ describe("subagent child status ownership", () => {
       } finally {
         // Stop the replacement supervisor's intervals, watcher and stream.
         target.fire("session_shutdown", undefined, CTX);
+        for (const [name, value] of saved) restoreEnvVar(name, value);
+        __setTmuxExecForTests__(null);
+      }
+    });
+  });
+});
+
+describe("pmux_spawn role resolution (required-role spec)", () => {
+  function makeRecordingPi() {
+    const handlers = new Map<string, Array<(data?: unknown, ctx?: unknown) => void>>();
+    const registeredTools: Array<any> = [];
+    const sentMessages: Array<any> = [];
+    return {
+      fire(event: string, data?: unknown, ctx?: unknown) {
+        for (const fn of handlers.get(event) ?? []) fn(data, ctx);
+      },
+      registeredTools,
+      sentMessages,
+      pi: {
+        on(event: string, fn: (data?: unknown, ctx?: unknown) => void) {
+          handlers.set(event, [...(handlers.get(event) ?? []), fn]);
+        },
+        registerTool(tool: any) {
+          registeredTools.push(tool);
+        },
+        registerCommand() {},
+        registerMessageRenderer() {},
+        registerShortcut() {},
+        sendUserMessage() {},
+        sendMessage(message: any, options?: any) {
+          sentMessages.push({ message, options });
+        },
+        getAllTools() {
+          return [];
+        },
+      } as any,
+    };
+  }
+
+  function roleResolutionEnv(dir: string): Array<[string, string | undefined]> {
+    const saved: Array<[string, string | undefined]> = [
+      ["PI_CODING_AGENT_DIR", process.env.PI_CODING_AGENT_DIR],
+      ["PI_PMUX_SHELL_READY_DELAY_MS", process.env.PI_PMUX_SHELL_READY_DELAY_MS],
+      ["TMUX", process.env.TMUX],
+      ["TMUX_PANE", process.env.TMUX_PANE],
+    ];
+    process.env.PI_CODING_AGENT_DIR = join(dir, "agent");
+    process.env.PI_PMUX_SHELL_READY_DELAY_MS = "0";
+    process.env.TMUX = "/tmp/tmux-0/default";
+    process.env.TMUX_PANE = "%21";
+    return saved;
+  }
+
+  function spawnToolOf(target: ReturnType<typeof makeRecordingPi>) {
+    const spawnTool = target.registeredTools.find((tool: any) => tool.name === "pmux_spawn");
+    assert.ok(spawnTool, "expected pmux_spawn tool to be registered");
+    return spawnTool;
+  }
+
+  function roleContext(dir: string) {
+    return {
+      cwd: dir,
+      sessionManager: {
+        getSessionFile: () => join(dir, "parent.jsonl"),
+        getSessionId: () => "sess-role",
+        getSessionDir: () => join(dir, "sessions"),
+      },
+    };
+  }
+
+  it("returns an error that names the role and the searched paths, and writes nothing", async () => {
+    await withTempDir(async (dir) => {
+      const calls: string[][] = [];
+      __setTmuxExecForTests__((args) => {
+        calls.push(args);
+        if (args[0] === "split-window") return "%24";
+        return "";
+      });
+      const saved = roleResolutionEnv(dir);
+      const target = makeRecordingPi();
+      try {
+        subagentsModule.default(target.pi);
+
+        const result = await spawnToolOf(target).execute(
+          "call-1",
+          { name: "Scout", task: "survey the repo", agent: "wroker" },
+          undefined,
+          undefined,
+          roleContext(dir),
+        );
+
+        // The error names the role and every searched path.
+        assert.match(result.content[0].text, /unknown role 'wroker' \(searched:/);
+        assert.ok(
+          result.content[0].text.includes(join(dir, "agent", "agents", "wroker.md")),
+          `expected the searched global agents path in: ${result.content[0].text}`,
+        );
+        assert.deepEqual(result.details, { error: "unknown role", agent: "wroker" });
+
+        // No pane was split and nothing was written: the temp tree holds
+        // only what the test itself created (nothing).
+        assert.equal(
+          calls.some((args) => args[0] === "split-window"),
+          false,
+        );
+        assert.deepEqual(readdirSync(dir, { recursive: true }), []);
+      } finally {
+        target.fire("session_shutdown", undefined, undefined);
+        for (const [name, value] of saved) restoreEnvVar(name, value);
+        __setTmuxExecForTests__(null);
+      }
+    });
+  });
+
+  it("rejects a blank agent with an error that names agent, and writes nothing", async () => {
+    await withTempDir(async (dir) => {
+      const calls: string[][] = [];
+      __setTmuxExecForTests__((args) => {
+        calls.push(args);
+        if (args[0] === "split-window") return "%24";
+        return "";
+      });
+      const saved = roleResolutionEnv(dir);
+      const target = makeRecordingPi();
+      try {
+        subagentsModule.default(target.pi);
+
+        // The schema's Type.String() has no minLength, so an empty or
+        // blank agent passes validation and must fail in the launch
+        // resolution (review P2).
+        for (const agent of ["", "   "]) {
+          const result = await spawnToolOf(target).execute(
+            "call-1",
+            { name: "Scout", task: "survey the repo", agent },
+            undefined,
+            undefined,
+            roleContext(dir),
+          );
+
+          // The error names `agent`...
+          assert.match(result.content[0].text, /agent must name an agent role/);
+          assert.deepEqual(result.details, { error: "unknown role", agent });
+
+          // ...and nothing runs or lands: no pane, no record, no spec file.
+          assert.equal(
+            calls.some((args) => args[0] === "split-window"),
+            false,
+          );
+          assert.deepEqual(readdirSync(dir, { recursive: true }), []);
+        }
+      } finally {
+        target.fire("session_shutdown", undefined, undefined);
+        for (const [name, value] of saved) restoreEnvVar(name, value);
+        __setTmuxExecForTests__(null);
+      }
+    });
+  });
+
+  it("launches a role whose definition sets no model", async () => {
+    await withTempDir(async (dir) => {
+      const calls: string[][] = [];
+      __setTmuxExecForTests__((args) => {
+        calls.push(args);
+        if (args[0] === "split-window") return "%24";
+        return "";
+      });
+      const saved = roleResolutionEnv(dir);
+      mkdirSync(join(dir, "agent", "agents"), { recursive: true });
+      writeFileSync(
+        join(dir, "agent", "agents", "no-model-role.md"),
+        "---\nname: no-model-role\ntools: read\n---\n\nYou are a plain classifier.\n",
+      );
+      const target = makeRecordingPi();
+      try {
+        subagentsModule.default(target.pi);
+
+        const result = await spawnToolOf(target).execute(
+          "call-1",
+          { name: "Classifier", task: "classify the corpus", agent: "no-model-role" },
+          undefined,
+          undefined,
+          roleContext(dir),
+        );
+
+        // The child launches: pi chooses its default model, so the spec
+        // carries no --model flag and the record holds no model value.
+        assert.equal(result.details.status, "started");
+        assert.equal(result.details.agent, "no-model-role");
+        const spec = readLaunchSpec(result.details.launchScriptFile as string);
+        assert.equal(spec.args.includes("--model"), false);
+        const record = readLaunchRecord(getLaunchRecordFile(result.details.sessionFile));
+        assert.ok(record);
+        assert.equal(record.agent, "no-model-role");
+        assert.equal("model" in record, false);
+        assert.equal(spec.env.PI_PMUX_AGENT, "no-model-role");
+
+        // End the run through the sidecar so no watcher outlives the test.
+        writeFileSync(`${result.details.sessionFile}.exit`, JSON.stringify({ type: "done" }));
+        const supervisor = (subagentsModule as any).__test__.getCurrentSupervisor();
+        for (let i = 0; i < 150 && supervisor.running().length > 0; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.equal(supervisor.running().length, 0);
+      } finally {
+        target.fire("session_shutdown", undefined, undefined);
         for (const [name, value] of saved) restoreEnvVar(name, value);
         __setTmuxExecForTests__(null);
       }

@@ -95,15 +95,15 @@ export {
   resolveModeHint,
   writeRunContextFile,
 } from "./launch-build.ts";
+export { UnknownRoleError } from "./launch-build.ts";
 
 export const SubagentParams = Type.Object({
   name: Type.String({ description: "Display name." }),
   task: Type.String({ description: "Task prompt for the subagent." }),
-  agent: Type.Optional(
-    Type.String({
-      description: "Agent definition that supplies defaults (model, tools, skills). See pmux_list.",
-    }),
-  ),
+  agent: Type.String({
+    description:
+      "Agent role that supplies defaults (model, tools, skills). Required: a name that resolves to no agent definition is an error. See pmux_list.",
+  }),
   systemPrompt: Type.Optional(
     Type.String({ description: "Role instructions to append to the system prompt." }),
   ),
@@ -1339,6 +1339,9 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       // setting it is not a guarantee: `pmux_resume` accepts a session file
       // of another cwd, and the tool context does not verify it.
       anchor: process.cwd(),
+      // The schema requires `agent`, so the role must exist (design D1); a
+      // role with no `model:` still launches on pi's default model.
+      requireRole: true,
       overrides: {
         name: params.name,
         model: params.model,
