@@ -2,15 +2,17 @@
  * The `.exit` sidecar protocol — host independent.
  *
  * A child writes `<session file>.exit` when it finishes (done, ping, handoff
- * or error). The parent polls that file, so the completion channel does not
- * depend on the terminal host. Both backends read it through this module so
- * they decode a payload the same way.
+ * or error). A child whose turn the user aborted also writes a `cancelled`
+ * sidecar, which is a notification rather than a completion: the session is
+ * still open (report-user-cancel D1). The parent polls that file, so the
+ * completion channel does not depend on the terminal host. Both backends read
+ * it through this module so they decode a payload the same way.
  */
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 
 export interface PollResult {
-  /** How the subagent exited */
-  reason: "done" | "ping" | "sentinel" | "error" | "handoff";
+  /** How the subagent exited, or that the user cancelled its turn */
+  reason: "done" | "ping" | "sentinel" | "error" | "handoff" | "cancelled";
   /** Shell exit code (from sentinel). 0 for file-based exits. */
   exitCode: number;
   /** Ping data if reason is "ping" */
@@ -54,6 +56,11 @@ export function interpretExitSidecar(data: any): PollResult {
       errorMessage,
       ...(typeof data.source === "string" ? { errorSource: data.source } : {}),
     };
+  }
+  if (data?.type === "cancelled") {
+    // Nothing failed, so the exit code stays 0; the reason carries the meaning
+    // (report-user-cancel D3).
+    return { reason: "cancelled", exitCode: 0 };
   }
   return { reason: "done", exitCode: 0 };
 }

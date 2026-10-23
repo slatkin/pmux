@@ -103,7 +103,7 @@ Placement has two sources: the role's `surface:` frontmatter applies when it nam
 
 For the report cross-check, run `node <skill-dir>/launch.ts last-message --session <file>`. It prints the last assistant message of the session, or `(no assistant message)`.
 
-Completion signal: a child that finishes, pings, or errors writes its status to `<session>.status` before it exits — `done`, or `blocked` with the ping question or error text as the message. In the default `last` mode, wait for the status with the CLI's `wait` command. Do not poll the pane:
+Completion signal: a child that finishes, pings, or errors writes its status to `<session>.status` before it exits — `done`, or `blocked` with the ping question or error text as the message. A user cancel writes no status entry, because the session stays open, so `wait --signal status` keeps waiting through a cancel; the sidecar wait below reports it. In the default `last` mode, wait for the status with the CLI's `wait` command. Do not poll the pane:
 
 ```bash
 node <skill-dir>/launch.ts wait --session <file> --status done,blocked --timeout <seconds>
@@ -117,11 +117,13 @@ After the status wait, run the sidecar wait and act on the reason it prints; nev
 node <skill-dir>/launch.ts wait --session <file> --signal sidecar
 ```
 
-The sidecar wait polls the `<session>.exit` file and never removes it — the run wrapper reads the same file after the child exits. It exits 0 when the sidecar appears, printing the decoded sidecar plus the sidecar's absolute path on one JSON line: `reason` is `done` (finished), `handoff` (handed off, with the continuation text as `handoff.message`), `ping` (the question as `ping.message`) or `error`, with `errorSource` at `"wrapper"` when the wrapper wrote the sidecar. It exits 2 when the timeout passes first, printing `{"sidecar":null}` on stdout. The status file is the wake-up signal; the `.exit` sidecar stays the authoritative lifecycle record.
+The sidecar wait polls the `<session>.exit` file and never removes it — the run wrapper reads the same file after the child exits. It exits 0 when the sidecar appears, printing the decoded sidecar plus the sidecar's absolute path on one JSON line: `reason` is `done` (finished), `handoff` (handed off, with the continuation text as `handoff.message`), `ping` (the question as `ping.message`), `error`, or `cancelled` (the user aborted the child's turn), with `errorSource` at `"wrapper"` when the wrapper wrote the sidecar. It exits 2 when the timeout passes first, printing `{"sidecar":null}` on stdout. The status file is the wake-up signal; the `.exit` sidecar stays the authoritative lifecycle record.
+
+A `cancelled` sidecar is a notification, not a completion: nothing failed, the session is still open, and the child removes the sidecar when a new turn starts. A sidecar wait issued after that waits for the next, real completion. A `wait --signal status` does not return on a cancel, because the cancel writes no status entry.
 
 A child started with `--report send` is different: it types its report into your pane, and you wait for its `.exit` sidecar with `node <skill-dir>/launch.ts wait --session <file> --signal sidecar [--timeout <seconds>]`. The child's `send` command prints one confirmation line in the child's own pane — the target pane, the size of the text it sent and the receipt file it wrote — so a child never has to ask whether its report arrived. That mode is documented in the skill's "External orchestrators (Claude Code)" section (`skills/pmux/SKILL.md`).
 
-Close-on-done: after pi exits, the run wrapper closes its own pane only when the session `.exit` sidecar holds `done` or `handoff`. It first waits a grace period of 5000 ms by default. Set it per launch with `start --close-grace-ms <n>`. `0` closes at once. The delay lets a blocked `wait` in the orchestrator observe the terminal status before the pane goes away. A provider error, a `caller_ping`, or a crash leaves the pane open with the `__SUBAGENT_DONE_<n>__` sentinel visible, so you can inspect the failure. Close those panes yourself when done with them.
+Close-on-done: after pi exits, the run wrapper closes its own pane only when the session `.exit` sidecar holds `done` or `handoff`. It first waits a grace period of 5000 ms by default. Set it per launch with `start --close-grace-ms <n>`. `0` closes at once. The delay lets a blocked `wait` in the orchestrator observe the terminal status before the pane goes away. A provider error, a `caller_ping`, a crash, or a user cancel leaves the pane open with the `__SUBAGENT_DONE_<n>__` sentinel visible when the child exited, so you can inspect the outcome. Close those panes yourself when done with them.
 
 ---
 
@@ -149,7 +151,7 @@ Completion messages render with a colored background and are expandable with `Ct
 
 ### Decision model
 
-Each child run has one of three outcomes: `done`, `ping`, or `error`. The `.exit` sidecar records the outcome. The orchestrator delivers it as a steer message.
+Each child run has one of three outcomes: `done`, `ping`, or `error`. The `.exit` sidecar records the outcome. The orchestrator delivers it as a steer message. A user cancel (Escape) is not one of them: it notifies the parent without ending the run, and the run still ends later with one of the three outcomes.
 
 ```mermaid
 flowchart LR
@@ -260,7 +262,7 @@ pmux_interrupt({ id: "abcd1234" });
 pmux_interrupt({ name: "Scout" });
 ```
 
-This sends Escape to the child pane and cancels the active model turn. The session stays alive. The pane, the session file, and the background polling all stay intact. After the interrupt, the widget moves the child back to `waiting` at once and ignores stale pre-interrupt snapshots. If the child starts work later, newer snapshots return it to `active`. Completion, failure, and `caller_ping` still flow normally. This is a turn-level interrupt. It does not terminate a session.
+This sends Escape to the child pane and cancels the active model turn. The session stays alive. The pane, the session file, and the background polling all stay intact. After the interrupt, the widget moves the child back to `waiting` at once and ignores stale pre-interrupt snapshots. If the child starts work later, newer snapshots return it to `active`. Completion, failure, and `caller_ping` still flow normally. A pi parent also learns of the cancel: the child's aborted turn writes the `cancelled` `.exit` sidecar, and the parent gets one steer per cancel that says the session is still open and to ask the user how to proceed. The run stays registered, so a later completion still reports. This is a turn-level interrupt. It does not terminate a session.
 
 > **Note:** It supports only Pi-backed children. A Claude-backed run returns an error.
 
@@ -427,7 +429,7 @@ surface: float
 
 ### `auto-exit` and the completion nudge
 
-Agents with `auto-exit: true` exit themselves. When the agent finishes a turn normally and the user has not taken over the pane, the child writes the `done` `.exit` sidecar and the session ends, with no `pmux_done` call. The last assistant message becomes the result for the parent. An aborted turn (Escape) keeps the session open for inspection or another prompt. Error stops still exit at once with the error sidecar reported to the parent.
+Agents with `auto-exit: true` exit themselves. When the agent finishes a turn normally and the user has not taken over the pane, the child writes the `done` `.exit` sidecar and the session ends, with no `pmux_done` call. The last assistant message becomes the result for the parent. An aborted turn (Escape) keeps the session open for inspection or another prompt, and writes the `cancelled` `.exit` sidecar so the parent gets a notification instead of a result. Error stops still exit at once with the error sidecar reported to the parent. An aborted turn schedules no nudge.
 
 If the user types into an auto-exit agent pane after its first run, the session becomes user-owned. Auto-exit is disabled from that point. The nudge below takes over.
 

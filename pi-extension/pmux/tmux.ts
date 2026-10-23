@@ -465,7 +465,9 @@ export async function pushNotificationAsync(text: string): Promise<void> {
 /**
  * Poll until the subagent exits. The `.exit` sidecar is the primary signal
  * (host independent); the terminal sentinel is the fallback for a child that
- * died without writing one.
+ * died without writing one. A `cancelled` sidecar is a notification, not an
+ * exit: `onCancel` reports it and the poll keeps watching (report-user-cancel
+ * D4).
  */
 export async function pollForExit(
   surface: string,
@@ -475,23 +477,38 @@ export async function pollForExit(
     sessionFile?: string;
     sentinelFile?: string;
     onTick?: (elapsed: number) => void;
+    onCancel?: (result: PollResult) => void;
     maySkipScreenScan?: () => boolean;
   },
 ): Promise<PollResult> {
   const start = Date.now();
+
+  /**
+   * Read and consume the sidecar. A completion is returned; a `cancelled`
+   * payload is handed to `onCancel` and leaves the poll running. Consuming
+   * the file is the de-duplication: each cancel notifies exactly once, and a
+   * later abort writes a new file that notifies again.
+   */
+  const readSidecar = (): PollResult | null => {
+    if (!options.sessionFile) return null;
+    const data = readExitSidecar(options.sessionFile);
+    if (data === null) return null;
+    rmSync(exitSidecarPath(options.sessionFile), { force: true });
+    const result = interpretExitSidecar(data);
+    if (result.reason === "cancelled") {
+      options.onCancel?.(result);
+      return null;
+    }
+    return result;
+  };
 
   for (;;) {
     if (signal.aborted) {
       throw new Error("Aborted while waiting for subagent to finish");
     }
 
-    if (options.sessionFile) {
-      const data = readExitSidecar(options.sessionFile);
-      if (data !== null) {
-        rmSync(exitSidecarPath(options.sessionFile), { force: true });
-        return interpretExitSidecar(data);
-      }
-    }
+    const sidecar = readSidecar();
+    if (sidecar) return sidecar;
 
     if (options.sentinelFile) {
       try {
@@ -515,13 +532,8 @@ export async function pollForExit(
         }
       } catch {
         // The pane is gone: check for the sidecar one more time.
-        if (options.sessionFile) {
-          const data = readExitSidecar(options.sessionFile);
-          if (data !== null) {
-            rmSync(exitSidecarPath(options.sessionFile), { force: true });
-            return interpretExitSidecar(data);
-          }
-        }
+        const lastSidecar = readSidecar();
+        if (lastSidecar) return lastSidecar;
       }
     }
 

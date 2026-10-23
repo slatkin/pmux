@@ -1473,6 +1473,11 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
         interval: 1000,
         sessionFile,
         sentinelFile: running.sentinelFile,
+        // A cancel is a notification, not an exit: report it and keep watching
+        // for the child's real completion (report-user-cancel D4).
+        onCancel() {
+          deliverSubagentCancel(running, send);
+        },
         // The screen read is only the crash fallback; while the child's activity
         // snapshot is demonstrably fresh, skip the per-second process spawn.
         // Claude-backed runs have no snapshots, so they keep scanning.
@@ -1609,6 +1614,34 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
           sessionFile: result.sessionFile,
           ...(result.errorMessage ? { errorMessage: result.errorMessage } : {}),
           ...(result.claudeSessionId ? { claudeSessionId: result.claudeSessionId } : {}),
+        },
+      },
+      { triggerTurn: true, deliverAs: "steer" },
+    );
+  }
+
+  /**
+   * Tell the parent the user aborted a child's turn without ending its run.
+   * The child stays registered so a later completion still reports; the
+   * wording steers the parent toward asking the user how to proceed rather
+   * than toward recovering a failure (report-user-cancel D4).
+   */
+  function deliverSubagentCancel(running: RunningSubagent, send: SendFn): void {
+    const elapsed = Math.floor((Date.now() - running.startTime) / 1000);
+    send(
+      {
+        customType: "pmux_cancel",
+        content:
+          `Sub-agent "${running.name}" was cancelled in its pane (Escape) after ${formatElapsed(elapsed)}. ` +
+          "The session is still open and the child is still registered. " +
+          "The user interrupted it deliberately — ask the user how to proceed before " +
+          "resuming with `pmux_resume` or spawning a replacement.",
+        display: true,
+        details: {
+          name: running.name,
+          task: running.task,
+          agent: running.agent,
+          sessionFile: running.sessionFile,
         },
       },
       { triggerTurn: true, deliverAs: "steer" },

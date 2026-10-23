@@ -15,7 +15,9 @@
  * Otherwise the only success-path exits are the explicit `pmux_done` /
  * `caller_ping` tools, and an agent that finishes without calling either is
  * nudged. Provider-error turns write the error `.exit` sidecar so the parent
- * learns about failures promptly.
+ * learns about failures promptly. A user-aborted turn writes the `cancelled`
+ * sidecar and leaves the session open, so a cancel is not mistaken for a
+ * failure (report-user-cancel D1).
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
@@ -37,7 +39,12 @@ import {
 } from "./context-alert.ts";
 import { loadStatusConfig } from "./status.ts";
 import { writeChildStatus, type ChildStatus } from "./status-file.ts";
-import { exitSidecarPath } from "./exit-sidecar.ts";
+import {
+  exitSidecarPath,
+  readExitSidecar,
+  removeExitSidecar,
+  writeExitSidecar,
+} from "./exit-sidecar.ts";
 import { COMPLETION_NUDGE_TEXT } from "./nudge.ts";
 
 export function shouldMarkUserTookOver(agentStarted: boolean): boolean {
@@ -58,6 +65,20 @@ export function shouldScheduleAgentEndNudge(
     if (message?.role === ASSISTANT_ROLE) {
       return message.stopReason === NORMAL_STOP_REASON;
     }
+  }
+
+  return false;
+}
+
+/** Return true only when the latest assistant message ended because the user aborted it. */
+export function didUserAbortTurn(
+  messages: readonly { role?: string; stopReason?: string }[] | undefined,
+): boolean {
+  if (!messages) return false;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message?.role === ASSISTANT_ROLE) return message.stopReason === "aborted";
   }
 
   return false;
@@ -361,6 +382,13 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_start", () => {
     agentStarted = true;
     recorder.agentStart();
+    // A `cancelled` sidecar describes the turn that just ended. A new turn
+    // means the user resumed, so drop it; a stale cancel must never satisfy a
+    // later wait (D2). Every other payload is a real completion and stays.
+    const sessionFile = childEnv.sessionFile;
+    if (sessionFile && readExitSidecar(sessionFile)?.type === "cancelled") {
+      removeExitSidecar(sessionFile);
+    }
     // Agent has started a new generation cycle — clear any pending nudge.
     userInputAfterAgentEnd = false;
     clearNudgeTimer();
@@ -400,6 +428,15 @@ export default function (pi: ExtensionAPI) {
     // Only input arriving after this point counts as a takeover; input that
     // landed mid-run (e.g. pmux_message) must not silence the nudge.
     userInputAfterAgentEnd = false;
+
+    // A user-aborted turn is a notification, not an exit: the session stays
+    // open for inspection or another prompt, and the sidecar tells the parent
+    // the user cancelled rather than that the child failed (D1). The flow
+    // still falls through to the nudge check, which clears any pending nudge
+    // for an aborted turn instead of scheduling one.
+    if (sessionFile && didUserAbortTurn(messages)) {
+      writeExitSidecar(sessionFile, { type: "cancelled" });
+    }
 
     // Restored auto-exit: an auto-exit agent whose turn ended normally exits
     // itself instead of waiting on the nudge. A taken-over session stays open

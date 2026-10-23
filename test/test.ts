@@ -1901,11 +1901,85 @@ describe("pmux-done nudge", () => {
         );
 
         assert.equal(shutdownCalled, false);
+        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
+          type: "cancelled",
+        });
+      } finally {
+        restoreEnv();
+      }
+    });
+  });
+
+  it("non-auto-exit agent_end on an aborted stop writes the cancelled sidecar and schedules no nudge", async () => {
+    await withTempDir(async (dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const { handlers, sentMessages, restoreEnv } = loadChildExtension({
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DELAY_MS: "1000",
+      });
+      try {
+        fire(handlers, "agent_start");
+        let shutdownCalled = false;
+        fire(
+          handlers,
+          "agent_end",
+          { messages: [{ role: "assistant", stopReason: "aborted" }] },
+          { shutdown: () => (shutdownCalled = true) },
+        );
+
+        assert.equal(shutdownCalled, false);
+        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
+          type: "cancelled",
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 1100));
+        assert.equal(sentMessages.length, 0);
+      } finally {
+        restoreEnv();
+      }
+    });
+  });
+
+  it("a new turn clears a cancelled sidecar", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "cancelled" }));
+      const { handlers, restoreEnv } = loadChildExtension({
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DISABLE: "1",
+      });
+      try {
+        fire(handlers, "agent_start");
         assert.equal(existsSync(`${sessionFile}.exit`), false);
       } finally {
         restoreEnv();
       }
     });
+  });
+
+  it("a new turn keeps every completion sidecar in place", () => {
+    const payloads = [
+      { type: "done" },
+      { type: "error", errorMessage: "boom" },
+      { type: "handoff", message: "Goal: X. Left: B." },
+      { type: "ping", name: "Worker", message: "need help" },
+    ];
+    for (const payload of payloads) {
+      withTempDir((dir) => {
+        const sessionFile = join(dir, "child.jsonl");
+        writeFileSync(`${sessionFile}.exit`, JSON.stringify(payload));
+        const { handlers, restoreEnv } = loadChildExtension({
+          PI_PMUX_SESSION: sessionFile,
+          PI_PMUX_NUDGE_DISABLE: "1",
+        });
+        try {
+          fire(handlers, "agent_start");
+          assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), payload);
+        } finally {
+          restoreEnv();
+        }
+      });
+    }
   });
 
   it("user takeover keeps an auto-exit session open after a normal stop", () => {
@@ -2137,6 +2211,13 @@ describe("interpretExitSidecar", () => {
       assert.equal(result.exitCode, 0);
       assert.deepEqual(result.handoff, { message: "(handoff text missing)" });
     }
+  });
+
+  it("decodes cancelled payloads without a failing exit code", () => {
+    assert.deepEqual(interpretExitSidecar({ type: "cancelled" }), {
+      reason: "cancelled",
+      exitCode: 0,
+    });
   });
 
   it("treats unknown payload shapes as done", () => {
