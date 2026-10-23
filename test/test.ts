@@ -1,15 +1,14 @@
 import { describe, it, before, after, mock } from "node:test";
 import assert from "node:assert/strict";
 
-// The whole suite drives the Luvus backend through its own seam and sets the
-// LUVUS_* variables explicitly per test. An ambient Luvus session (running
-// the suite inside a pi sub-agent pane) would turn any un-stubbed Luvus call
-// into a real pane mutation — including `pane close $LUVUS_PANE_ID`, which
-// kills the very session running the suite. The same goes for the tmux host
-// keys and for PI_PMUX_*: a suite run inside a sub-agent pane inherits its
-// identity (PI_PMUX_SESSION, PI_PMUX_AUTO_EXIT, …), which flips the
-// nudge/auto-exit paths under test and can write a `.exit` sidecar for the
-// real session. `host-env.ts` clears all of them for this process.
+// The whole suite drives the tmux backend through its own seam. An ambient
+// tmux session (running the suite inside a pi sub-agent pane) would turn any
+// un-stubbed pane call into a real pane mutation — including closing the very
+// pane that runs the suite. The same goes for PI_PMUX_*: a suite run in a
+// sub-agent pane inherits its identity (PI_PMUX_SESSION, PI_PMUX_AUTO_EXIT,
+// …), which flips the nudge/auto-exit paths under test and can write a
+// `.exit` sidecar for the real session. `host-env.ts` clears those variables
+// for this process.
 import "./host-env.ts";
 
 import {
@@ -85,19 +84,6 @@ import {
 } from "../pi-extension/pmux/agent-defs.ts";
 import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
 import { COMPLETION_NUDGE_TEXT } from "../pi-extension/pmux/nudge.ts";
-// --- Fixture ---
-// Captured live via `$LUVUS_BIN_PATH pane split $LUVUS_PANE_ID --no-focus` on 2026-09-28
-// (design.md Decision 3): the new pane id is `result.pane`.
-// {
-//   "id": "1",
-//   "result": {
-//     "pane": "24",
-//     "revision": 329037,
-//     "tab": "1",
-//     "type": "pane",
-//     "workspace": "2"
-//   }
-// }
 
 // --- Helpers ---
 
@@ -2963,7 +2949,7 @@ describe("subagent messaging", () => {
     ]);
   });
 
-  it("delivers child and sibling messages through Luvus with the header", () => {
+  it("delivers child and sibling messages through tmux with the header", () => {
     const prompted: string[] = [];
     const result = testApi().sendSubagentMessage(
       { to: "Reviewer", message: "API is in src/api" },
