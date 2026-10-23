@@ -24,7 +24,7 @@ export default [
           caughtErrorsIgnorePattern: "^_",
         },
       ],
-      // This package exchanges untyped JSON with the pi SDK and the Luvus CLI.
+      // This package exchanges untyped JSON with the pi SDK and the tmux CLI.
       // Warn, not error: 175 sites predate the linter. Reported, but not gating.
       "@typescript-eslint/no-explicit-any": "warn",
     },
