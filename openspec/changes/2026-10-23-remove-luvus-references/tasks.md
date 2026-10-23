@@ -2,9 +2,9 @@
 
 ## 1. Rename the spec capabilities
 
-- [ ] 1.1 `git mv` the five main spec directories (`luvus-backend` → `pane-lifecycle`, `luvus-surface` → `surface-placement`, `luvus-messaging` → `subagent-messaging`, `luvus-completion` → `subagent-completion`, `luvus-agent-titles` → `pane-titles`), change each file heading that names the old capability, and change the scenario title "Model forgets to call luvus_done" to "Model forgets to call pmux_done"; verify that `openspec list --specs` shows the five new names and no `luvus-*` name, and that `git diff -M --stat` shows renames with only the heading and scenario lines changed (design D1)
-- [ ] 1.2 If `openspec/changes/2026-10-23-report-user-cancel/` is still active, move its `specs/luvus-completion/` directory to `specs/subagent-completion/` and change `luvus-completion` to `subagent-completion` in its `proposal.md`, in the same commit as 1.1; verify that `openspec validate 2026-10-23-report-user-cancel --strict` passes (design D2)
-- [ ] 1.3 Change the spec link in `docs/guide.md` from `luvus-completion` to `subagent-completion`; verify that the linked file exists
+- [x] 1.1 `git mv` the five main spec directories (`luvus-backend` → `pane-lifecycle`, `luvus-surface` → `surface-placement`, `luvus-messaging` → `subagent-messaging`, `luvus-completion` → `subagent-completion`, `luvus-agent-titles` → `pane-titles`), change each file heading that names the old capability, and change the scenario title "Model forgets to call luvus_done" to "Model forgets to call pmux_done"; verify that `openspec list --specs` shows the five new names and no `luvus-*` name, and that `git diff -M --stat` shows renames with only the heading and scenario lines changed (design D1)
+- [x] 1.2 If `openspec/changes/2026-10-23-report-user-cancel/` is still active, move its `specs/luvus-completion/` directory to `specs/subagent-completion/` and change `luvus-completion` to `subagent-completion` in its `proposal.md`, in the same commit as 1.1; verify that `openspec validate 2026-10-23-report-user-cancel --strict` passes (design D2)
+- [x] 1.3 Change the spec link in `docs/guide.md` from `luvus-completion` to `subagent-completion`; verify that the linked file exists
 
 ## 2. Host spec and env guards
 
