@@ -2,6 +2,40 @@
 
 This guide holds the full reference for pmux. For an overview and install steps, read the [README](../README.md).
 
+## Contents
+
+- [Environment](#environment)
+- [Pane titles](#pane-titles)
+- [Resume pi sessions](#resume-pi-sessions)
+- [Live child status](#live-child-status)
+- [Turn-end notification](#turn-end-notification)
+- [tmux sidebar (tmux-agent-sidebar)](#tmux-sidebar-tmux-agent-sidebar)
+- [External orchestrators (Claude Code)](#external-orchestrators-claude-code)
+- [Async Subagent Flow](#async-subagent-flow)
+  - [Decision model](#decision-model)
+  - [In-progress status updates](#in-progress-status-updates)
+    - [Configuration](#configuration)
+- [Spawning Subagents](#spawning-subagents)
+  - [Parameters (pmux_spawn)](#parameters)
+- [Interrupting a running subagent](#interrupting-a-running-subagent)
+- [Resuming a subagent](#resuming-a-subagent)
+  - [Parameters (pmux_resume)](#parameters-1)
+- [Messaging other agents](#messaging-other-agents)
+- [caller_ping: child-to-parent help request](#caller_ping-child-to-parent-help-request)
+- [Custom Agents](#custom-agents)
+  - [Frontmatter Reference](#frontmatter-reference)
+  - [`session-mode`](#session-mode)
+  - [`surface`](#surface)
+  - [`auto-exit` and the completion nudge](#auto-exit-and-the-completion-nudge)
+  - [`interactive`](#interactive)
+- [Tool Access Control](#tool-access-control)
+  - [`spawning: false`](#spawning-false)
+  - [`deny-tools`](#deny-tools)
+  - [Recommended Configuration](#recommended-configuration)
+- [Role Folders](#role-folders)
+- [Tools Widget](#tools-widget)
+- [Runtime notes](#runtime-notes)
+
 ## Environment
 
 tmux is required. Run pi inside a tmux pane. Outside tmux the extension spawns nothing. It checks `TMUX` and `TMUX_PANE`, which tmux sets for every pane, and returns an error that names tmux when either is missing.
