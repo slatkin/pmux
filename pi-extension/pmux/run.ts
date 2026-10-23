@@ -151,8 +151,7 @@ export async function runSpec(
   // sidecar the parent polls, so a crashed child ends the run at once instead
   // of leaving the parent to poll until the idle watchdog gives up (forever, for
   // an interactive child). A clean completion or a ping (a sidecar, or a
-  // terminal status the child wrote itself) is left as is: the parent deletes
-  // the sidecar as it reads it, so a child that already reported stays clean.
+  // terminal status the child wrote itself) is left as is.
   if (spec.sessionFile && !existsSync(exitSidecarPath(spec.sessionFile))) {
     const status = readChildStatus(spec.sessionFile);
     if (status === null || !isTerminalChildStatus(status.status)) {
