@@ -2,11 +2,6 @@ import "./host-env.ts";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 
-// Sandbox the Luvus ambient environment for the whole test process: an
-// ambient Luvus session must never be reachable from an un-stubbed test.
-for (const key of Object.keys(process.env)) {
-  if (key.startsWith("LUVUS_")) delete process.env[key];
-}
 import {
   existsSync,
   mkdirSync,
@@ -131,7 +126,7 @@ describe("pruneScratch", () => {
   it("recognizes only Claude sentinel names", () => {
     assert.equal(isSentinelFile("pi-claude-abc123-done"), true);
     assert.equal(isSentinelFile("pi-claude-abc123-done.transcript"), true);
-    assert.equal(isSentinelFile("pi-luvus"), false);
+    assert.equal(isSentinelFile("pi-claude-abc123"), false);
     assert.equal(isSentinelFile("scout-deadbeef.jsonl"), false);
   });
 
