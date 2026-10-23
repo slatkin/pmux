@@ -2,16 +2,15 @@
 
 ## Why
 
-The two orchestrator prompts that drive pmux campaigns (`~/.pi/agent/prompts/orchestrator.md` and `~/.claude/commands/pi-orchestrator.md`) carry long passages that document or work around pmux mechanics. Those passages drift: both prompts still tell the orchestrator to end every brief with "call the `luvus_done` tool" (the tool is `pmux_done`), and the Claude prompt warns about an omitted `--role` even though `cli.ts start` already requires it. One passage exists only because pmux is silent: `pmux_spawn` without an `agent`, or with a misspelled one, quietly launches the default agent — a real campaign incident (2026-10-23) that the prompt now spends a paragraph policing. Guidance that pmux can enforce or surface in code should live in code, so the prompts can shrink to campaign doctrine.
+The orchestrator prompt is now one file (`~/Dev/agents/prompts/orchestrator.md`, linked from pi and Claude Code), and most of its pmux mechanics are gone. One pmux paragraph stays because pmux does not enforce the rule: `pmux_spawn` without an `agent`, or with a misspelled one, quietly launches the default agent. That happened in a real campaign (2026-10-23), and the prompt spends a paragraph to prevent it.
+
+`SKILL.md` has a second paragraph of this type: "LEAVE the sidecar in place". It exists because the skill's own `last`-mode recipe tells the orchestrator to read `<session>.exit` directly after a status wait and to `rm` it. A delete before the run wrapper reads the file stops the pane from closing and loses the ping wake-up. The direct read can also find no file, because the child writes `status: done` before it writes `.exit`.
 
 ## What Changes
 
-- **Strict role resolution on the pi path.** `pmux_spawn` with an `agent` value that resolves to no role definition returns an error result and splits no pane — the same strictness `cli.ts start` already applies. **BREAKING**: a previously accepted (silently misrouted) input is now rejected.
-- **Surface the effective role.** A `pmux_spawn` acknowledgement names the role the child actually runs with; when `agent` was omitted, the acknowledgement says the child runs as the default agent, so a routing defect is visible in the launch result instead of in a user correction. Omitting `agent` stays allowed.
-- **Self-describing sidecar wait.** The `wait --signal sidecar` JSON gains a `hint` field that names the next action for the reported reason (answer a ping with `resume`, start a new child on a `handoff`, read the report on `done`), so the orchestrator follows the output instead of memorized prose.
-- **`nudge` and `close` CLI commands.** `nudge --pane <id> --text <text>` types a line into a child's pane; `close --pane <id>` kills a pane the orchestrator is done with. These replace the raw `tmux send-keys` / `tmux kill-pane` recipes in `SKILL.md`, removing the last documented reasons for an orchestrator to drive tmux itself.
-- **Automatic orchestrator pane title.** When a launch creates a child pane, pmux titles the orchestrator's own pane once (`<window-name>-orchestrator`, marked with a pane option so it is never clobbered or reapplied), on both the pi-parent and the external path. The manual `tmux select-pane -T` step leaves the prompts.
-- `SKILL.md` is updated for the new commands and the `hint` field.
+- **BREAKING: `pmux_spawn` requires `agent`.** A call without `agent` fails schema validation. A call whose `agent` resolves to no role definition returns an error result that names the role and the searched paths, and creates no pane, no launch record and no child. pmux checks only that the role exists: a role with no `model:` still launches with pi's default model, as it does today.
+- **The skill reads a child's exit only through `wait --signal sidecar`, in both modes.** The `last`-mode recipe runs the sidecar wait after the status wait, and no recipe reads `<session>.exit` directly or deletes it. The long "LEAVE the sidecar" paragraph becomes one sentence.
+- Removed from the earlier draft of this change: the `hint` field, the `nudge` and `close` commands, automatic orchestrator pane titles, and the effective role in the spawn acknowledgement.
 
 ## Capabilities
 
@@ -21,15 +20,14 @@ The two orchestrator prompts that drive pmux campaigns (`~/.pi/agent/prompts/orc
 
 ### Modified Capabilities
 
-- `subagent-supervision`: strict role resolution for `pmux_spawn`, the effective role in the spawn acknowledgement, and the once-only orchestrator pane title on the pi-parent path.
-- `external-orchestration`: the `hint` field in the sidecar-wait JSON, the `nudge` and `close` commands, the once-only orchestrator pane title on `start`, and the `SKILL.md` recipe updates.
+- `subagent-supervision`: `pmux_spawn` requires a role that resolves.
+- `external-orchestration`: the skill's wait recipe reads the exit through `wait --signal sidecar` in both modes, and the handoff recipe follows it.
 
 ## Impact
 
-- `pi-extension/pmux/supervisor.ts`, `launch-build.ts`: strict resolution on the pi path (`strict` on an `agent` that was given), effective-role plumbing into the spawn result.
-- `pi-extension/pmux/index.ts`: spawn acknowledgement text and details name the effective role.
-- `pi-extension/pmux/cli.ts`: `wait` hint field; new `nudge` and `close` commands; orchestrator pane titling on `start`.
-- `pi-extension/pmux/tmux.ts` (or placement/surface helpers): read the caller's window name, set the caller pane's title once, mark it with a pane option.
-- `skills/pmux/SKILL.md`: nudge/close/wait-hint recipes replace the tmux recipes.
+- `pi-extension/pmux/supervisor.ts`: the `agent` parameter becomes required; the spawn rejects a role that does not resolve.
+- `pi-extension/pmux/launch-build.ts`: `resolveLaunchRecord` gets a check for role existence only, separate from `strict`.
+- `pi-extension/pmux/index.ts`: `pmux_spawn` returns the rejection as an error result.
+- `skills/pmux/SKILL.md`: the `last`-mode wait and exit recipe, and the send-mode sidecar paragraph.
 - Tests beside each touched module.
-- Out of scope (recorded assumptions, open to revisit): the two orchestrator prompt files live outside this repo — slimming them is a follow-up the user performs after this lands; generating host-specific prompts from a pmux-owned template is deferred to its own change; extracting the shared campaign doctrine into one document lives outside pmux.
+- Not in scope: the orchestrator prompt lives outside this repo. After release, the user deletes its role-omission paragraph.

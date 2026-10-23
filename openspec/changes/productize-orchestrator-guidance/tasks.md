@@ -1,36 +1,25 @@
 # Tasks
 
-## 1. Strict role resolution and effective-role surfacing (pi path)
+## 1. Spawn requires a known role
 
-- [ ] 1.1 In `supervisor.ts` `launchSubagent`, pass `strict: true` to `resolveLaunchRecord` and wrap a resolution failure in an error tool result (no pane, no launch record); verify with a test that a spawn with an unknown `agent` returns an error naming the role and the searched paths and splits no pane (design D1)
-- [ ] 1.2 In `index.ts`, make the `pmux_spawn` acknowledgement text and result details name the effective role (resolved name, or "default agent" when `agent` was omitted); verify with tests for both the role-given and role-omitted acknowledgements (design D2, spec: Spawn result names the effective role)
+- [ ] 1.1 In `launch-build.ts`, add a `resolveLaunchRecord` option that throws `unknown role '<name>' (searched: ...)` when a given role does not resolve, without the empty-model check of `strict`; verify with tests that an unknown role throws before any file is written and that a role with no `model:` resolves (design D1)
+- [ ] 1.2 In `supervisor.ts`, make `SubagentParams.agent` a required string and pass the new option from `launchSubagent`; verify with a test that the schema rejects a call without `agent` (spec: Spawn requires a known role, "Missing role")
+- [ ] 1.3 In `index.ts`, catch the resolution error in `pmux_spawn` and return it as an error result; verify with a test that agent `wroker` returns an error naming `wroker` and the searched paths, splits no pane and writes no launch record, and that a role with no `model:` still launches (spec: "Misspelled role", "Role without a model")
+- [ ] 1.4 Update the `agent` parameter description, and any README or `docs/guide.md` text that calls `agent` optional; verify that `rg -n -i "agent" README.md docs/guide.md` shows no optional-agent claim
 
-## 2. Nudge and close commands with pane ownership
+## 2. The skill reads the exit through `wait`
 
-- [ ] 2.1 In `tmux.ts`, mark every pane the shared surface-creation path creates with the `@pmux_owned` pane option; verify with a test that the creation helper issues the marker call (design D6)
-- [ ] 2.2 Add `nudge --pane <pane> --text <text>` to `cli.ts`, reusing the `pane-input.ts` encode-and-type path (no receipt), printing `{"nudged":true,...}`; verify with tests for delivery, the JSON answer, and the missing-flag usage error (design D5)
-- [ ] 2.3 Add `close --pane <pane>` to `cli.ts`, killing only panes that carry `@pmux_owned` and printing one confirmation line; verify with tests for closing an owned pane, refusing an unowned pane (non-zero exit, pane left alone), and the missing-flag usage error (design D6)
+- [ ] 2.1 Rewrite the `last`-mode wait step in `skills/pmux/SKILL.md`: after the status wait, run `wait --session <file> --signal sidecar` and act on its reason; remove every direct read of `<session>.exit` and every `rm` of it; verify that `rg -n '\brm\b|read `<session>\.exit`' skills/pmux/SKILL.md` finds nothing (design D2; spec: The skill waits through the CLI)
+- [ ] 2.2 Make the handoff and "pane gone" text in `SKILL.md` read the exit through `wait --signal sidecar`; verify against the "Pane gone after the grace" scenario (spec: Skill documents the handoff sidecar)
+- [ ] 2.3 Shorten the send-mode "LEAVE the sidecar" paragraph and its cleanup list to one sentence that says `wait` never deletes the sidecar and the orchestrator must leave it too; verify that the "Packaged orchestration skill" requirement text is still met (design D3)
+- [ ] 2.4 Make the `wait` paragraph in `docs/guide.md` match the new `last`-mode recipe, if it reads `.exit` directly; verify that `rg -n '\.exit' docs/guide.md` shows no direct read
 
-## 3. Sidecar wait hint
+## 3. Gates
 
-- [ ] 3.1 Add `hintForExit(reason)` beside `interpretExitSidecar` in `exit-sidecar.ts`, with one hint text per reason (`done`, `handoff`, `ping`, `error`) naming the next CLI action; verify with a pinned test per reason (design D4)
-- [ ] 3.2 Make `wait --signal sidecar` add `hint` to the success JSON and to the timeout JSON (`{"sidecar":null,"hint":...}`, naming waiting again or `nudge`); verify with tests for the success line and the timeout line (spec: Sidecar wait names the next action, Sidecar wait failures)
-
-## 4. Orchestrator pane titling
-
-- [ ] 4.1 Add a `tmux.ts` helper that titles a pane `<window-name>-orchestrator` once, guarded by the `@pmux_orchestrator_titled` pane option, swallowing tmux failures; verify with tests for the first call (title set, marker set) and a marked pane (no title call) (design D3)
-- [ ] 4.2 Call the helper from the supervisor's spawn path (parent's own pane) and from `cli.ts start` (`TMUX_PANE`); verify with tests that both call sites invoke it and that a tmux failure does not fail the launch (design D3)
-
-## 5. Skill documentation
-
-- [ ] 5.1 Update `skills/pmux/SKILL.md`: replace the `send-keys` nudge recipe with `nudge`, the `kill-pane` cleanup with `close`, document the wait JSON `hint` field, and drop the manual `select-pane -T` step; verify the file contains no `send-keys` or `kill-pane` recipe and names `nudge`, `close` and `hint` (spec: Skill recipes use the CLI)
-
-## 6. Gates
-
-- [ ] 6.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`; verify all four pass
-- [ ] 6.2 Run `openspec validate productize-orchestrator-guidance --strict`; verify it passes
+- [ ] 3.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`; verify that all four pass
+- [ ] 3.2 Run `openspec validate productize-orchestrator-guidance --strict`; verify that it passes
 
 ## Workflow follow-up
 
-- Archive the change after the project's review requirements are satisfied.
-- After release, slim the two orchestrator prompts in user config (`~/.pi/agent/prompts/orchestrator.md`, `~/.claude/commands/pi-orchestrator.md`): drop the finish instruction, the role-omission warning, the sidecar-lifecycle prose, and the manual pane-titling step.
+- Archive the change after the project's review requirements are satisfied. If `2026-10-23-report-user-cancel` is archived first, check that its `cancelled` text in `SKILL.md` still uses `wait --signal sidecar`.
+- After release, delete the role-omission paragraph ("Every launch passes the role explicitly ...") from `~/Dev/agents/prompts/orchestrator.md`, and keep the sentence that names the role values.
