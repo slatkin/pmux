@@ -28,9 +28,9 @@
 
 ## 5. Gates
 
-- [ ] 5.1 Run `rg -i luvus --glob '!openspec/changes/archive/**'`; verify that it finds nothing, or only the `productize-orchestrator-guidance` proposal sentence that quotes the old tool name
-- [ ] 5.2 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`; verify that all four pass
-- [ ] 5.3 Run `openspec validate 2026-10-23-remove-luvus-references --strict`; verify that it passes
+- [x] 5.1 Run `rg -i luvus --glob '!openspec/changes/archive/**'`; verify that it finds nothing, or only the `productize-orchestrator-guidance` proposal sentence that quotes the old tool name
+- [x] 5.2 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`; verify that all four pass
+- [x] 5.3 Run `openspec validate 2026-10-23-remove-luvus-references --strict`; verify that it passes
 
 ## Workflow follow-up
 
