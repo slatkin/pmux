@@ -16,8 +16,8 @@
 
 ## 3. Gates
 
-- [ ] 3.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`; verify that all four pass
-- [ ] 3.2 Run `openspec validate productize-orchestrator-guidance --strict`; verify that it passes
+- [x] 3.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`; verify that all four pass
+- [x] 3.2 Run `openspec validate productize-orchestrator-guidance --strict`; verify that it passes
 
 ## Workflow follow-up
 
