@@ -111,7 +111,13 @@ node <skill-dir>/launch.ts wait --session <file> --status done,blocked --timeout
 
 The command polls the status file at a fixed interval; a missing file counts as no status yet. It exits 0 when the status matches, and prints the matched status line on stdout. It exits 2 when the timeout passes first, printing the last content it saw (or `{"status":null}` when there was none) on stdout and an error that names that status on stderr. It exits 1 on a usage error. `--status` is a comma-separated list of `working`, `idle`, `done` and `blocked`, and defaults to `done,blocked`; `--timeout` defaults to 600 seconds.
 
-Read the `<session>.exit` sidecar after every wait: it says whether the child finished (`done`), handed off (`handoff`), pinged (`ping`) or failed (`error`). The status file is the wake-up signal; the `.exit` sidecar stays the authoritative lifecycle record.
+After the status wait, run the sidecar wait and act on the reason it prints; never read or delete the sidecar file yourself:
+
+```bash
+node <skill-dir>/launch.ts wait --session <file> --signal sidecar
+```
+
+The sidecar wait polls the `<session>.exit` file and never removes it — the run wrapper reads the same file after the child exits. It exits 0 when the sidecar appears, printing the decoded sidecar plus the sidecar's absolute path on one JSON line: `reason` is `done` (finished), `handoff` (handed off, with the continuation text as `handoff.message`), `ping` (the question as `ping.message`) or `error`, with `errorSource` at `"wrapper"` when the wrapper wrote the sidecar. It exits 2 when the timeout passes first, printing `{"sidecar":null}` on stdout. The status file is the wake-up signal; the `.exit` sidecar stays the authoritative lifecycle record.
 
 A child started with `--report send` is different: it types its report into your pane, and you wait for its `.exit` sidecar with `node <skill-dir>/launch.ts wait --session <file> --signal sidecar [--timeout <seconds>]`. The child's `send` command prints one confirmation line in the child's own pane — the target pane, the size of the text it sent and the receipt file it wrote — so a child never has to ask whether its report arrived. That mode is documented in the skill's "External orchestrators (Claude Code)" section (`skills/pmux/SKILL.md`).
 

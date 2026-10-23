@@ -38,10 +38,11 @@ reach you — see [External orchestrators (Claude Code)](#external-orchestrators
   `{"type":"handoff","message":...}`, `{"type":"ping",...}` or
   `{"type":"error",...}`. The pane-side wrapper also writes an `error` sidecar
   when the child exits without one (a crash); that one carries
-  `"source":"wrapper"` and the exit code. You read the sidecar after every wait.
-  The pane-side wrapper prints `__SUBAGENT_DONE_<exit code>__` when the child
-  exits, and closes its own pane only on a `done` or `handoff` sidecar, after a
-  grace period (5000 ms by default, set per launch with `--close-grace-ms`).
+  `"source":"wrapper"` and the exit code. You read the exit after every wait,
+  through the CLI's sidecar wait. The pane-side wrapper prints
+  `__SUBAGENT_DONE_<exit code>__` when the child exits, and closes its own
+  pane only on a `done` or `handoff` sidecar, after a grace period (5000 ms
+  by default, set per launch with `--close-grace-ms`).
 
 Role definitions resolve in this order: the project's `.pi/agents/`, then
 the global `~/.pi/agent/agents/`, then the package's own `agents/`.
@@ -107,34 +108,47 @@ with user consent).
    ```
    Exit 0 means the status was reached (the matched status line is
    printed), exit 2 means the timeout passed (a child may simply still be
-   working — wait again or nudge it), exit 1 is a usage error. When the
-   wait ends, read `<session>.exit`:
-   - `{"type":"done"}` → clean finish. The pane has closed itself after
-     the close grace. `rm` the `.exit` after reading.
-   - `{"type":"handoff","message":...}` → the child ended cleanly but the
-     task is NOT complete — the handoff text a fresh agent needs is in the
-     sidecar. The pane closes itself after the close grace, like a `done`
-     pane. `rm` the `.exit` after reading, then start a NEW child with
-     `start` and put the handoff text in its brief. Do NOT resume that
-     session.
-   - `{"type":"error",...}` → provider failure — auto-retry exhausted, no
-     report was sent. A sidecar that carries `"source":"wrapper"` means the
-     child crashed instead; no report was sent either. The pane stays open
-     showing `__SUBAGENT_DONE_<n>__`; read the last assistant message from the
-     session file per step 4, `rm` the `.exit`, then retry or resume, and
-     close the pane once you are done with it.
-   - `{"type":"ping",...}` → the child ignored the footer and used
-     `caller_ping`; the question is in the file. `rm` it, write your
-     answer to a prompt file, and run `resume` with that prompt. A spec
-     with no launch record beside its session file (one from an older
-     version) cannot be resumed — `resume` exits 1 and its message names
-     `start`, so run `start` again. The pane stays open until you close
-     it.
-   - `.exit` absent + `__SUBAGENT_DONE_<n>__` at the tail of the child's
-     pane → the wrapper itself was killed, so it wrote no sidecar (a child
-     crash now writes an `error` sidecar). The pane stays open. Read the last
-     assistant message from the session file (step 4) and decide whether to
-     relaunch, then close the pane once you are done with it.
+   working — wait again or nudge it), exit 1 is a usage error. Then run
+   the sidecar wait and act on the reason it prints:
+   ```bash
+   node <skill-dir>/launch.ts wait --session <file> --signal sidecar
+   ```
+   It blocks until `<session>.exit` appears (default timeout 600 s) and
+   prints one JSON line:
+   `{"reason":"done","exitCode":0,"sidecar":"/abs/path/<session>.exit"}`.
+   `reason` is one of `done`, `handoff`, `ping`, `error`; the JSON also
+   carries `handoff.message` or `ping.message` where they apply, and
+   `"errorSource":"wrapper"` when the wrapper wrote the sidecar. A timeout
+   prints `{"sidecar":null}` and exits 2. The pane may already have closed
+   itself after the close grace; the sidecar stays on disk, so the wait
+   still reports the exit. Never touch the `<session>.exit` file yourself:
+   `wait` never deletes it either, and the pane-side wrapper reads the same
+   file after the child exits. Act on the reason:
+   - `done` → clean finish. The pane has closed itself after the close
+     grace.
+   - `handoff` → the task is NOT complete. The handoff text a fresh agent
+     needs is in the sidecar; the wait prints it as `handoff.message`. The
+     pane closes itself after the close grace, like a `done` pane. Start a
+     NEW child with `start` and put the handoff text in its brief. Do NOT
+     resume that session.
+   - `error` → provider failure — auto-retry exhausted, no report was
+     sent. `"errorSource":"wrapper"` in the JSON means the child crashed
+     instead; no report was sent either. The pane stays open showing
+     `__SUBAGENT_DONE_<n>__`; read the last assistant message from the
+     session file per step 4, then retry or resume, and close the pane
+     once you are done with it.
+   - `ping` → the child ignored the footer and used `caller_ping`; the
+     question is `ping.message` in the JSON. Write your answer to a prompt
+     file, and run `resume` with that prompt. A spec with no launch record
+     beside its session file (one from an older version) cannot be
+     resumed — `resume` exits 1 and its message names `start`, so run
+     `start` again. The pane stays open until you close it.
+   - `{"sidecar":null}` (timeout) + `__SUBAGENT_DONE_<n>__` at the tail of
+     the child's pane → the wrapper itself was killed, so it wrote no
+     sidecar (a child crash writes an `error` sidecar, which the wait
+     reports). The pane stays open. Read the last assistant message from
+     the session file (step 4) and decide whether to relaunch, then close
+     the pane once you are done with it.
 4. Read the report (default `last` mode; in `send` mode the report is typed
    into your pane instead — see
    [External orchestrators (Claude Code)](#external-orchestrators-claude-code)) —
@@ -178,7 +192,7 @@ your pane.
    arrived. Do NOT sit in a polling loop instead of ending your turn; the
    wake-up is the message, not the file.
 4. When you are awake again (the report arrived, or you want the child's
-   final state), wait for the sidecar and read it:
+   final state), wait for the sidecar and read the JSON the wait prints:
    ```bash
    node <skill-dir>/launch.ts wait --session <session> --signal sidecar [--timeout <seconds>]
    ```
@@ -190,29 +204,19 @@ your pane.
    JSON as `"errorSource":"wrapper"`. A timeout prints
    `{"sidecar":null}` and exits 2 (a child may simply still be working —
    wait again, or nudge it); a usage error exits 1 and prints nothing on
-   stdout. `wait` never deletes the sidecar, and neither should you: the
-   pane-side wrapper reads the same file after the child exits, so removing
-   it early leaves the wrapper blind — it cannot close the pane, and the
-   ping wake-up loses the question. Read the JSON and act on it, but LEAVE
-   the sidecar in place; it is cleaned up for you:
-
-   - `start` and `resume` clear the sidecar of the session they (re)launch,
-     so a fresh run never reads an earlier run's exit.
-   - `prune` reclaims `.exit` files once they fall outside the retention
-     window.
-   - A repeated `wait` on the same session re-reports the same exit, which
-     is harmless.
-
-   The `sidecar` field of the printed JSON is that absolute path.
+   stdout. `wait` never deletes the sidecar, and neither may you — read the
+   JSON and act on the reason, but leave the sidecar in place. The
+   `sidecar` field of the printed JSON is that absolute path.
 5. Act on the reason from the wait JSON:
    - `done` → clean finish. The child closed itself; the pane has closed
      after the close grace. Its report was typed into your pane while it
      ran — or the wrapper woke you that it exited without sending one.
    - `handoff` → the child ended cleanly at its context alert, but the task
-     is NOT complete. The handoff text a fresh agent needs is in the JSON
-     (`handoff.message`). The pane closes itself after the close grace,
-     like a `done` pane. Do NOT resume that session: start a NEW child with
-     `start` and put the handoff text in its brief.
+     is NOT complete. The handoff text a fresh agent needs is in the
+     sidecar; the wait prints it as `handoff.message` in the JSON. The pane
+     closes itself after the close grace, like a `done` pane. Do NOT resume
+     that session: start a NEW child with `start` and put the handoff text
+     in its brief.
    - `error` → two causes. The JSON carries `"errorSource":"wrapper"` when
      the wrapper wrote the sidecar: the child crashed. Otherwise it is a
      provider failure — auto-retry exhausted. Either way the child ended
