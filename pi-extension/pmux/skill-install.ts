@@ -23,9 +23,23 @@ import {
 } from "node:fs";
 import type { Stats } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** The packaged skill's directory name, in the package and at both destinations. */
 const SKILL_DIR_NAME = "sidebar-tasks";
+
+/**
+ * The packaged source directory for an extension file's module URL: the
+ * manifest ships the skills at the package root (`"skills": ["./skills"]`)
+ * while the extension sits two directories deep (`pi-extension/pmux`), so
+ * the packaged tree is two levels up from the extension file. The URL walk
+ * here is that exact resolution, and the production call passes the
+ * registered extension's `import.meta.url`.
+ */
+export function packagedSidebarTasksSource(extensionModuleUrl: string): string {
+  const packageRoot = fileURLToPath(new URL("../..", extensionModuleUrl));
+  return join(packageRoot, "skills", SKILL_DIR_NAME);
+}
 
 /**
  * The three paths the install works on, injected so tests drive real

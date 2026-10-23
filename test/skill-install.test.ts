@@ -17,10 +17,12 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tempDirHelpers } from "./temp-dir.ts";
 import {
   ensureSidebarTasksSkill,
+  packagedSidebarTasksSource,
   type AgentSkillDirs,
 } from "../pi-extension/pmux/skill-install.ts";
 
@@ -122,6 +124,27 @@ describe("the skill installer", () => {
       assert.doesNotThrow(() => ensureSidebarTasksSkill(dirsFor(root, source)));
       assert.throws(() => readdirSync(copyPath(root)));
     });
+  });
+
+  // The production call passes the registered extension's own module URL;
+  // these tests only ever see injected directories, so without this pin a
+  // wrong source resolution would fail nowhere — the installer would copy
+  // from a path that does not exist and swallow its own error.
+  it("resolves the packaged source the manifest ships, from the extension's real location", () => {
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+    const extensionEntry: string = manifest.pi.extensions[0];
+    const extensionUrl = pathToFileURL(join(repoRoot, extensionEntry)).href;
+
+    assert.equal(
+      packagedSidebarTasksSource(extensionUrl),
+      join(repoRoot, "skills", "sidebar-tasks"),
+    );
+    assert.equal(statSync(join(repoRoot, "skills", "sidebar-tasks", "SKILL.md")).isFile(), true);
+    assert.ok(
+      manifest.pi.skills.some((entry: string) => entry.replace(/^\./, "") === "/skills"),
+      "the manifest must keep shipping the skills at the package root",
+    );
   });
 });
 
