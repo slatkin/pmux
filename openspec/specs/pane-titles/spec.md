@@ -1,4 +1,4 @@
-# luvus-agent-titles Specification
+# pane-titles Specification
 
 ## Purpose
 Defines the pane titles that live pi sessions show in tmux, so you can tell pi sessions apart.

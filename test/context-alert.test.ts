@@ -604,10 +604,6 @@ describe("context-alert in the child (pmux-done)", () => {
       assert.equal(handoffRow.session, sessionFile);
       assert.equal(handoffRow.tokens, 700);
       assert.equal(handoffRow.threshold, undefined);
-
-      // The rows carry no server-session field any more.
-      assert.equal("luvusSession" in alertRow, false);
-      assert.equal("luvusSession" in handoffRow, false);
     } finally {
       restore();
     }

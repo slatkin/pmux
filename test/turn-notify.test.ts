@@ -16,13 +16,7 @@ import {
 // A suite run inside a real pi/tmux pane inherits live identity vars. Clear
 // them so no test can reach real tmux; each test sets what it needs.
 for (const key of Object.keys(process.env)) {
-  if (
-    key.startsWith("LUVUS_") ||
-    key.startsWith("PI_LUVUS_") ||
-    key.startsWith("PI_PMUX_") ||
-    key === "TMUX" ||
-    key === "TMUX_PANE"
-  ) {
+  if (key.startsWith("PI_PMUX_") || key === "TMUX" || key === "TMUX_PANE") {
     delete process.env[key];
   }
 }

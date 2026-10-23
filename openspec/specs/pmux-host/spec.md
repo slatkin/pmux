@@ -8,31 +8,27 @@ a new run starts clean.
 
 ## Requirements
 
-### Requirement: tmux is the only host
+### Requirement: tmux is the required host
 
 The extension SHALL run subagent panes in tmux only. `pmux_spawn`,
 `pmux_resume`, `start` and `resume` MUST NOT spawn anything when tmux is not
 available as `tmux-backend` defines it. Each MUST return an error that names tmux
-as the required host. The `LUVUS_*` variables SHALL have no effect. No other
-terminal backend and no headless fallback SHALL exist.
+as the required host. No other terminal backend and no headless fallback SHALL
+exist.
 
 #### Scenario: Spawn outside tmux
 - **WHEN** `pmux_spawn` is called with `TMUX_PANE` unset
 - **THEN** the tool returns an error result that names tmux, and no pane or process is created
 
-#### Scenario: Luvus variables alone
-- **WHEN** `LUVUS_ENV`, `LUVUS_BIN_PATH` and `LUVUS_PANE_ID` are set and `TMUX` and `TMUX_PANE` are not
-- **THEN** `pmux_spawn` returns the same error, and no Luvus binary is run
-
-### Requirement: One surface API
+### Requirement: Pane operations call tmux directly
 
 Every pane operation (create, name, run a command, read the pane, send Escape,
 close the pane, deliver a prompt, check focus, notify and poll for the exit) SHALL
 call the tmux backend directly, with no host dispatch in between.
 
-#### Scenario: Both host environments are present
-- **WHEN** the `LUVUS_*` variables and the `TMUX` and `TMUX_PANE` variables are all set and a subagent is spawned
-- **THEN** the pane is created and driven through tmux, and no Luvus binary is run
+#### Scenario: A spawn drives tmux
+- **WHEN** `TMUX` and `TMUX_PANE` are set and a subagent is spawned
+- **THEN** the pane is created and driven through tmux commands only
 
 ### Requirement: Status file
 

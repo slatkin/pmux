@@ -1,15 +1,14 @@
 import { describe, it, before, after, mock } from "node:test";
 import assert from "node:assert/strict";
 
-// The whole suite drives the Luvus backend through its own seam and sets the
-// LUVUS_* variables explicitly per test. An ambient Luvus session (running
-// the suite inside a pi sub-agent pane) would turn any un-stubbed Luvus call
-// into a real pane mutation — including `pane close $LUVUS_PANE_ID`, which
-// kills the very session running the suite. The same goes for the tmux host
-// keys and for PI_PMUX_*: a suite run inside a sub-agent pane inherits its
-// identity (PI_PMUX_SESSION, PI_PMUX_AUTO_EXIT, …), which flips the
-// nudge/auto-exit paths under test and can write a `.exit` sidecar for the
-// real session. `host-env.ts` clears all of them for this process.
+// The whole suite drives the tmux backend through its own seam. An ambient
+// tmux session (running the suite inside a pi sub-agent pane) would turn any
+// un-stubbed pane call into a real pane mutation — including closing the very
+// pane that runs the suite. The same goes for PI_PMUX_*: a suite run in a
+// sub-agent pane inherits its identity (PI_PMUX_SESSION, PI_PMUX_AUTO_EXIT,
+// …), which flips the nudge/auto-exit paths under test and can write a
+// `.exit` sidecar for the real session. `host-env.ts` clears those variables
+// for this process.
 import "./host-env.ts";
 
 import {
@@ -21,7 +20,7 @@ import {
   rmSync,
   existsSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -85,19 +84,6 @@ import {
 } from "../pi-extension/pmux/agent-defs.ts";
 import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
 import { COMPLETION_NUDGE_TEXT } from "../pi-extension/pmux/nudge.ts";
-// --- Fixture ---
-// Captured live via `$LUVUS_BIN_PATH pane split $LUVUS_PANE_ID --no-focus` on 2026-09-28
-// (design.md Decision 3): the new pane id is `result.pane`.
-// {
-//   "id": "1",
-//   "result": {
-//     "pane": "24",
-//     "revision": 329037,
-//     "tab": "1",
-//     "type": "pane",
-//     "workspace": "2"
-//   }
-// }
 
 // --- Helpers ---
 
@@ -704,27 +690,30 @@ describe("status.ts", () => {
     });
   });
 
-  it("falls back to the pre-rename extensions dir config when the pmux config is absent", () => {
+  it("reads no other extensions dir and applies the default surface", () => {
     withTempDir((dir) => {
       const previous = process.env.PI_CODING_AGENT_DIR;
       process.env.PI_CODING_AGENT_DIR = dir;
       try {
-        // A config in the old extensions dir is read when the new one is absent.
-        mkdirSync(join(dir, "extensions", "pi-luvus"), { recursive: true });
-        writeFileSync(
-          join(dir, "extensions", "pi-luvus", "config.json"),
-          JSON.stringify({ surface: "tab" }),
-        );
-        assert.equal(loadSurfaceConfig(), "tab");
-
-        // The new directory wins when both exist. A legacy `down` value
-        // resolves to `pane`.
-        mkdirSync(join(dir, "extensions", "pmux"), { recursive: true });
-        writeFileSync(
-          join(dir, "extensions", "pmux", "config.json"),
-          JSON.stringify({ surface: "down" }),
-        );
+        // Only `extensions/pmux` is read: a config in any other extensions
+        // dir — the removed pre-rename location is one — is ignored, so the
+        // default placement applies.
+        const removedDir = join(dir, "extensions", "removed-pre-rename");
+        mkdirSync(removedDir, { recursive: true });
+        writeFileSync(join(removedDir, "config.json"), JSON.stringify({ surface: "tab" }));
         assert.equal(loadSurfaceConfig(), "pane");
+
+        // The missing-config error lists exactly the paths that remain: the
+        // canonical dir, the package root, and the example. The removed
+        // legacy directory never joined the list again.
+        const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+        assert.throws(
+          () => loadStatusConfig(undefined, join(dir, "missing.example")),
+          (error: unknown) =>
+            error instanceof Error &&
+            error.message ===
+              `Missing subagent status config. Expected ${join(dir, "extensions", "pmux", "config.json")}, ${join(root, "config.json")}, or ${join(dir, "missing.example")}.`,
+        );
       } finally {
         restoreEnvVar("PI_CODING_AGENT_DIR", previous);
       }
@@ -2960,7 +2949,7 @@ describe("subagent messaging", () => {
     ]);
   });
 
-  it("delivers child and sibling messages through Luvus with the header", () => {
+  it("delivers child and sibling messages through tmux with the header", () => {
     const prompted: string[] = [];
     const result = testApi().sendSubagentMessage(
       { to: "Reviewer", message: "API is in src/api" },

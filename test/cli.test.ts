@@ -2,12 +2,6 @@ import "./host-env.ts";
 import { describe, it, before, after, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-// Sandbox the Luvus ambient environment for the whole test process (see the
-// same block in test.ts): an ambient Luvus session must never be reachable
-// from an un-stubbed test.
-for (const key of Object.keys(process.env)) {
-  if (key.startsWith("LUVUS_")) delete process.env[key];
-}
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   cpSync,
@@ -863,7 +857,7 @@ interface StartCase {
   scratch?: string;
   closeGraceMs?: number;
   brief?: string;
-  /** Run with no Luvus env at all. */
+  /** Run with an env of PATH plus `options.env` (no tmux context). */
   bare?: boolean;
   env?: NodeJS.ProcessEnv;
   /** Config file holding the `surface` default; defaults to the sandbox config. */
@@ -979,22 +973,6 @@ describe("cli.ts start", () => {
     const message = await startFailure({ cwd, scratch, bare: true });
     assert.match(message, /tmux/);
     assert.equal(existsSync(scratch), false);
-  });
-
-  it("ignores the Luvus variables when tmux is absent", async () => {
-    const dir = mkdtempSync(join(workdir, "pmux-vars-"));
-    const cwd = mkdtempSync(join(dir, "cwd-"));
-    const scratch = join(dir, "scratch");
-    const message = await startFailure({
-      cwd,
-      scratch,
-      bare: true,
-      env: { LUVUS_ENV: "1", LUVUS_BIN_PATH: "/usr/bin/luvus", LUVUS_PANE_ID: "%99" },
-    });
-    assert.match(message, /tmux/);
-    assert.doesNotMatch(message, /Luvus/);
-    assert.equal(existsSync(scratch), false);
-    assert.equal(paneCalls.length, 0);
   });
 
   it("writes the spec, the prompts and the pane line, and prints JSON", async () => {

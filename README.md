@@ -44,7 +44,7 @@ The skill launches each child in its own pane. In the default `last` mode it wai
 
 ## Configuration
 
-The extension reads `config.json` from `~/.pi/agent/extensions/pmux/` (under `$PI_CODING_AGENT_DIR` when that variable is set). It still reads the pre-rename `~/.pi/agent/extensions/pi-luvus/` directory when the new one has no config. Seed it from `config.json.example`.
+The extension reads `config.json` from `~/.pi/agent/extensions/pmux/` (under `$PI_CODING_AGENT_DIR` when that variable is set). Seed it from `config.json.example`.
 
 ## Bundled Agents
 

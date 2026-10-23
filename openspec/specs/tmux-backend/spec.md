@@ -11,7 +11,7 @@ Lets the extension run subagent panes in tmux, the package's only terminal host,
 The extension SHALL treat tmux as available only when `TMUX` and `TMUX_PANE` are both set and non-empty. The caller's own pane id SHALL be `TMUX_PANE`.
 
 #### Scenario: Spawn inside a tmux pane
-- **WHEN** `TMUX` and `TMUX_PANE` are set and the Luvus keys are not
+- **WHEN** `TMUX` and `TMUX_PANE` are set
 - **THEN** the extension accepts the host and the caller's pane id is `TMUX_PANE`
 
 #### Scenario: tmux keys are incomplete

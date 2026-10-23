@@ -4,7 +4,7 @@ This guide holds the full reference for pmux. For an overview and install steps,
 
 ## Environment
 
-tmux is required. Run pi inside a tmux pane. Outside tmux the extension spawns nothing. It checks `TMUX` and `TMUX_PANE`, which tmux sets for every pane, and returns an error that names tmux when either is missing. The `LUVUS_*` variables have no effect.
+tmux is required. Run pi inside a tmux pane. Outside tmux the extension spawns nothing. It checks `TMUX` and `TMUX_PANE`, which tmux sets for every pane, and returns an error that names tmux when either is missing.
 
 If shell startup is slow and the prompt drops subagent commands, set `PI_PMUX_SHELL_READY_DELAY_MS` to a higher value (default `500`):
 
@@ -161,7 +161,7 @@ flowchart LR
     E -.-> S
 ```
 
-The sections below hold the details. Child exit rules live under `auto-exit` and the completion nudge. Parent backstop rules live under the idle watchdog. External orchestrator rules live in `skills/pmux/SKILL.md`. The normative spec is `openspec/specs/luvus-completion/spec.md`.
+The sections below hold the details. Child exit rules live under `auto-exit` and the completion nudge. Parent backstop rules live under the idle watchdog. External orchestrator rules live in `skills/pmux/SKILL.md`. The normative spec is `openspec/specs/subagent-completion/spec.md`.
 
 ### In-progress status updates
 
@@ -186,7 +186,7 @@ mkdir -p ~/.pi/agent/extensions/pmux
 cp config.json.example ~/.pi/agent/extensions/pmux/config.json
 ```
 
-An older install may have left a `config.json` in the legacy `extensions/pi-luvus` directory or at the package root. Reads honor both when the new file is absent. The first `/pmux-surface` save writes the new location, seeded from the legacy files, which are left in place.
+An older install may have left a `config.json` at the package root. Reads honor it when the new file is absent. The first `/pmux-surface` save writes the new location, seeded from the package-root file, which is left in place.
 
 ```json
 {
