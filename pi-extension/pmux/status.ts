@@ -25,13 +25,6 @@ const STATUS_CONFIG_EXAMPLE_PATH = join(PACKAGE_ROOT, "config.json.example");
 // clone). Still honored on read so existing installs keep their settings.
 const LEGACY_STATUS_CONFIG_PATH = join(PACKAGE_ROOT, "config.json");
 const EXTENSION_DIR_NAME = "pmux";
-/** Pre-rename extension directory: still honored on read so existing
- * installs keep their settings. Never written to. */
-const LEGACY_EXTENSION_DIR_NAME = "pi-luvus";
-
-function getLegacyExtensionConfigPath(): string {
-  return join(getAgentConfigDir(), "extensions", LEGACY_EXTENSION_DIR_NAME, "config.json");
-}
 
 /**
  * Canonical per-install config location: the extension's operating area,
@@ -243,15 +236,15 @@ export function parseSurfaceConfig(rawConfig: unknown, source = "config.json"): 
 }
 
 /**
- * Legacy config paths tried in order after the resolved config path: the
- * pre-rename extensions dir first, then the package root.
+ * Legacy config path tried after the resolved config path: config.json at
+ * the package root.
  */
 function legacyConfigPaths(
   configPath: string | undefined,
   legacyPath: string | undefined,
 ): string[] {
   if (configPath !== undefined) return legacyPath ? [legacyPath] : [];
-  return [...new Set([getLegacyExtensionConfigPath(), LEGACY_STATUS_CONFIG_PATH])];
+  return [LEGACY_STATUS_CONFIG_PATH];
 }
 
 /**

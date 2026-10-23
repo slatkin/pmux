@@ -21,7 +21,7 @@ import {
   rmSync,
   existsSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -704,27 +704,30 @@ describe("status.ts", () => {
     });
   });
 
-  it("falls back to the pre-rename extensions dir config when the pmux config is absent", () => {
+  it("reads no other extensions dir and applies the default surface", () => {
     withTempDir((dir) => {
       const previous = process.env.PI_CODING_AGENT_DIR;
       process.env.PI_CODING_AGENT_DIR = dir;
       try {
-        // A config in the old extensions dir is read when the new one is absent.
-        mkdirSync(join(dir, "extensions", "pi-luvus"), { recursive: true });
-        writeFileSync(
-          join(dir, "extensions", "pi-luvus", "config.json"),
-          JSON.stringify({ surface: "tab" }),
-        );
-        assert.equal(loadSurfaceConfig(), "tab");
-
-        // The new directory wins when both exist. A legacy `down` value
-        // resolves to `pane`.
-        mkdirSync(join(dir, "extensions", "pmux"), { recursive: true });
-        writeFileSync(
-          join(dir, "extensions", "pmux", "config.json"),
-          JSON.stringify({ surface: "down" }),
-        );
+        // Only `extensions/pmux` is read: a config in any other extensions
+        // dir — the removed pre-rename location is one — is ignored, so the
+        // default placement applies.
+        const removedDir = join(dir, "extensions", "removed-pre-rename");
+        mkdirSync(removedDir, { recursive: true });
+        writeFileSync(join(removedDir, "config.json"), JSON.stringify({ surface: "tab" }));
         assert.equal(loadSurfaceConfig(), "pane");
+
+        // The missing-config error lists exactly the paths that remain: the
+        // canonical dir, the package root, and the example. The removed
+        // legacy directory never joined the list again.
+        const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+        assert.throws(
+          () => loadStatusConfig(undefined, join(dir, "missing.example")),
+          (error: unknown) =>
+            error instanceof Error &&
+            error.message ===
+              `Missing subagent status config. Expected ${join(dir, "extensions", "pmux", "config.json")}, ${join(root, "config.json")}, or ${join(dir, "missing.example")}.`,
+        );
       } finally {
         restoreEnvVar("PI_CODING_AGENT_DIR", previous);
       }
