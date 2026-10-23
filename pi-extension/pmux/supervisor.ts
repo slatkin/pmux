@@ -101,7 +101,8 @@ export const SubagentParams = Type.Object({
   name: Type.String({ description: "Display name." }),
   task: Type.String({ description: "Task prompt for the subagent." }),
   agent: Type.String({
-    description: "Agent definition that supplies defaults (model, tools, skills). See pmux_list.",
+    description:
+      "Agent role that supplies defaults (model, tools, skills). Required: a name that resolves to no agent definition is an error. See pmux_list.",
   }),
   systemPrompt: Type.Optional(
     Type.String({ description: "Role instructions to append to the system prompt." }),
