@@ -119,6 +119,10 @@ After the child exits, the skill-path run wrapper SHALL print `__SUBAGENT_DONE_<
 - **WHEN** an orchestrator is blocked in `wait --session <file> --status done,blocked` and the child completes with `pmux_done` under the default grace period
 - **THEN** the wait exits 0 before the pane closes
 
+#### Scenario: User cancel
+- **WHEN** the user presses Escape in the child's pane and pi exits after writing the `cancelled` sidecar
+- **THEN** after the grace period the child's pane closes, and `<session>.exit` still holds `{"type":"cancelled"}`
+
 #### Scenario: Immediate close
 - **WHEN** the child was started with `--close-grace-ms 0` and completes with `done`
 - **THEN** the wrapper closes the pane immediately after printing the sentinel
@@ -369,6 +373,10 @@ For a `file-ack-v1` spec:
 #### Scenario: Cancelled stays quiet
 - **WHEN** a marked child exits with a `cancelled` sidecar and unacknowledged reports
 - **THEN** no pointer is typed into the parent's pane
+
+#### Scenario: A cancel sends no wake-up
+- **WHEN** a send-mode child with parent `%12` exits with a `cancelled` sidecar and wrote no receipt
+- **THEN** `%12` receives nothing
 
 #### Scenario: Last mode stays silent
 - **WHEN** a last-mode child exits without a report
