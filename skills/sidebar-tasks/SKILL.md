@@ -1,11 +1,11 @@
 ---
 name: sidebar-tasks
-description: Record, update and track a per-pane todo list in the tmux-agent-sidebar's Tasks tab through `tmux-agent-sidebar task-set <subject>` and `task-update <id> <status>`. Use it when asked to keep a task or todo list for the pane, when the pane's Tasks tab should reflect the work, or when a record-first or update-before-finish reminder told you to use task-set or task-update.
+description: Record, update and track a per-pane todo list in pmux-explorer's Tasks tab through `pmux-explorer task-set <subject>` and `task-update <id> <status>`. Use it when asked to keep a task or todo list for the pane, when the pane's Tasks tab should reflect the work, or when a record-first or update-before-finish reminder told you to use task-set or task-update.
 ---
 
-# The Tasks tab (tmux-agent-sidebar)
+# The Tasks tab (pmux-explorer)
 
-The tmux-agent-sidebar shows a todo list for the focused tmux pane in its
+pmux-explorer shows a todo list for the focused tmux pane in its
 Tasks tab. The pane's agent writes that list through two shell commands;
 this skill is the full instruction set for them. Every agent harness that
 runs a shell can use them — no registration, no hook wiring.
@@ -15,14 +15,14 @@ command reads `TMUX_PANE` itself and records for the pane it runs in, so
 run it in your own pane's shell, the way your shell tool already runs.
 Outside tmux the commands record nothing and exit 0.
 
-The list is one file per pane, `/tmp/tmux-agent-tasks<PANE>.json`. A new
+The list is one file per pane, `/tmp/pmux-explorer-tasks<PANE>.json`. A new
 session starts with an empty list: the sidebar clears the pane's store at
 session start.
 
 ## Record a task
 
 ```sh
-tmux-agent-sidebar task-set <subject>
+pmux-explorer task-set <subject>
 ```
 
 Records the subject as `pending` and prints the assigned id — keep it, it
@@ -30,7 +30,7 @@ is how every later command names the item. Every argument after `task-set`
 joins into the subject, so quoting is optional and unnecessary:
 
 ```sh
-tmux-agent-sidebar task-set Fix the login crash on empty email
+pmux-explorer task-set Fix the login crash on empty email
 ```
 
 Subjects print in a narrow tab column. Keep them short enough to read at a
@@ -42,7 +42,7 @@ There is no list subcommand; read the store file. The pane id is encoded in
 the file name with `%` replaced by `_`:
 
 ```sh
-pane_file=/tmp/tmux-agent-tasks"$(printf %s "$TMUX_PANE" | tr '%' '_')".json
+pane_file=/tmp/pmux-explorer-tasks"$(printf %s "$TMUX_PANE" | tr '%' '_')".json
 cat "$pane_file"
 ```
 
@@ -58,7 +58,7 @@ compaction — or when you must know what is still open before updating.
 ## Update a status
 
 ```sh
-tmux-agent-sidebar task-update <id> <status>
+pmux-explorer task-update <id> <status>
 ```
 
 `status` is `pending`, `in_progress` or `completed`. Mark an item

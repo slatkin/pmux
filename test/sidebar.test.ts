@@ -26,7 +26,7 @@ import { flushSidebarQueue, makeSidebarSpawn } from "./sidebar-fakes.ts";
 const existsNever = () => false;
 
 const ENV = { TMUX: "/tmp/tmux-0/default", TMUX_PANE: "%7", PATH: "/usr/bin" };
-const BIN = "/opt/sidebar/bin/tmux-agent-sidebar";
+const BIN = "/opt/sidebar/bin/pmux-explorer";
 const binaryThere = (path: string) => path === BIN;
 
 async function publishWith(
@@ -42,26 +42,26 @@ async function publishWith(
 
 describe("resolveSidebarBinary", () => {
   const existsFor = (paths: string[]) => (path: string) => paths.includes(path);
-  const homeBin = "/home/u/.tmux/plugins/tmux-agent-sidebar/bin/tmux-agent-sidebar";
-  const homeRelease = "/home/u/.tmux/plugins/tmux-agent-sidebar/target/release/tmux-agent-sidebar";
+  const homeBin = "/home/u/.tmux/plugins/pmux-explorer/bin/pmux-explorer";
+  const homeRelease = "/home/u/.tmux/plugins/pmux-explorer/target/release/pmux-explorer";
 
   it("walks the order: override, plugin bin, plugin release, PATH, none", () => {
     const cases = [
       {
-        env: { TMUX_AGENT_SIDEBAR_BIN: BIN, HOME: "/home/u", PATH: "" },
+        env: { PMUX_EXPLORER_BIN: BIN, HOME: "/home/u", PATH: "" },
         exists: existsFor([BIN, homeBin]),
         want: BIN,
       },
       {
-        env: { TMUX_AGENT_SIDEBAR_BIN: BIN, HOME: "/home/u", PATH: "" },
+        env: { PMUX_EXPLORER_BIN: BIN, HOME: "/home/u", PATH: "" },
         exists: existsFor([homeBin]),
         want: homeBin,
       },
       { env: { HOME: "/home/u", PATH: "" }, exists: existsFor([homeRelease]), want: homeRelease },
       {
         env: { HOME: "/home/u", PATH: "/usr/local/bin:/usr/bin" },
-        exists: existsFor(["/usr/bin/tmux-agent-sidebar"]),
-        want: "/usr/bin/tmux-agent-sidebar",
+        exists: existsFor(["/usr/bin/pmux-explorer"]),
+        want: "/usr/bin/pmux-explorer",
       },
       { env: { HOME: "/home/u", PATH: "/usr/bin" }, exists: existsNever, want: null },
     ];
@@ -143,17 +143,17 @@ describe("payload builders", () => {
 });
 
 describe("sidebarSwitchEnabled", () => {
-  it("TMUX_AGENT_SIDEBAR=0 turns publishing off; anything else leaves it on", () => {
-    assert.equal(sidebarSwitchEnabled({ TMUX_AGENT_SIDEBAR: "0" }), false);
+  it("PMUX_EXPLORER=0 turns publishing off; anything else leaves it on", () => {
+    assert.equal(sidebarSwitchEnabled({ PMUX_EXPLORER: "0" }), false);
     assert.equal(sidebarSwitchEnabled({}), true);
-    assert.equal(sidebarSwitchEnabled({ TMUX_AGENT_SIDEBAR: "1" }), true);
+    assert.equal(sidebarSwitchEnabled({ PMUX_EXPLORER: "1" }), true);
   });
 });
 
 describe("publisher", () => {
   it("spawns the binary with the protocol command line and the payload on stdin", async () => {
     const calls = await publishWith(
-      { env: { ...ENV, TMUX_AGENT_SIDEBAR_BIN: BIN }, exists: binaryThere },
+      { env: { ...ENV, PMUX_EXPLORER_BIN: BIN }, exists: binaryThere },
       "user-prompt-submit",
       { prompt: "hi" },
     );
@@ -166,7 +166,7 @@ describe("publisher", () => {
     const cases = [
       {
         name: "switch off",
-        deps: { env: { ...ENV, TMUX_AGENT_SIDEBAR: "0" }, exists: binaryThere },
+        deps: { env: { ...ENV, PMUX_EXPLORER: "0" }, exists: binaryThere },
       },
       { name: "no pane", deps: { env: {}, exists: binaryThere } },
       { name: "binary missing", deps: { exists: existsNever } },
@@ -185,7 +185,7 @@ describe("publisher", () => {
     let lookups = 0;
     const { spawn, calls } = makeSidebarSpawn();
     const publisher = createSidebarPublisher({
-      env: { ...ENV, TMUX_AGENT_SIDEBAR_BIN: BIN },
+      env: { ...ENV, PMUX_EXPLORER_BIN: BIN },
       exists: (path) => {
         lookups++;
         return path === BIN;

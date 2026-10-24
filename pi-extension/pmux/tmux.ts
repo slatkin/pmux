@@ -372,7 +372,7 @@ export function runInPane(surface: string, line: string): void {
 /**
  * Read window options for a pane. `display-message` resolves an option on the
  * pane first and falls through to the pane's window, so window-scope options
- * (for example the sidebar's `@agent-sidebar-spawned-*` markers) are visible
+ * (for example the sidebar's `@pmux-explorer-spawned-*` markers) are visible
  * from any pane of the window. Unset options come back as empty strings.
  */
 export function readWindowOptions(pane: string, names: string[]): string[] {

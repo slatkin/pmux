@@ -159,11 +159,11 @@ describe("the store reader (D2)", () => {
   const { withTempDir } = tempDirHelpers("pmux-task-reminders-");
 
   it("encodes the pane id the way task_store.rs does", () => {
-    assert.equal(sidebarTaskStorePath("%5"), "/tmp/tmux-agent-tasks_5.json");
-    assert.equal(sidebarTaskStorePath("%a%b"), "/tmp/tmux-agent-tasks_a_b.json");
+    assert.equal(sidebarTaskStorePath("%5"), "/tmp/pmux-explorer-tasks_5.json");
+    assert.equal(sidebarTaskStorePath("%a%b"), "/tmp/pmux-explorer-tasks_a_b.json");
     assert.equal(
       sidebarTaskStorePath("%PMUX_TASK_TEST_1"),
-      "/tmp/tmux-agent-tasks_PMUX_TASK_TEST_1.json",
+      "/tmp/pmux-explorer-tasks_PMUX_TASK_TEST_1.json",
     );
   });
 

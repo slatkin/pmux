@@ -1222,7 +1222,7 @@ describe("cli.ts start", () => {
     assert.deepEqual(segments.slice(0, 3), ["artifacts", parentSessionId, "context"]);
     assert.ok(file.startsWith(`${name}-`), `expected the file stem ${name}-…: ${file}`);
     // The timestamp that follows the name has exactly 19 characters (row 5.2:
-    // the shape the tmux-agent-sidebar's parse_pmux_task matches).
+    // the shape the pmux-explorer's parse_pmux_task matches).
     const timestamp = file.slice(name.length + 1, -3);
     assert.equal(timestamp.length, 19);
     assert.match(timestamp, /^[0-9T-]{19}$/);

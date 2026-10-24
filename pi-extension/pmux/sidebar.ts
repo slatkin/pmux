@@ -1,9 +1,9 @@
 /**
- * pi → tmux-agent-sidebar event publishing.
+ * pi → pmux-explorer event publishing.
  *
  * The sidebar learns about an agent through one channel: a producer that runs
- * `tmux-agent-sidebar hook <agent> <event>` and hands it a JSON payload on
- * stdin (docs/agent-protocol.md in the tmux-agent-sidebar fork). This module
+ * `pmux-explorer hook <agent> <event>` and hands it a JSON payload on
+ * stdin (docs/agent-protocol.md in the pmux-explorer repository). This module
  * is the pi producer. It lives in the extension — not the supervisor — because
  * the extension loads in every pi session, so a pi pane a human opened by hand
  * reaches the sidebar too.
@@ -23,7 +23,7 @@ import { existsSync } from "node:fs";
 // ── Binary lookup (design D3) ──
 
 /**
- * Resolve the sidebar binary, in order: the `TMUX_AGENT_SIDEBAR_BIN` override,
+ * Resolve the sidebar binary, in order: the `PMUX_EXPLORER_BIN` override,
  * the tmux plugin's `bin` path, its release build, then `PATH`. `exists` is
  * the file check, so a test needs no real home directory. `null` means the
  * sidebar is not installed and nothing should be published.
@@ -32,20 +32,20 @@ export function resolveSidebarBinary(
   env: NodeJS.ProcessEnv,
   exists: (path: string) => boolean,
 ): string | null {
-  const override = env.TMUX_AGENT_SIDEBAR_BIN;
+  const override = env.PMUX_EXPLORER_BIN;
   if (override && exists(override)) return override;
 
   const home = env.HOME ?? "";
   if (home) {
-    const pluginBin = `${home}/.tmux/plugins/tmux-agent-sidebar/bin/tmux-agent-sidebar`;
+    const pluginBin = `${home}/.tmux/plugins/pmux-explorer/bin/pmux-explorer`;
     if (exists(pluginBin)) return pluginBin;
-    const pluginRelease = `${home}/.tmux/plugins/tmux-agent-sidebar/target/release/tmux-agent-sidebar`;
+    const pluginRelease = `${home}/.tmux/plugins/pmux-explorer/target/release/pmux-explorer`;
     if (exists(pluginRelease)) return pluginRelease;
   }
 
   for (const dir of (env.PATH ?? "").split(":")) {
     if (!dir) continue;
-    const candidate = `${dir}/tmux-agent-sidebar`;
+    const candidate = `${dir}/pmux-explorer`;
     if (exists(candidate)) return candidate;
   }
   return null;
@@ -77,12 +77,12 @@ export interface SidebarWorktree {
  * (design D7). `display-message` falls through the pane scope to the window
  * scope, so every pane of that window reads them.
  */
-export const SIDEBAR_WORKTREE_OPTION = "@agent-sidebar-spawned-worktree";
-export const SIDEBAR_BRANCH_OPTION = "@agent-sidebar-spawned-branch";
+export const SIDEBAR_WORKTREE_OPTION = "@pmux-explorer-spawned-worktree";
+export const SIDEBAR_BRANCH_OPTION = "@pmux-explorer-spawned-branch";
 
 /**
  * Worktree fields from the sidebar's window options
- * (`@agent-sidebar-spawned-worktree`, `@agent-sidebar-spawned-branch`).
+ * (`@pmux-explorer-spawned-worktree`, `@pmux-explorer-spawned-branch`).
  * `undefined` when neither option is set: the pane is not in a sidebar
  * worktree and the payload carries no worktree.
  */
@@ -217,11 +217,11 @@ export interface SidebarPublisher {
 }
 
 /**
- * The switch: `TMUX_AGENT_SIDEBAR=0` turns publishing off. Any other value,
+ * The switch: `PMUX_EXPLORER=0` turns publishing off. Any other value,
  * and the absence of the variable, leaves it on.
  */
 export function sidebarSwitchEnabled(env: NodeJS.ProcessEnv): boolean {
-  return env.TMUX_AGENT_SIDEBAR !== "0";
+  return env.PMUX_EXPLORER !== "0";
 }
 
 export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): SidebarPublisher {

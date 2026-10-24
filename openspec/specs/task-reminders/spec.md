@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Delivers the tmux-agent-sidebar's update-before-finish reminder to a pi pane: at a settled turn end whose sidebar task store holds open items, the reminder is injected with the sidebar's own wording, an empty store stays silent, and the delivery never disturbs the session.
+Delivers the pmux-explorer's update-before-finish reminder to a pi pane: at a settled turn end whose sidebar task store holds open items, the reminder is injected with the sidebar's own wording, an empty store stays silent, and the delivery never disturbs the session.
 
 ## Requirements
 
@@ -11,7 +11,7 @@ Delivers the tmux-agent-sidebar's update-before-finish reminder to a pi pane: at
 The extension SHALL inject the update-before-finish reminder at the
 settlement boundary, exactly when its condition holds. The wording SHALL be
 the reminder constant `UPDATE_BEFORE_FINISH_REMINDER`, copied byte-for-byte
-from `src/task_reminders.rs` in the tmux-agent-sidebar repository.
+from `src/task_reminders.rs` in the pmux-explorer repository.
 
 The extension SHALL NOT inject the reminder while the pane's task store has
 been written within a quiet period of five minutes, or when fewer than
@@ -37,7 +37,7 @@ re-fire.
 - **THEN** no reminder is injected, whatever the store holds
 
 #### Scenario: the wording matches the source
-- **WHEN** the injected text is compared with `UPDATE_BEFORE_FINISH_REMINDER` in `src/task_reminders.rs` of the tmux-agent-sidebar repository
+- **WHEN** the injected text is compared with `UPDATE_BEFORE_FINISH_REMINDER` in `src/task_reminders.rs` of the pmux-explorer repository
 - **THEN** it matches byte for byte
 
 #### Scenario: a recently written store stays silent
