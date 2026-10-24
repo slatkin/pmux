@@ -2466,6 +2466,36 @@ describe("cli.ts send", () => {
     });
   });
 
+  it("reads PI_PMUX_SESSION from the real process env when no deps carry one", async () => {
+    // The production entry passes no deps, so the session lookup must fall
+    // back to `process.env` exactly the way the mode gate does. This run
+    // leaves `env` off the deps entirely, as production does.
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      process.env.PI_PMUX_SESSION = sessionFile;
+      process.env.PI_PMUX_REPORT_PROTOCOL = "file-ack-v1";
+      try {
+        const stdout: string[] = [];
+        const stderr: string[] = [];
+        const code = await main(["send", "--to", "%3", "--text", "hi", "--ack-timeout", "0"], {
+          stdout: (text) => stdout.push(text),
+          stderr: (text) => stderr.push(text),
+          sleep: async () => {},
+          configPath: defaultConfigPath,
+        });
+        assert.equal(code, 0);
+        const line = JSON.parse(stdout.join("")) as Record<string, unknown>;
+        assert.equal(line.sent, true);
+        const id = String(line.id);
+        assert.ok(existsSync(reportArtifactPath(sessionFile, id)));
+        assert.equal(readFileSync(reportArtifactPath(sessionFile, id), "utf8"), "hi");
+      } finally {
+        delete process.env.PI_PMUX_SESSION;
+        delete process.env.PI_PMUX_REPORT_PROTOCOL;
+      }
+    });
+  });
+
   it("rejects --ack-timeout for an unmarked send", async () => {
     const res = await runSend(
       ["send", "--to", "%3", "--text", "hi", "--ack-timeout", "15"],

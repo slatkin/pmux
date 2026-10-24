@@ -573,13 +573,16 @@ function writeSendRefusalLine(write: (text: string) => void, fields: SendRefusal
  * registration always survive, so even a refused send remains re-deliverable.
  */
 async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<number> {
+  const env = deps.env ?? process.env;
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
   const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
   try {
     const to = required("--to", values.to);
     const text = required("--text", values.text);
     const ackTimeoutSeconds = parseAckTimeoutSeconds(values["ack-timeout"]);
-    const session = deps.env?.PI_PMUX_SESSION;
+    // The same lookup the mode gate and the legacy receipt use, so a
+    // production run without injected deps still finds the child's env.
+    const session = env.PI_PMUX_SESSION;
     if (!session) {
       throw new Error(
         "send under the report protocol needs PI_PMUX_SESSION: run this command inside a pmux child",
