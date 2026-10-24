@@ -23,13 +23,13 @@
 
 ## 3. Verified submission
 
-- [ ] 3.1 Add `verifiedAgentPrompt` to `pi-extension/pmux/tmux.ts`
+- [x] 3.1 Add `verifiedAgentPrompt` to `pi-extension/pmux/tmux.ts`
   beside `agentPrompt` (D4): `pane_in_mode` refusal, baseline visible
   capture with the token absent, one `send-keys -l`, the 100 ms/2 s
   token poll, the final recheck, exactly one Enter, `not-submitted` /
   `unknown` outcomes, and an injectable sleep. Assert no failure path
   ever sends Escape or Ctrl-U.
-- [ ] 3.2 Add `pi-extension/pmux/report-delivery.ts`: the shared
+- [x] 3.2 Add `pi-extension/pmux/report-delivery.ts`: the shared
   submit-then-await-ack flow used by `send` and the wrapper (D6, D8).
 
 ## 4. CLI
