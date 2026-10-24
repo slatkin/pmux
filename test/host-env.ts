@@ -1,10 +1,14 @@
 /**
- * Clear the terminal-host variables for the test process.
+ * Clear the terminal-host and subagent-identity variables for the test
+ * process.
  *
  * The suite must never talk to a real multiplexer. A run inside a tmux pane
  * inherits the host keys, and an un-stubbed backend call would then mutate
- * real panes — including closing the pane that runs the suite. Every test
- * file that exercises a backend imports this module first.
+ * real panes — including closing the pane that runs the suite. It would
+ * also inherit the pane's own `PI_PMUX_*` and detector keys
+ * (`PI_SUBAGENT_DEPTH`, `PI_BLACKHOLE_*`), which would leak a fake child
+ * depth and marker list into the env builders under test. Every test file
+ * that exercises a backend imports this module first.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
