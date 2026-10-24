@@ -71,6 +71,44 @@ export function isSubagentChild(env: NodeJS.ProcessEnv = process.env): boolean {
   return decodeChildEnv(env).sessionFile !== undefined;
 }
 
+/** Child-depth env var honored by pi-blackhole's subagent detector (any
+ * integer > 0 marks a subagent) and by depth-aware subagent runners. */
+export const SUBAGENT_DEPTH_ENV = "PI_SUBAGENT_DEPTH";
+
+/** pi-blackhole's extra-marker list: env names that identify a subagent. */
+export const SUBAGENT_MARKERS_ENV = "PI_BLACKHOLE_SUBAGENT_MARKERS";
+
+/** The pmux-owned env var named in the marker list. Always set on a child. */
+export const SUBAGENT_MARKER_NAME = "PI_PMUX_SESSION";
+
+/**
+ * The subagent-identity part of the child env: a depth one greater than the
+ * parent's, and `PI_PMUX_SESSION` appended to pi-blackhole's marker list.
+ * Detected children get observational memory gated off by pi-blackhole's
+ * default `subagentMemory: "off"`. Both keys are inert without a reader, and
+ * the increment keeps nested pmux children reporting the right depth.
+ */
+export function subagentMarkerEnv(
+  parentEnv: Readonly<Record<string, string | undefined>> = process.env,
+): Record<string, string> {
+  const raw = parentEnv[SUBAGENT_DEPTH_ENV];
+  const depth = raw === undefined ? 0 : Number.parseInt(raw.trim(), 10);
+  const childDepth = Number.isInteger(depth) && depth > 0 ? depth + 1 : 1;
+
+  const markers = new Set(
+    (parentEnv[SUBAGENT_MARKERS_ENV] ?? "")
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean),
+  );
+  markers.add(SUBAGENT_MARKER_NAME);
+
+  return {
+    [SUBAGENT_DEPTH_ENV]: String(childDepth),
+    [SUBAGENT_MARKERS_ENV]: [...markers].join(","),
+  };
+}
+
 /** Tools that are gated by `spawning: false`. */
 const SPAWNING_TOOLS = new Set(["pmux_spawn", "pmux_interrupt", "pmux_list", "pmux_resume"]);
 

@@ -178,6 +178,8 @@ describe("external parent contact (design D3)", () => {
           PI_PMUX_EXTERNAL_PARENT: "1",
           PI_PMUX_AUTO_EXIT: "1",
           PI_DENY_TOOLS: "claude",
+          PI_SUBAGENT_DEPTH: "1",
+          PI_BLACKHOLE_SUBAGENT_MARKERS: "PI_PMUX_SESSION",
         });
         assert.equal(spec.command, "pi");
         assert.equal(spec.name, "Worker");
@@ -330,6 +332,8 @@ describe("pi parent contact (design D3)", () => {
         PI_PMUX_AUTO_EXIT: "1",
         PI_DENY_TOOLS: "claude",
         PI_CODING_AGENT_DIR: localAgentDir,
+        PI_SUBAGENT_DEPTH: "1",
+        PI_BLACKHOLE_SUBAGENT_MARKERS: "PI_PMUX_SESSION",
       });
       assert.equal(spec.parent, undefined);
       assert.equal(spec.report, undefined);

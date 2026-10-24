@@ -22,7 +22,7 @@ import {
   loadAgentDefaults,
   type AgentDefaults,
 } from "./agent-defs.ts";
-import { encodeChildEnv, resolveDenyTools } from "./child-env.ts";
+import { encodeChildEnv, resolveDenyTools, subagentMarkerEnv } from "./child-env.ts";
 import { LAUNCH_SPEC_VERSION, buildPaneTitle, type LaunchSpec, type ReportMode } from "./launch.ts";
 import { LAUNCH_RECORD_VERSION, type LaunchRecord } from "./launch-record.ts";
 import { slugifyName } from "./slug.ts";
@@ -401,6 +401,9 @@ export function buildSpawnEnvParts(params: {
   parentRosterFile?: string;
   /** Marks a child whose parent is an external orchestrator (design D3). */
   externalParent?: boolean;
+  /** The parent's env, for the subagent-depth increment and the marker-list
+   * merge. Defaults to `process.env` inside `subagentMarkerEnv`. */
+  parentEnv?: Readonly<Record<string, string | undefined>>;
 }): Record<string, string> {
   const env = encodeChildEnv({
     name: params.name,
@@ -415,6 +418,9 @@ export function buildSpawnEnvParts(params: {
     externalParent: params.externalParent === true,
   });
   if (params.codingAgentDir) env.PI_CODING_AGENT_DIR = params.codingAgentDir;
+  // Subagent identity for detectors such as pi-blackhole's: a child depth
+  // and `PI_PMUX_SESSION` on the extra-marker list (inert without a reader).
+  Object.assign(env, subagentMarkerEnv(params.parentEnv));
   return env;
 }
 

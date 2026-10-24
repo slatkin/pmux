@@ -523,6 +523,8 @@ describe("supervisor launch", () => {
           PI_PMUX_PARENT_ROSTER: getRosterFile(
             getArtifactDir(join(env.dir, "sessions"), "sess-001"),
           ),
+          PI_SUBAGENT_DEPTH: "1",
+          PI_BLACKHOLE_SUBAGENT_MARKERS: "PI_PMUX_SESSION",
         });
         assert.equal("PI_PMUX_AUTO_EXIT" in spec.env, false);
 

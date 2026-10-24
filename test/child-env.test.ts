@@ -8,6 +8,7 @@ import {
   decodeChildEnv,
   encodeChildEnv,
   isSubagentChild,
+  subagentMarkerEnv,
   type ChildEnv,
 } from "../pi-extension/pmux/child-env.ts";
 import { buildSpawnEnvParts, resolveDenyTools } from "../pi-extension/pmux/supervisor.ts";
@@ -74,6 +75,51 @@ test("isSubagentChild is true only when PI_PMUX_SESSION is set", () => {
   assert.equal(isSubagentChild({ PI_PMUX_SESSION: "" }), false);
   assert.equal(isSubagentChild({ PI_PMUX_NAME: "child" }), false);
   assert.equal(isSubagentChild({}), false);
+});
+
+test("subagentMarkerEnv gives a root parent's child depth 1 and the marker", () => {
+  assert.deepEqual(subagentMarkerEnv({}), {
+    PI_SUBAGENT_DEPTH: "1",
+    PI_BLACKHOLE_SUBAGENT_MARKERS: "PI_PMUX_SESSION",
+  });
+});
+
+test("subagentMarkerEnv increments an inherited depth", () => {
+  assert.equal(subagentMarkerEnv({ PI_SUBAGENT_DEPTH: "2" }).PI_SUBAGENT_DEPTH, "3");
+});
+
+test("subagentMarkerEnv treats a non-positive or malformed depth as a root", () => {
+  for (const raw of ["0", "-2", "abc", ""]) {
+    assert.equal(
+      subagentMarkerEnv({ PI_SUBAGENT_DEPTH: raw }).PI_SUBAGENT_DEPTH,
+      "1",
+      `depth ${JSON.stringify(raw)}`,
+    );
+  }
+});
+
+test("subagentMarkerEnv appends to the inherited marker list without duplicating", () => {
+  const merged = subagentMarkerEnv({
+    PI_BLACKHOLE_SUBAGENT_MARKERS: "FOO, BAR",
+  });
+  assert.equal(merged.PI_BLACKHOLE_SUBAGENT_MARKERS, "FOO,BAR,PI_PMUX_SESSION");
+  const already = subagentMarkerEnv({
+    PI_BLACKHOLE_SUBAGENT_MARKERS: "FOO,PI_PMUX_SESSION",
+  });
+  assert.equal(already.PI_BLACKHOLE_SUBAGENT_MARKERS, "FOO,PI_PMUX_SESSION");
+});
+
+test("buildSpawnEnvParts marks the child env for subagent detectors", () => {
+  const spawn = buildSpawnEnvParts({
+    name: "scout",
+    subagentSessionFile: "/tmp/s.jsonl",
+    id: "id-1",
+    activityFile: "/tmp/a.json",
+    denySet: new Set(),
+    parentEnv: { PI_SUBAGENT_DEPTH: "1" },
+  });
+  assert.equal(spawn.PI_SUBAGENT_DEPTH, "2");
+  assert.equal(spawn.PI_BLACKHOLE_SUBAGENT_MARKERS, "PI_PMUX_SESSION");
 });
 
 /** Just enough of the extension API for `index.ts` and `pmux-done.ts`. */

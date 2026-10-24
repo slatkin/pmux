@@ -11,7 +11,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 for (const key of Object.keys(process.env)) {
-  if (key.startsWith("PI_PMUX_") || key === "TMUX" || key === "TMUX_PANE") {
+  if (
+    key.startsWith("PI_PMUX_") ||
+    key.startsWith("PI_BLACKHOLE_") ||
+    key === "PI_SUBAGENT_DEPTH" ||
+    key === "TMUX" ||
+    key === "TMUX_PANE"
+  ) {
     delete process.env[key];
   }
 }
