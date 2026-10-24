@@ -34,16 +34,16 @@
 
 ## 4. CLI
 
-- [ ] 4.1 Make `sendCommand` async and protocol-aware (D1, D6): marker
+- [x] 4.1 Make `sendCommand` async and protocol-aware (D1, D6): marker
   absent keeps the legacy path and JSON; marker present requires
   `PI_PMUX_SESSION`; `--ack-timeout` (default 15 s, poll 250 ms, `0`
   allowed, invalid in legacy mode); the exit-0/exit-2/exit-1 JSON
   shapes.
-- [ ] 4.2 Add `ack --session <file> --id <id>` (D7): ID validation,
+- [x] 4.2 Add `ack --session <file> --id <id>` (D7): ID validation,
   artifact-exists check, idempotent append, `alreadyAcknowledged`,
   exit 2 on missing artifact or failed append. Add both commands to
   the usage text.
-- [ ] 4.3 In `launch-build.ts`, set `PI_PMUX_REPORT_PROTOCOL` for
+- [x] 4.3 In `launch-build.ts`, set `PI_PMUX_REPORT_PROTOCOL` for
   send-mode specs and write the new send footer (D1, D6): pointer
   semantics, `sent` vs `acknowledged`, no child retry after timeout,
   `sent:false` means call `pmux_done`.
@@ -67,7 +67,7 @@
 
 ## 6. Pinned tests and docs
 
-- [ ] 6.0 Migrate the tests the new footer and protocol break: the
+- [x] 6.0 Migrate the tests the new footer and protocol break: the
   `sendFooterBytes` golden text in `test/launch-build.test.ts` (asserted
   near lines 158, 240, 410, 419) and the `.sent` receipt and
   `sendSpecWithReceipt` fixtures in `test/cli.test.ts` (near lines
