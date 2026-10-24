@@ -15,7 +15,7 @@ A sub-agent session SHALL end its run when the child calls the `pmux_done` tool 
 
 #### Scenario: Auto-exit agent aborted mid-turn
 - **WHEN** a sub-agent with `auto-exit: true` has its turn end with `stopReason: "aborted"`
-- **THEN** the session stays open for inspection or another prompt and no `done` sidecar is written
+- **THEN** the session stays open for inspection or another prompt, no `done` sidecar is written, and the `cancelled` sidecar is written instead (see "User cancel is reported")
 
 #### Scenario: Auto-exit agent after user takeover
 - **WHEN** the user has sent input to the sub-agent after its first agent run started, and the agent then finishes a turn normally
@@ -95,3 +95,22 @@ When a pi parent reads a child's `.exit` sidecar with `type` `handoff`, it SHALL
 #### Scenario: Handoff without text
 - **WHEN** the sidecar is `{"type":"handoff"}` with no `message`, or a `message` that is not a non-empty string
 - **THEN** the parent gets the handoff message with a placeholder that says the text is missing
+
+### Requirement: User cancel is reported
+When a sub-agent's turn ends with `stopReason: "aborted"`, the child extension SHALL write `{"type":"cancelled"}` to the `.exit` sidecar, and the session SHALL stay open. When a new agent turn starts and the sidecar holds `{"type":"cancelled"}`, the child extension SHALL remove it, and SHALL NOT remove a sidecar holding any other payload on turn start.
+
+#### Scenario: Aborted turn reports the cancel
+- **WHEN** the child's turn ends with `stopReason: "aborted"`, in an auto-exit or a non-auto-exit session
+- **THEN** the `.exit` sidecar holds `{"type":"cancelled"}` and the session stays open
+
+#### Scenario: The next turn clears the cancel
+- **WHEN** a new agent turn starts while the `.exit` sidecar holds `{"type":"cancelled"}`
+- **THEN** the sidecar is removed, so a later wait does not see a stale cancel
+
+#### Scenario: A completion sidecar survives a turn start
+- **WHEN** a new agent turn starts while the `.exit` sidecar holds `done`, `error`, `handoff` or `ping`
+- **THEN** the sidecar is left in place
+
+#### Scenario: Aborted turn does not nudge
+- **WHEN** the child's turn ends with `stopReason: "aborted"`
+- **THEN** no completion nudge is scheduled for that turn
