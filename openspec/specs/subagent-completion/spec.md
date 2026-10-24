@@ -15,7 +15,7 @@ A sub-agent session SHALL end its run when the child calls the `pmux_done` tool 
 
 #### Scenario: Auto-exit agent aborted mid-turn
 - **WHEN** a sub-agent with `auto-exit: true` has its turn end with `stopReason: "aborted"`
-- **THEN** the session stays open for inspection or another prompt, no `done` sidecar is written, and the `cancelled` sidecar is written instead (see "User cancel is reported")
+- **THEN** no `done` sidecar is written; the `cancelled` sidecar is written and the session shuts down (see "User cancel is reported")
 
 #### Scenario: Auto-exit agent after user takeover
 - **WHEN** the user has sent input to the sub-agent after its first agent run started, and the agent then finishes a turn normally
@@ -97,11 +97,19 @@ When a pi parent reads a child's `.exit` sidecar with `type` `handoff`, it SHALL
 - **THEN** the parent gets the handoff message with a placeholder that says the text is missing
 
 ### Requirement: User cancel is reported
-When a sub-agent's turn ends with `stopReason: "aborted"`, the child extension SHALL write `{"type":"cancelled"}` to the `.exit` sidecar, and the session SHALL stay open. When a new agent turn starts and the sidecar holds `{"type":"cancelled"}`, the child extension SHALL remove it, and SHALL NOT remove a sidecar holding any other payload on turn start.
+When a sub-agent's turn ends because it was aborted (the latest assistant message carries `stopReason: "aborted"`, or the run settles with its abort flag set and no sidecar exists), and no interrupt marker `<session>.interrupt` exists, the child extension SHALL write `{"type":"cancelled"}` to the `.exit` sidecar, SHALL write status `done` with the message `cancelled`, and SHALL shut the session down. When the interrupt marker exists when that aborted run ends, the child extension SHALL remove the marker, SHALL NOT write a sidecar, and the session SHALL stay open. The child extension SHALL remove the interrupt marker on every agent start and every agent end. When a new agent turn starts and the sidecar holds `{"type":"cancelled"}`, the child extension SHALL remove it, and SHALL NOT remove a sidecar holding any other payload on turn start.
 
 #### Scenario: Aborted turn reports the cancel
-- **WHEN** the child's turn ends with `stopReason: "aborted"`, in an auto-exit or a non-auto-exit session
-- **THEN** the `.exit` sidecar holds `{"type":"cancelled"}` and the session stays open
+- **WHEN** the user presses Escape and the child's turn ends with `stopReason: "aborted"`, in an auto-exit or a non-auto-exit session, and no interrupt marker exists
+- **THEN** the `.exit` sidecar holds `{"type":"cancelled"}`, the status file holds `done` with message `cancelled`, and the session shuts down
+
+#### Scenario: Parent interrupt keeps the session open
+- **WHEN** the child's turn ends with `stopReason: "aborted"` and the interrupt marker exists
+- **THEN** the marker is removed, no `.exit` sidecar is written, and the session stays open
+
+#### Scenario: A stale marker does not exempt a later cancel
+- **WHEN** the interrupt marker was written while the child was idle, and the child later starts a turn that the user aborts
+- **THEN** the marker was removed at the agent start, and the abort ends the session with the `cancelled` sidecar
 
 #### Scenario: The next turn clears the cancel
 - **WHEN** a new agent turn starts while the `.exit` sidecar holds `{"type":"cancelled"}`
