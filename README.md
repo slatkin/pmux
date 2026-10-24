@@ -44,9 +44,11 @@ npx skills add /path/to/pmux -g -a claude-code
 ```
 
 The skill waits for a child to finish and reads back its report; a child
-started with `--report send` instead types the report into the orchestrator's
-pane. The [guide](docs/guide.md#external-orchestrators-claude-code) covers the
-launcher commands, the completion signal and close-on-done behavior.
+started with `--report send` instead writes its report to a durable file and
+types a one-line pointer into the orchestrator's pane, which the orchestrator
+acknowledges with an `ack` command after reading the file. The
+[guide](docs/guide.md#external-orchestrators-claude-code) covers the launcher
+commands, the completion signal and close-on-done behavior.
 
 ## Configuration
 
