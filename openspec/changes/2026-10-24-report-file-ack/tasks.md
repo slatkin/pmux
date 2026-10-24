@@ -74,13 +74,13 @@
   511-538, 1150, 1168, 1750). Keep the legacy assertions where they
   describe unmarked behaviour.
 
-- [ ] 6.1 Update `skills/pmux/SKILL.md`: the send-mode section teaches
+- [x] 6.1 Update `skills/pmux/SKILL.md`: the send-mode section teaches
   the pointer workflow — read the named file, run the embedded `ack`
   command, dedup repeat pointers by report ID, do not touch report
   files or `.sent`; the wrapper paragraph describes same-ID
   re-delivery; remove every claim that the confirmation line proves
   arrival.
-- [ ] 6.2 Update `docs/guide.md` and `README.md` send-mode prose to
+- [x] 6.2 Update `docs/guide.md` and `README.md` send-mode prose to
   match.
 
 ## 7. Gates
