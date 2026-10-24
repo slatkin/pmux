@@ -9,7 +9,7 @@ This guide holds the full reference for pmux. For an overview and install steps,
 - [Resume pi sessions](#resume-pi-sessions)
 - [Live child status](#live-child-status)
 - [Turn-end notification](#turn-end-notification)
-- [tmux sidebar (tmux-agent-sidebar)](#tmux-sidebar-tmux-agent-sidebar)
+- [tmux sidebar (pmux-explorer)](#tmux-sidebar-pmux-explorer)
 - [External orchestrators (Claude Code)](#external-orchestrators-claude-code)
 - [Async Subagent Flow](#async-subagent-flow)
   - [Decision model](#decision-model)
@@ -101,15 +101,15 @@ Set `notify.enabled` to `false` in `config.json` to turn these notifications off
 
 ---
 
-## tmux sidebar (tmux-agent-sidebar)
+## tmux sidebar (pmux-explorer)
 
-If the [tmux-agent-sidebar](https://github.com/slatkin/tmux-agent-sidebar) sidebar is installed, the extension publishes the activity of every pi session it runs in to it, so a pi pane is listed with its status, its prompt, its last response and its tool activity — whether pmux started that session or not. A blocking extension prompt (for example a permission dialog) marks the pane as waiting for you.
+If the [pmux-explorer](https://github.com/slatkin/pmux-explorer) sidebar is installed, the extension publishes the activity of every pi session it runs in to it, so a pi pane is listed with its status, its prompt, its last response and its tool activity — whether pmux started that session or not. A blocking extension prompt (for example a permission dialog) marks the pane as waiting for you.
 
-The publishing is fire and forget: it never delays a turn, raises an error or writes to the session output. It needs the sidebar binary, looked up in this order: the `TMUX_AGENT_SIDEBAR_BIN` environment variable, `~/.tmux/plugins/tmux-agent-sidebar/bin/tmux-agent-sidebar`, `~/.tmux/plugins/tmux-agent-sidebar/target/release/tmux-agent-sidebar`, then `tmux-agent-sidebar` on `PATH`. When none is found, the session publishes nothing and stays quiet.
+The publishing is fire and forget: it never delays a turn, raises an error or writes to the session output. It needs the sidebar binary, looked up in this order: the `PMUX_EXPLORER_BIN` environment variable, `~/.tmux/plugins/pmux-explorer/bin/pmux-explorer`, `~/.tmux/plugins/pmux-explorer/target/release/pmux-explorer`, then `pmux-explorer` on `PATH`. When none is found, the session publishes nothing and stays quiet.
 
 The pane's worktree comes from the sidebar's own window options, so a pi pane the sidebar spawned into a worktree shows the worktree and its branch.
 
-Set `TMUX_AGENT_SIDEBAR=0` in the environment to turn the publishing off for a session that does have the sidebar.
+Set `PMUX_EXPLORER=0` in the environment to turn the publishing off for a session that does have the sidebar.
 
 When the pane's Tasks tab holds open items — recorded through the sidebar's `task-set` and `task-update` commands — a turn that ends while items are still open also receives the sidebar's update-before-finish reminder, one steer message at the turn's end. The reminder is buffered, so it does not fire turn after turn while the plan is being maintained: it stays silent until the store file has been untouched for five minutes and three turn ends have passed since its last write, and an injection resets both clocks. The reminder is the extension's own delivery and is not touched by that switch. The agent writes the per-pane store only through those commands; the extension only reads it. A failed or aborted turn gets nothing, a subagent child never gets the reminder, and a pane whose store holds nothing open is never nudged to record a list: an empty list stays silent at every boundary. The wording is not decided here; it is the constant `UPDATE_BEFORE_FINISH_REMINDER` from the sidebar repository's `src/task_reminders.rs`, quoted verbatim so both repositories carry the same reminder.
 

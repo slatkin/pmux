@@ -10,7 +10,7 @@ the fact that it waits for a human.
 ### Requirement: the extension publishes the session's activity
 
 The extension SHALL publish the activity of the pi session it runs in to the
-tmux sidebar, by calling `tmux-agent-sidebar hook pi <event>` with the
+tmux sidebar, by calling `pmux-explorer hook pi <event>` with the
 payload on stdin, for every event of the protocol that pi can answer.
 
 #### Scenario: A user prompt

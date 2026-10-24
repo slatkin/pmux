@@ -1,5 +1,5 @@
 /**
- * Delivery of the tmux-agent-sidebar's update-before-finish reminder.
+ * Delivery of the pmux-explorer's update-before-finish reminder.
  *
  * The sidebar's Tasks tab wording is defined exactly once, in that
  * repository's `src/task_reminders.rs`; the constant below is a copy of its
@@ -31,7 +31,7 @@
  * closure values, and every failure of the store read or the injection is
  * swallowed (D7): a reminder is never worth a turn's interruption.
  *
- * The store is `/tmp/tmux-agent-tasks<PANE>.json`, the file the sidebar's
+ * The store is `/tmp/pmux-explorer-tasks<PANE>.json`, the file the sidebar's
  * `task_store.rs` defines; the pane id is encoded the way the sidebar encodes
  * its log and store filenames (`%` becomes `_`). The extension only reads it:
  * one synchronous `readFileSync` of the small file at each settled turn end,
@@ -46,7 +46,7 @@ import { isSubagentChild } from "./child-env.ts";
 /**
  * The sidebar's update-before-finish wording, copied byte for byte. Single
  * source: the `UPDATE_BEFORE_FINISH_REMINDER` constant in the
- * tmux-agent-sidebar's `src/task_reminders.rs`; the module header and the
+ * pmux-explorer's `src/task_reminders.rs`; the module header and the
  * wording test carry the drift mechanism (D1).
  */
 export const UPDATE_BEFORE_FINISH_REMINDER = "Reminder: make sure the task board is up to date.";
@@ -87,7 +87,7 @@ export interface SidebarTaskItem {
  * store filenames, so pane `%5` names the same file on both sides.
  */
 export function sidebarTaskStorePath(pane: string): string {
-  return `/tmp/tmux-agent-tasks${pane.replace(/%/g, "_")}.json`;
+  return `/tmp/pmux-explorer-tasks${pane.replace(/%/g, "_")}.json`;
 }
 
 /**

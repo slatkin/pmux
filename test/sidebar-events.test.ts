@@ -11,8 +11,8 @@ import { createSidebarEvents } from "../pi-extension/pmux/sidebar-events.ts";
 import { createSidebarPublisher, type SidebarWorktree } from "../pi-extension/pmux/sidebar.ts";
 import { flushSidebarQueue, makeSidebarSpawn } from "./sidebar-fakes.ts";
 
-const BIN = "/opt/sidebar/bin/tmux-agent-sidebar";
-const ENV = { TMUX: "/tmp/tmux-0/default", TMUX_PANE: "%7", TMUX_AGENT_SIDEBAR_BIN: BIN };
+const BIN = "/opt/sidebar/bin/pmux-explorer";
+const ENV = { TMUX: "/tmp/tmux-0/default", TMUX_PANE: "%7", PMUX_EXPLORER_BIN: BIN };
 const CTX = { cwd: "/work/app", sessionManager: { getSessionId: () => "s1" } };
 
 function makeHarness(options: { env?: NodeJS.ProcessEnv; worktree?: SidebarWorktree } = {}) {
@@ -90,7 +90,7 @@ describe("the pi-event mapping", () => {
 
   it("with publishing off, the worktree is not read and nothing spawns", async () => {
     const { calls, worktreeReads, fire } = makeHarness({
-      env: { ...ENV, TMUX_AGENT_SIDEBAR: "0" },
+      env: { ...ENV, PMUX_EXPLORER: "0" },
     });
     fire("session_start", { reason: "startup" });
     await flushSidebarQueue();
