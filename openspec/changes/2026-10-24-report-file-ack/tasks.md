@@ -85,7 +85,7 @@
 
 ## 7. Gates
 
-- [ ] 7.1 Run `pnpm run format`, `pnpm run lint`,
+- [x] 7.1 Run `pnpm run format`, `pnpm run lint`,
   `pnpm run typecheck` and `pnpm test`.
 - [ ] 7.2 Live matrix against a real Claude Code pane (user-run): a
   >5 KB report into an idle pane; a busy pane forcing ack timeout and
