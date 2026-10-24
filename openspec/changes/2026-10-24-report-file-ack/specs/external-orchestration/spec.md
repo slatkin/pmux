@@ -200,7 +200,7 @@ In both modes the typed text SHALL be encoded so that it holds no line terminato
 
 #### Scenario: Marked without a session
 - **WHEN** `send` runs with `PI_PMUX_REPORT_PROTOCOL=file-ack-v1` and no `PI_PMUX_SESSION`
-- **THEN** it fails as a configuration error, sends nothing and writes no `.report.md` file
+- **THEN** it exits 1 with a message on stderr naming `PI_PMUX_SESSION`, sends nothing and writes no `.report.md` file
 
 #### Scenario: Multiline report
 - **WHEN** the text holds several lines
@@ -274,7 +274,7 @@ When `send` runs under `file-ack-v1`, `<PI_PMUX_SESSION>.sent` SHALL be an appen
 - **THEN** the old ones are deleted and the fresh ones are kept
 
 ### Requirement: Send-mode report count
-For a send-mode spec with a `parent`, the run wrapper SHALL detect whether the current run produced parent reports. For an unmarked spec it SHALL count the `<session>.sent` kindless lines whose `to` equals `parent`, once before the child starts and once after the sentinel; a missing file counts as zero and an unparseable line is skipped. For a `file-ack-v1` spec it SHALL snapshot the registered report IDs before the child starts, and after the sentinel examine only `report` records whose `to` equals `parent` and whose IDs were absent from the baseline, together with their `ack` records. A report with a matching `ack` is consumed; one without is unacknowledged and subject to re-delivery. In `last` mode the wrapper SHALL NOT check and SHALL NOT contact anyone.
+For a send-mode spec with a `parent`, the run wrapper SHALL detect whether the current run produced parent reports. For an unmarked spec it SHALL count the `<session>.sent` kindless lines whose `to` equals `parent`, once before the child starts and once after the sentinel; a missing file counts as zero and an unparseable line is skipped. For a `file-ack-v1` spec it SHALL snapshot the registered report IDs and the kindless-line count before the child starts, and after the sentinel examine only `report` records whose `to` equals `parent` and whose IDs were absent from the baseline, together with their `ack` records. A report with a matching `ack` is consumed; one without is unacknowledged and subject to re-delivery. A new kindless line whose `to` equals `parent` counts as parent contact for the wake decision — an unmarked `send` still ran against the session — but, having no report ID, it is never re-delivered. In `last` mode the wrapper SHALL NOT check and SHALL NOT contact anyone.
 
 #### Scenario: Count grows
 - **WHEN** an unmarked send-mode child with parent `%12` runs `send --to %12` once and exits
@@ -298,7 +298,7 @@ For a send-mode spec with a `parent`, the wrapper SHALL contact the parent after
 For a `file-ack-v1` spec:
 
 - Every current-run report addressed to `parent` that has no `ack` record SHALL be re-delivered in registration order through the verified report-input primitive: the same report file and ID, a fresh visibility token, and no ack wait. The wrapper SHALL recheck the ack immediately before each retry.
-- When there is no current-run parent report at all, the wrapper SHALL write the wake text to its own durable report file and deliver its pointer the same way: the `<name> <state> without sending a report…` text above for a finished or crashed child, and `<name> pinged: <message>` for a `ping` sidecar, with the original multiline text unchanged.
+- When there is no current-run parent report at all, the wrapper SHALL write the wake text to its own durable report file, register it with a `report` record as `send` does, and deliver its pointer the same way: the `<name> <state> without sending a report…` text above for a finished or crashed child, and `<name> pinged: <message>` for a `ping` sidecar, with the original multiline text unchanged.
 - A `cancelled` sidecar produces no re-delivery and no wake-up.
 - A failed re-delivery or wake-up SHALL go to stderr only and MUST NOT change the child's exit code.
 

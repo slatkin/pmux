@@ -65,7 +65,14 @@
   ignored, baselines on resume, durable ping/no-report/crash wakes,
   stderr-only retry failure, close-after-retry ordering.
 
-## 6. Docs
+## 6. Pinned tests and docs
+
+- [ ] 6.0 Migrate the tests the new footer and protocol break: the
+  `sendFooterBytes` golden text in `test/launch-build.test.ts` (asserted
+  near lines 158, 240, 410, 419) and the `.sent` receipt and
+  `sendSpecWithReceipt` fixtures in `test/cli.test.ts` (near lines
+  511-538, 1150, 1168, 1750). Keep the legacy assertions where they
+  describe unmarked behaviour.
 
 - [ ] 6.1 Update `skills/pmux/SKILL.md`: the send-mode section teaches
   the pointer workflow — read the named file, run the embedded `ack`
