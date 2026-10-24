@@ -12,7 +12,9 @@ should ask the user how to proceed — but a user who is driving wants the
 signal recorded, not acted on.
 
 A second gap sits underneath the first. A cancelled child reports `waiting`
-in its activity file and stays alive, so the parent-side idle watchdog
+in its activity file and stays alive, so for a non-interactive child (an
+auto-exit role, or `interactive: false` — the watchdog's arms already
+return `none` for interactive children) the parent-side idle watchdog
 treats it like any other child that ended a turn without finishing: ~30 s
 after the cancel it types the completion nudge into the child's pane,
 restarting the very turn the user aborted, and after two unanswered nudges
@@ -64,8 +66,4 @@ None.
   the config; `runIdleWatchdog` skips its nudge/finish arm while the mark
   stands.
 - `docs/guide.md`: the Configuration section documents `quietCancel`.
-- Tests in `test/test.ts`, `test/supervisor.test.ts` and the status-config
-  suite.
-- Ordering: this change's spec delta modifies the requirement added by
-  `2026-10-23-report-user-cancel`, which is implemented but not yet
-  archived. That change archives first.
+- Tests in `test/test.ts` and `test/supervisor.test.ts`.

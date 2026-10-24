@@ -5,7 +5,7 @@
 ### Requirement: A user cancel notifies the parent without ending the run
 When the exit poll reads a child's `.exit` sidecar with `type` `cancelled`, the poll SHALL NOT complete. The poll consumes the sidecar it reports, so each cancel notifies exactly once. The parent SHALL receive one cancel message per cancel that carries the child's session file and carries the child's name, task and agent in its details. Unless quiet cancel mode is configured (see "Cancel wake is configurable"), the message SHALL trigger a turn; in quiet mode the message SHALL be appended to the parent's session without triggering a turn. The child SHALL remain registered.
 
-A reported cancel SHALL mark the run user-cancelled. While the mark stands, the idle watchdog SHALL NOT nudge the child or finish the run, and its gone detection SHALL still apply. The mark SHALL clear when the child's activity reports an active phase.
+A reported cancel SHALL mark the run user-cancelled. While the mark stands, the idle watchdog SHALL NOT nudge the child or finish the run, and its gone detection SHALL still apply. (The watchdog's nudge/finish and gone arms already act only on non-interactive children, so the mark changes nothing for an interactive run.) The mark SHALL clear when a fresh activity read reports an active phase.
 
 #### Scenario: Cancel notifies and keeps watching
 - **WHEN** a running child's `.exit` sidecar gains `{"type":"cancelled"}` and quiet cancel mode is off
@@ -20,7 +20,7 @@ A reported cancel SHALL mark the run user-cancelled. While the mark stands, the 
 - **THEN** that file is consumed and produces no further message, and a later abort writes a new sidecar that notifies again
 
 #### Scenario: A cancelled child is not nudged or finished
-- **WHEN** a run is marked user-cancelled and the child keeps reporting a `waiting` phase
+- **WHEN** a non-interactive run is marked user-cancelled and the child keeps reporting a `waiting` phase
 - **THEN** the idle watchdog sends no reminder to the child's pane and writes no `done` sidecar, no matter how long the wait lasts
 
 #### Scenario: New activity ends the suppression
@@ -28,7 +28,7 @@ A reported cancel SHALL mark the run user-cancelled. While the mark stands, the 
 - **THEN** the mark clears and the idle watchdog treats the run like any other afterwards
 
 #### Scenario: A dead cancelled pane is still reported
-- **WHEN** a run is marked user-cancelled and the child's activity file stops reporting
+- **WHEN** a non-interactive run is marked user-cancelled and the child's activity file stops reporting
 - **THEN** the gone detection still finishes the run with an `error` sidecar
 
 #### Scenario: Completion after a cancel

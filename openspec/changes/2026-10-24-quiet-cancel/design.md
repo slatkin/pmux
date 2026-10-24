@@ -74,13 +74,19 @@ child's current state is user-cancelled rather than still-working), and
 `deliverAs: "nextTurn"` holds the message in a pending queue instead of
 appending it, which delays the transcript display for no benefit.
 
-**D3: `onCancel` marks the run; a fresh active phase clears the mark.**
+**D3: `onCancel` marks the run; a fresh active read clears the mark.**
 `RunningSubagent` gains a `userCancelled` flag the poll's `onCancel` sets.
-The watch tick clears it when `running.activity.phase === "active"`: a
-new turn started, so whoever restarted the child — the user typing in the
-pane, a `pmux_message`, or a `pmux_resume` (which is a new run anyway) —
-owns its supervision again and the watchdog owes it normal duty. The flag
-is memory-only; `/reload` retires every watcher anyway, and the launch
+The clear is subtle: the poll iteration calls `onCancel` first and `onTick`
+second, so in the tick that sets the mark, `running.activity` still holds
+the previous tick's snapshot — usually `active`, because the child was
+working when the user pressed Escape. The tick MUST therefore clear the
+mark only after `observeRunningSubagent` has run, and only when
+`running.activityRead.ok` is true (a failed read leaves the stale
+`active` snapshot in place). A fresh `active` phase means a new turn
+started, so whoever restarted the child — the user typing in the pane, a
+`pmux_message`, or a `pmux_resume` (which is a new run anyway) — owns its
+supervision again and the watchdog owes it normal duty. The flag is
+memory-only; `/reload` retires every watcher anyway, and the launch
 records that would survive a reload carry no per-run state by design.
 
 **D4: The mark suppresses the watchdog's idle arm, not its gone arm.**
@@ -88,7 +94,9 @@ While `userCancelled` stands, `runIdleWatchdog` skips `decideIdleAction`
 entirely — no nudge, no finish — and still runs `decideGoneAction`. A
 cancelled child is alive and deliberately parked, so the reminder and the
 fabricated `done` are both wrong; a cancelled child whose pane then dies
-is a real failure the parent should still hear about. The suppression
+is a real failure the parent should still hear about. Both arms already
+return `none` for an interactive run, so the mark changes nothing there —
+the suppression matters for non-interactive children only. The suppression
 applies whether `quietCancel` is on or off: in wake mode the parent was
 just told "ask the user how to proceed", and a watchdog that restarts the
 aborted turn 30 s later — or finishes it 90 s later — contradicts that
@@ -101,12 +109,19 @@ casing, per report-user-cancel D5.
 
 ## Risks / Trade-offs
 
-- [A cancelled run can stay registered indefinitely] With the idle arm
-  suppressed, a parked child sits in `runningSubagents` until the user
-  resumes it, the parent acts, or the pane dies (the gone arm still
-  finishes that case with an error). Before this change the watchdog
-  forced a `done` within ~90 s. Accepted: a user cancel is deliberate, so
-  parking is the honest state; the widget keeps showing the run.
+- [A cancelled non-interactive run can stay registered indefinitely] With
+  the idle arm suppressed, a parked child sits in `runningSubagents` until
+  the user or the parent restarts it, or the pane dies (the gone arm
+  still finishes that case with an error). Before this change the
+  watchdog forced a `done` within ~90 s. Accepted: a user cancel is
+  deliberate, so parking is the honest state; the widget keeps showing
+  the run.
+- [To end a parked run, message it — do not resume it] `pmux_resume`
+  always registers a NEW run that polls the same `<session>.exit`, so two
+  polls race to consume the next sidecar (a race this change makes more
+  visible by removing the ~90 s cleanup). The correct way to bring a
+  parked child back is `pmux_message` or typing in its pane: it starts a
+  turn in the same run, which clears the mark.
 - [The flag does not survive `/reload`] Consistent with the rest of the
   per-run state: a reload retires the watchers, and the launch records
   deliberately carry no per-run values. A reloaded parent does not
@@ -116,5 +131,5 @@ casing, per report-user-cancel D5.
   proceed, which is also the correct move mid-conversation.
 - [The wake-mode parent loses the watchdog's cleanup of a cancelled
   child] Intentional: that cleanup restarted or fabricated-finished a
-  turn the user aborted on purpose. A parent that wants the child ended
-  can resume it and let it finish, or leave the pane parked.
+  turn the user aborted on purpose. A parent that wants the child to
+  continue sends it a `pmux_message`, or leaves the pane parked.
