@@ -50,17 +50,17 @@
 
 ## 5. Wrapper
 
-- [ ] 5.1 In `run.ts`, branch on the spec-env marker (D1, D8): marked
+- [x] 5.1 In `run.ts`, branch on the spec-env marker (D1, D8): marked
   specs snapshot current-run report IDs and legacy counts before
   spawn; after the sentinel, re-deliver each unacknowledged parent
   report in registration order — same ID, fresh token, no ack wait,
   ack recheck before each retry; `cancelled` stays quiet.
-- [ ] 5.2 Make the no-report wake-up durable (D8): write the wake text
+- [x] 5.2 Make the no-report wake-up durable (D8): write the wake text
   (exit state, or `<name> pinged: <message>`) to its own artifact and
   deliver its pointer through the verified path instead of typing the
   raw message. Replace `sendToParent` with an injectable async
   `deliverReport` seam.
-- [ ] 5.3 Verify with tests: acked suppression, unacknowledged retry,
+- [x] 5.3 Verify with tests: acked suppression, unacknowledged retry,
   retry after `not-submitted`, multiple reports, other-pane reports
   ignored, baselines on resume, durable ping/no-report/crash wakes,
   stderr-only retry failure, close-after-retry ordering.
