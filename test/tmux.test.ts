@@ -24,6 +24,8 @@ import {
   runInPane,
   sendEscape,
   splitPane,
+  verifiedAgentPrompt,
+  VERIFIED_PROMPT_POLL_MS,
 } from "../pi-extension/pmux/tmux.ts";
 import { argValue, placementRow } from "./tmux-fakes.ts";
 
@@ -495,5 +497,247 @@ describe("tmux backend", () => {
     const pending = pollForExit("%9", controller.signal, { interval: 10 });
     controller.abort();
     await assert.rejects(pending, /Aborted/);
+  });
+});
+
+describe("verifiedAgentPrompt", () => {
+  afterEach(() => __setTmuxExecForTests__(null));
+
+  const TOKEN = "ab".repeat(16);
+  const TEXT = `pmux report ${"cd".repeat(16)}. Read '/s/w.report.md'. [pmux-eom-${TOKEN}]`;
+
+  /** A clock the injected sleep advances, so the 2 s poll runs instantly. */
+  function fakeClock() {
+    let t = 0;
+    return {
+      now: () => t,
+      sleep: async (ms: number) => {
+        t += ms;
+      },
+      elapsed: () => t,
+    };
+  }
+
+  interface FakePane {
+    calls: string[][];
+    /** The current `#{pane_in_mode}` answer. */
+    mode: string;
+    /** The current visible screen content. */
+    screen: string;
+  }
+
+  /**
+   * Stub the pane the verified input talks to: `display-message` answers
+   * `pane_in_mode`, `capture-pane` answers the visible screen, `send-keys`
+   * is recorded. `onCall` runs after each answer so a test can flip the
+   * mode or the screen mid-sequence.
+   */
+  function fakePane(hooks: { onCall?: (args: string[], pane: FakePane) => void } = {}): FakePane {
+    const pane: FakePane = { calls: [], mode: "0", screen: "" };
+    __setTmuxExecForTests__((args) => {
+      pane.calls.push(args);
+      // The hook runs before the answer so it can flip the mode or the
+      // screen the call itself answers with — or throw the call away.
+      hooks.onCall?.(args, pane);
+      if (args[0] === "display-message") {
+        assert.deepEqual(args, ["display-message", "-p", "-t", "%9", "#{pane_in_mode}"]);
+        return `${pane.mode}\n`;
+      }
+      if (args[0] === "capture-pane") {
+        // The visible pane only: a `-S` flag would read scrollback.
+        assert.deepEqual(args, ["capture-pane", "-p", "-t", "%9"]);
+        return pane.screen;
+      }
+      return "";
+    });
+    return pane;
+  }
+
+  /** Every `send-keys` call the stub recorded. */
+  function sentKeys(calls: string[][]): string[][] {
+    return calls.filter((args) => args[0] === "send-keys");
+  }
+
+  /**
+   * The only permitted inputs are the literal typing and the one Enter: no
+   * Escape, Ctrl-U or other editing key may ever reach the target pane.
+   */
+  function assertNoEditingKeys(calls: string[][]): void {
+    for (const args of sentKeys(calls)) {
+      const isTyping = args[3] === "-l";
+      const isEnter = args.length === 4 && args[3] === "Enter";
+      assert.ok(isTyping || isEnter, `editing key reached the pane: ${args.join(" ")}`);
+    }
+  }
+
+  it("refuses a pane in a mode without touching it", async () => {
+    const pane = fakePane();
+    pane.mode = "1";
+    const result = await verifiedAgentPrompt("%9", TEXT, TOKEN, fakeClock());
+    assert.equal(result.status, "not-submitted");
+    assert.equal(result.submitted, false);
+    assert.equal(result.enterAttempted, false);
+    // No capture, no input, no Enter.
+    assert.equal(pane.calls.length, 1);
+    assert.equal(pane.calls[0]![0], "display-message");
+  });
+
+  it("refuses when the token is already on the visible screen", async () => {
+    const pane = fakePane();
+    pane.screen = `old pointer [pmux-eom-${TOKEN}]`;
+    const result = await verifiedAgentPrompt("%9", TEXT, TOKEN, fakeClock());
+    assert.equal(result.status, "not-submitted");
+    assert.equal(sentKeys(pane.calls).length, 0);
+  });
+
+  it("types, polls once, rechecks and sends exactly one Enter", async () => {
+    const clock = fakeClock();
+    const pane = fakePane({
+      onCall: (args, p) => {
+        // The TUI echoes the typed line: the token appears with the text.
+        if (args[0] === "send-keys" && args.includes("-l")) p.screen = TEXT;
+      },
+    });
+    const result = await verifiedAgentPrompt("%9", TEXT, TOKEN, clock);
+    assert.equal(result.status, "submitted");
+    assert.equal(result.submitted, true);
+    assert.equal(result.enterAttempted, true);
+
+    const sequence = pane.calls.map((args) => args[0]);
+    assert.deepEqual(sequence, [
+      "display-message", // baseline mode
+      "capture-pane", // baseline screen
+      "send-keys", // the literal typing
+      "display-message", // poll: mode
+      "capture-pane", // poll: token seen
+      "display-message", // recheck: mode
+      "capture-pane", // recheck: token still there
+      "send-keys", // the one Enter
+    ]);
+    const keys = sentKeys(pane.calls);
+    assert.equal(keys.length, 2);
+    assert.deepEqual(keys[0], ["send-keys", "-t", "%9", "-l", TEXT]);
+    assert.deepEqual(keys[1], ["send-keys", "-t", "%9", "Enter"]);
+    assertNoEditingKeys(pane.calls);
+  });
+
+  it("returns not-submitted when the token never appears, after about 2 s", async () => {
+    const clock = fakeClock();
+    const sleeps: number[] = [];
+    const pane = fakePane();
+    const result = await verifiedAgentPrompt("%9", TEXT, TOKEN, {
+      now: clock.now,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        clock.sleep(ms);
+      },
+    });
+    assert.equal(result.status, "not-submitted");
+    assert.equal(result.enterAttempted, false);
+    // The typing went out, the Enter never did, and the poll gave up at the
+    // 2 s deadline.
+    const keys = sentKeys(pane.calls);
+    assert.equal(keys.length, 1);
+    assert.deepEqual(keys[0], ["send-keys", "-t", "%9", "-l", TEXT]);
+    assert.equal(clock.elapsed(), 2000);
+    // Every poll sleeps the 100 ms cadence design D4 names.
+    assert.ok(
+      sleeps.length > 0 && sleeps.every((ms) => ms === VERIFIED_PROMPT_POLL_MS),
+      `poll sleeps should all be ${VERIFIED_PROMPT_POLL_MS} ms, got ${sleeps.join(",")}`,
+    );
+    assertNoEditingKeys(pane.calls);
+  });
+
+  it("returns not-submitted when the pane enters a mode mid-poll, text left alone", async () => {
+    const clock = fakeClock();
+    let polls = 0;
+    const pane = fakePane({
+      onCall: (args, p) => {
+        if (args[0] === "display-message" && p.calls.length > 3) {
+          polls += 1;
+          if (polls === 2) p.mode = "1"; // enters copy mode after two polls
+        }
+      },
+    });
+    const result = await verifiedAgentPrompt("%9", TEXT, TOKEN, clock);
+    assert.equal(result.status, "not-submitted");
+    assert.equal(result.enterAttempted, false);
+    // The typed text stays: no Enter and no editing key follows the refusal.
+    assert.equal(sentKeys(pane.calls).length, 1);
+    assertNoEditingKeys(pane.calls);
+  });
+
+  it("returns not-submitted when the token leaves the screen at the recheck", async () => {
+    const clock = fakeClock();
+    let tokenSeen = false;
+    const pane = fakePane({
+      onCall: (args, p) => {
+        if (args[0] === "send-keys" && args.includes("-l")) p.screen = TEXT;
+        // The token shows during the poll, then scrolls off before Enter.
+        if (args[0] === "capture-pane" && p.screen === TEXT) {
+          if (tokenSeen) p.screen = "prompt>";
+          tokenSeen = true;
+        }
+      },
+    });
+    const result = await verifiedAgentPrompt("%9", TEXT, TOKEN, clock);
+    assert.equal(result.status, "not-submitted");
+    assert.equal(result.enterAttempted, false);
+    assert.equal(sentKeys(pane.calls).length, 1);
+    assertNoEditingKeys(pane.calls);
+  });
+
+  it("returns unknown when the Enter throws, and never retries it", async () => {
+    const clock = fakeClock();
+    const pane = fakePane({
+      onCall: (args, p) => {
+        if (args[0] === "send-keys" && args.includes("-l")) p.screen = TEXT;
+        if (args[0] === "send-keys" && args.includes("Enter")) {
+          throw new Error("can't find pane: %9");
+        }
+      },
+    });
+    const result = await verifiedAgentPrompt("%9", TEXT, TOKEN, clock);
+    assert.equal(result.status, "unknown");
+    assert.equal(result.submitted, false);
+    assert.equal(result.enterAttempted, true);
+    assert.match(result.error ?? "", /can't find pane/);
+    // Exactly one Enter was attempted; no post-Enter capture ran.
+    const enters = sentKeys(pane.calls).filter((args) => args[3] === "Enter");
+    assert.equal(enters.length, 1);
+    assert.equal(pane.calls.at(-1)![3], "Enter");
+    assertNoEditingKeys(pane.calls);
+  });
+
+  it("refuses cleanly when the baseline checks throw", async () => {
+    const clock = fakeClock();
+    const pane = fakePane({
+      onCall: (args) => {
+        if (args[0] === "display-message") throw new Error("can't find pane: %9");
+      },
+    });
+    const result = await verifiedAgentPrompt("%9", TEXT, TOKEN, clock);
+    assert.equal(result.status, "not-submitted");
+    assert.equal(result.enterAttempted, false);
+    assert.equal(sentKeys(pane.calls).length, 0);
+  });
+
+  it("refuses when the typing call throws, and never sends the Enter", async () => {
+    const clock = fakeClock();
+    const pane = fakePane({
+      onCall: (args) => {
+        if (args[0] === "send-keys" && args.includes("-l")) {
+          throw new Error("can't find pane: %9");
+        }
+      },
+    });
+    const result = await verifiedAgentPrompt("%9", TEXT, TOKEN, clock);
+    assert.equal(result.status, "not-submitted");
+    assert.equal(result.enterAttempted, false);
+    // The failed typing is the only send-keys call: no Enter followed it.
+    const keys = sentKeys(pane.calls);
+    assert.equal(keys.length, 1);
+    assert.deepEqual(keys[0], ["send-keys", "-t", "%9", "-l", TEXT]);
+    assertNoEditingKeys(pane.calls);
   });
 });
