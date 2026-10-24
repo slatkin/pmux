@@ -45,8 +45,6 @@ export interface StatusConfig {
   lineLimit: number;
   /** `notify.enabled` — turn-end notifications, default `true`. */
   notifyEnabled: boolean;
-  /** `notify.quietCancel` — record a user cancel without waking the parent, default `false`. */
-  quietCancel: boolean;
   /** `contextAlert` — subagent context alert, default off. */
   contextAlert: ContextAlertConfig;
 }
@@ -212,16 +210,11 @@ export function parseStatusConfig(rawConfig: unknown, source = "config.json"): S
   const enabled =
     status.enabled === undefined ? true : requireBoolean(status.enabled, source, "status.enabled");
 
-  // `notify` is optional too; `enabled` and `quietCancel` are defined today.
+  // `notify` is optional too; only `enabled` is defined today.
   const notify = config.notify === undefined ? {} : requireObject(config.notify, source, "notify");
-  rejectUnsupportedKeys(notify, ["enabled", "quietCancel"], source, "notify");
+  rejectUnsupportedKeys(notify, ["enabled"], source, "notify");
   const notifyEnabled =
     notify.enabled === undefined ? true : requireBoolean(notify.enabled, source, "notify.enabled");
-  // quiet-cancel D1: default `false` keeps the wake-on-cancel behavior.
-  const quietCancel =
-    notify.quietCancel === undefined
-      ? false
-      : requireBoolean(notify.quietCancel, source, "notify.quietCancel");
 
   const contextAlert = parseContextAlertConfig(config.contextAlert, source);
 
@@ -229,7 +222,6 @@ export function parseStatusConfig(rawConfig: unknown, source = "config.json"): S
     enabled,
     lineLimit: DEFAULT_STATUS_LINE_LIMIT,
     notifyEnabled,
-    quietCancel,
     contextAlert,
   };
 }

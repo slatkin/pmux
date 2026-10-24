@@ -140,12 +140,6 @@ function createPollQueue(override?: TmuxPoll) {
       assert.ok(options?.onCancel, "expected the supervisor to wire onCancel");
       options.onCancel({ reason: "cancelled", exitCode: 0 });
     },
-    /** Simulate one poll iteration's onTick (activity read + watchdog). */
-    tick(elapsed = 0) {
-      const options = pollOptions.at(-1);
-      assert.ok(options?.onTick, "expected the supervisor to wire onTick");
-      options.onTick(elapsed);
-    },
     finish(result: PollResult) {
       const resolve = pending.shift();
       assert.ok(resolve, "expected a pending poll");
@@ -159,8 +153,6 @@ interface SupervisorOptions {
   ui?: boolean;
   pollForExit?: TmuxPoll;
   onRunInPane?: (line: string) => void;
-  /** `notify.quietCancel` for the injected statusConfig. */
-  quietCancel?: boolean;
   /** Throw on the first message that matches, to exercise the watcher error path. */
   failSendOnce?: (message: SteerMessage) => boolean;
 }
@@ -170,7 +162,6 @@ function makeSupervisor(env: TestEnv, options: SupervisorOptions = {}) {
   const runs: Array<{ surface: string; line: string }> = [];
   const surfaces: Array<{ name: string; placement: unknown }> = [];
   const closed: string[] = [];
-  const panePrompts: Array<{ surface: string; text: string }> = [];
   const polls = createPollQueue(options.pollForExit);
   let failedSend = false;
   let nextPane = 24;
@@ -205,16 +196,12 @@ function makeSupervisor(env: TestEnv, options: SupervisorOptions = {}) {
       sendEscape: () => {},
       readScreen: () => "",
       pollForExit: polls.poll,
-      agentPrompt: (surface, text) => {
-        panePrompts.push({ surface, text });
-        return { submitted: true };
-      },
+      agentPrompt: () => ({ submitted: true }),
     },
     statusConfig: {
       enabled: true,
       lineLimit: DEFAULT_STATUS_LINE_LIMIT,
       notifyEnabled: false,
-      quietCancel: options.quietCancel ?? false,
       contextAlert: { enabled: false, threshold: { kind: "tokens", value: 200000 } },
     },
   });
@@ -224,7 +211,6 @@ function makeSupervisor(env: TestEnv, options: SupervisorOptions = {}) {
     runs,
     surfaces,
     closed,
-    panePrompts,
     polls,
     newSupervisor: (next: SupervisorOptions = {}) => makeSupervisor(env, next),
   };
@@ -278,31 +264,6 @@ function activeObservation(): Parameters<typeof observeStatus>[1] {
     activeSince: 5_000,
     activityLabel: "bash",
   } as Parameters<typeof observeStatus>[1];
-}
-
-/** Write one activity snapshot for a running child; `fields` override the base. */
-function writeActivityFile(
-  file: string,
-  runningChildId: string,
-  fields: Record<string, unknown> = {},
-): void {
-  writeFileSync(
-    file,
-    `${JSON.stringify({
-      version: 1,
-      runningChildId,
-      createdAt: 1_000,
-      updatedAt: Date.now(),
-      sequence: 1,
-      latestEvent: "turn_start",
-      phase: "active",
-      agentActive: true,
-      turnActive: true,
-      providerActive: false,
-      toolActive: false,
-      ...fields,
-    })}\n`,
-  );
 }
 
 function rosterChildren(env: TestEnv): unknown {
@@ -1243,158 +1204,6 @@ describe("supervisor watcher", () => {
 
       assert.equal(h.sent[2].message.customType, "pmux_result");
       await waitFor(() => h.supervisor.running().length === 0, "the run to leave the registry");
-    });
-  });
-
-  it("records the cancel without a turn when quietCancel is on", async () => {
-    await withHarness(
-      async (h, env) => {
-        writeAgentFile(
-          join(env.dir, "agent", "agents"),
-          "worker",
-          "model: test-model",
-          "You are a worker.",
-        );
-        const running = await h.supervisor.spawn(
-          { name: "Worker", task: "implement rows 5.x", agent: "worker" },
-          env.ctx,
-        );
-
-        h.polls.cancel();
-        await waitFor(() => h.sent.length === 1, "the quiet cancel message");
-
-        const { message, options } = h.sent[0];
-        assert.equal(message.customType, "pmux_cancel");
-        assert.deepEqual(options, { triggerTurn: false });
-        assert.match(
-          message.content,
-          /Sub-agent "Worker" was cancelled in its pane \(Escape\) after \d+s\./,
-        );
-        assert.equal(message.details?.sessionFile, running.sessionFile);
-        assert.equal(
-          h.supervisor.running().some((agent) => agent.id === running.id),
-          true,
-        );
-      },
-      { quietCancel: true },
-    );
-  });
-
-  it("does not nudge or finish a user-cancelled child while the mark stands", async () => {
-    await withHarness(async (h, env) => {
-      const running = await h.supervisor.spawn(
-        { name: "Worker", task: "", agent: "plain-role", interactive: false },
-        env.ctx,
-      );
-      const activityFile = running.activityFile as string;
-      const exitFile = `${running.sessionFile}.exit`;
-
-      // quiet-cancel D3: a stale `active` snapshot from before the cancel — the
-      // tick that set the mark must not read it as a fresh turn.
-      const before = Date.now() - 5_000;
-      writeActivityFile(activityFile, running.id, { updatedAt: before, activeSince: before });
-      h.polls.tick();
-      assert.equal(running.activity?.phase, "active");
-
-      h.polls.cancel();
-      await waitFor(() => h.sent.length === 1, "the cancel steer");
-
-      // The cancelled child then reports a long waiting stretch: no nudge,
-      // no fabricated done, however long the wait lasts.
-      const waitingSince = Date.now() - 120_000;
-      writeActivityFile(activityFile, running.id, {
-        sequence: 2,
-        latestEvent: "turn_end",
-        phase: "waiting",
-        agentActive: false,
-        turnActive: false,
-        waitingSince,
-      });
-      h.polls.tick();
-      assert.equal(running.userCancelled, true);
-      assert.equal(h.panePrompts.length, 0);
-      assert.equal(existsSync(exitFile), false);
-
-      // Even with the reminder budget already spent, no fabricated done.
-      running.idleWatch = { nudges: 2, stretchSince: waitingSince, lastNudgeAt: waitingSince };
-      h.polls.tick();
-      assert.equal(h.panePrompts.length, 0);
-      assert.equal(existsSync(exitFile), false);
-    });
-  });
-
-  it("still finishes a user-cancelled child whose activity stops reporting", async () => {
-    await withHarness(async (h, env) => {
-      const running = await h.supervisor.spawn(
-        { name: "Worker", task: "", agent: "plain-role", interactive: false },
-        env.ctx,
-      );
-      const exitFile = `${running.sessionFile}.exit`;
-
-      // No activity file at all: the read fails "missing" and never recovers.
-      h.polls.cancel();
-      await waitFor(() => h.sent.length === 1, "the cancel steer");
-      assert.equal(running.userCancelled, true);
-
-      const t0 = Date.now();
-      withMockedNow(t0, () => h.polls.tick());
-      withMockedNow(t0 + 181_000, () => h.polls.tick());
-
-      const sidecar = JSON.parse(readFileSync(exitFile, "utf8"));
-      assert.equal(sidecar.type, "error");
-      assert.match(sidecar.errorMessage, /stopped reporting/);
-    });
-  });
-
-  it("clears the cancel mark on fresh activity and resumes nudge duty", async () => {
-    await withHarness(async (h, env) => {
-      const running = await h.supervisor.spawn(
-        { name: "Worker", task: "", agent: "plain-role", interactive: false },
-        env.ctx,
-      );
-      const activityFile = running.activityFile as string;
-
-      h.polls.cancel();
-      await waitFor(() => h.sent.length === 1, "the cancel steer");
-
-      const waitingSince = Date.now() - 120_000;
-      writeActivityFile(activityFile, running.id, {
-        sequence: 2,
-        latestEvent: "turn_end",
-        phase: "waiting",
-        agentActive: false,
-        turnActive: false,
-        waitingSince,
-      });
-      h.polls.tick();
-      assert.equal(running.userCancelled, true);
-      assert.equal(h.panePrompts.length, 0);
-
-      // A new turn (the user typed in the pane) shows as a fresh `active` read
-      // and ends the suppression.
-      writeActivityFile(activityFile, running.id, {
-        sequence: 3,
-        latestEvent: "turn_start",
-        phase: "active",
-        agentActive: true,
-        turnActive: true,
-        activeSince: Date.now(),
-      });
-      h.polls.tick();
-      assert.equal(running.userCancelled, false);
-
-      // Back to a long waiting stretch, the watchdog owes normal duty again.
-      writeActivityFile(activityFile, running.id, {
-        sequence: 4,
-        latestEvent: "turn_end",
-        phase: "waiting",
-        agentActive: false,
-        turnActive: false,
-        waitingSince: Date.now() - 120_000,
-      });
-      h.polls.tick();
-      assert.equal(h.panePrompts.length, 1);
-      assert.equal(h.panePrompts[0].surface, running.surface);
     });
   });
 

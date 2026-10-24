@@ -8,8 +8,7 @@ reports back through files next to its session: a status file with live state
 (`working`, `idle`, `done`, `blocked`), a final report, and an exit sidecar the
 parent polls. The parent supervises the whole life of a child — spawn, message,
 interrupt, resume — and a watchdog finishes a stuck child instead of waiting
-forever (a child you cancelled stays parked until restarted or its pane dies).
-A pane outlives its child, so nothing is lost to inspection.
+forever. A pane outlives its child, so nothing is lost to inspection.
 
 Children get roles: the package bundles a scout, a worker, a reviewer, a
 visual tester and a self-driving Claude Code session. A role is just a

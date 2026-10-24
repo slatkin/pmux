@@ -495,7 +495,6 @@ describe("status.ts", () => {
       enabled: false,
       lineLimit: 4,
       notifyEnabled: true,
-      quietCancel: false,
       contextAlert: { enabled: false, threshold: { kind: "tokens", value: 200000 } },
     });
   });
@@ -507,21 +506,10 @@ describe("status.ts", () => {
     assert.equal(parseStatusConfig({ notify: {} }).notifyEnabled, true);
   });
 
-  it("parses the optional notify.quietCancel, default false", () => {
-    assert.equal(parseStatusConfig({}).quietCancel, false);
-    assert.equal(parseStatusConfig({ notify: {} }).quietCancel, false);
-    assert.equal(parseStatusConfig({ notify: { quietCancel: true } }).quietCancel, true);
-    assert.equal(parseStatusConfig({ notify: { quietCancel: false } }).quietCancel, false);
-  });
-
   it("rejects an invalid or unsupported notify block", () => {
     assert.throws(
       () => parseStatusConfig({ notify: { enabled: "yes" } }),
       /notify\.enabled must be a boolean/,
-    );
-    assert.throws(
-      () => parseStatusConfig({ notify: { quietCancel: "yes" } }),
-      /notify\.quietCancel must be a boolean/,
     );
     assert.throws(
       () => parseStatusConfig({ notify: { enabled: true, level: "error" } }),
@@ -538,7 +526,6 @@ describe("status.ts", () => {
       enabled: true,
       lineLimit: 4,
       notifyEnabled: true,
-      quietCancel: false,
       contextAlert: { enabled: false, threshold: { kind: "tokens", value: 200000 } },
     });
   });
@@ -554,7 +541,6 @@ describe("status.ts", () => {
         enabled: true,
         lineLimit: 4,
         notifyEnabled: true,
-        quietCancel: false,
         contextAlert: { enabled: false, threshold: { kind: "tokens", value: 200000 } },
       });
     });

@@ -236,8 +236,7 @@ An older install may have left a `config.json` at the package root. Reads honor 
     "enabled": true
   },
   "notify": {
-    "enabled": true,
-    "quietCancel": false
+    "enabled": true
   },
   "contextAlert": {
     "enabled": false,
@@ -252,8 +251,6 @@ Git ignores `config.json`. Local overrides stay uncommitted.
 `"contextAlert.enabled"` turns on the context alert. It defaults to `false`. When it is on, a child whose context usage reaches `"contextAlert.threshold"` gets a steer message that tells it to stop the task, commit the finished work or list the uncommitted changes, and end the session with `pmux_done` and a handoff. The threshold is a positive integer token count, or a percentage of the context window written as a string such as `"80%"`. It defaults to `200000` tokens.
 
 `"notify.enabled"` controls the turn-end notification (see [Turn-end notification](#turn-end-notification)). It defaults to `true`. Set it to `false` if you do not need a status-line notification when an unfocused pane ends a turn.
-
-`"notify.quietCancel"` controls whether a user cancel (Escape in the child's pane, or `pmux_interrupt`) wakes the parent. It defaults to `false`, which steers the parent to ask how to proceed. Set it to `true` when you cancel in order to keep driving yourself: the same cancel message is still appended to the parent's session — visible in the transcript and in context for the parent's next turn — but no turn is triggered. Either way, a cancelled child is exempt from the idle watchdog's nudge and finish arms until it starts work again (see [Interrupting a running subagent](#interrupting-a-running-subagent)).
 
 `"surface"` controls where children open. The role's `surface:` frontmatter wins over this default. `"pane"` (default) places the child automatically in your window: pmux splits your newest living child pane, or your own pane when you have none, side by side when that pane is at least twice as wide as it is tall and stacked below otherwise. `"tab"` gives it its own workspace tab. The legacy values `"right"` and `"down"` are still accepted and mean `"pane"`. Change it live with `/pmux-surface pane|tab`.
 
@@ -299,7 +296,7 @@ pmux_interrupt({ id: "abcd1234" });
 pmux_interrupt({ name: "Scout" });
 ```
 
-This sends Escape to the child pane and cancels the active model turn. The session stays alive. The pane, the session file, and the background polling all stay intact. After the interrupt, the widget moves the child back to `waiting` at once and ignores stale pre-interrupt snapshots. If the child starts work later, newer snapshots return it to `active`. Completion, failure, and `caller_ping` still flow normally. A pi parent also learns of the cancel: the child's aborted turn writes the `cancelled` `.exit` sidecar, and the parent gets one message per cancel that says the session is still open and to ask the user how to proceed — a steer that triggers a turn, or a quiet append with `notify.quietCancel` (see [Configuration](#configuration)). A cancelled non-interactive child is no longer nudged or finished by the idle watchdog: it stays registered until it is restarted or its pane dies, and `pmux_message` or typing in its pane restarts it. The run stays registered, so a later completion still reports. This is a turn-level interrupt. It does not terminate a session.
+This sends Escape to the child pane and cancels the active model turn. The session stays alive. The pane, the session file, and the background polling all stay intact. After the interrupt, the widget moves the child back to `waiting` at once and ignores stale pre-interrupt snapshots. If the child starts work later, newer snapshots return it to `active`. Completion, failure, and `caller_ping` still flow normally. A pi parent also learns of the cancel: the child's aborted turn writes the `cancelled` `.exit` sidecar, and the parent gets one steer per cancel that says the session is still open and to ask the user how to proceed. The run stays registered, so a later completion still reports. This is a turn-level interrupt. It does not terminate a session.
 
 > **Note:** It supports only Pi-backed children. A Claude-backed run returns an error.
 
@@ -485,7 +482,7 @@ Configure the nudge with environment variables (read by the child at launch):
 | `PI_PMUX_NUDGE_DELAY_MS` | `5000`  | Delay before the reminder (minimum 1000) |
 | `PI_PMUX_NUDGE_DISABLE`  | unset   | Set to `1` to disable the nudge entirely |
 
-Parent-side idle watchdog. The child nudge depends on the child and the model, so the parent backs it up. For non-interactive children, if the child activity file has said `waiting` (turn ended) for 30 seconds without the session exiting, the parent types a reminder into the pane itself — the same reminder text, which lives in `pi-extension/pmux/nudge.ts` so the two copies cannot drift apart. After two such reminders, if the child still waits another 30 seconds, the parent finishes it as if `pmux_done` had been called. The last assistant message becomes the result, and the pane closes. The parent never touches interactive children, and it skips this arm entirely for a user-cancelled child (see [Interrupting a running subagent](#interrupting-a-running-subagent)) — the reminder would restart the turn the user aborted. The timings live in `pi-extension/pmux/idle-watchdog.ts`.
+Parent-side idle watchdog. The child nudge depends on the child and the model, so the parent backs it up. For non-interactive children, if the child activity file has said `waiting` (turn ended) for 30 seconds without the session exiting, the parent types a reminder into the pane itself — the same reminder text, which lives in `pi-extension/pmux/nudge.ts` so the two copies cannot drift apart. After two such reminders, if the child still waits another 30 seconds, the parent finishes it as if `pmux_done` had been called. The last assistant message becomes the result, and the pane closes. The parent never touches interactive children. The timings live in `pi-extension/pmux/idle-watchdog.ts`.
 
 What `auto-exit: true` does: it ends the session when the turn of the agent completes normally (see above), and it shapes defaults:
 
