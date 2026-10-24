@@ -2,7 +2,7 @@
 
 ## 1. Report artifacts
 
-- [ ] 1.1 Add `pi-extension/pmux/report-artifact.ts`: 32-hex report IDs,
+- [x] 1.1 Add `pi-extension/pmux/report-artifact.ts`: 32-hex report IDs,
   `<session>.<id>.report.md` naming, the atomic tmp+rename write whose
   temporary name also ends in `.report.md`, and pointer construction
   with shell-quoted paths and the `pmux-eom-<token>` tail (D2, D3).
@@ -12,12 +12,12 @@
 
 ## 2. Event log
 
-- [ ] 2.1 Extend `pi-extension/pmux/report-receipt.ts` into the event
+- [x] 2.1 Extend `pi-extension/pmux/report-receipt.ts` into the event
   log: the `report`, `notification` and `ack` record writers and a
   state reader that returns report registrations, notifications and
   acked IDs per session (D5). Kindless lines parse as legacy
   notifications; malformed lines and unknown kinds are skipped.
-- [ ] 2.2 Keep `countReportsTo` counting kindless lines only, so a new
+- [x] 2.2 Keep `countReportsTo` counting kindless lines only, so a new
   `report` registration can never pass as a legacy delivery (D5).
   Verify with tests.
 
