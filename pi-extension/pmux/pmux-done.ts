@@ -43,6 +43,7 @@ import {
   exitSidecarPath,
   readExitSidecar,
   removeExitSidecar,
+  takeInterruptMarker,
   writeExitSidecar,
 } from "./exit-sidecar.ts";
 import { COMPLETION_NUDGE_TEXT } from "./nudge.ts";
@@ -345,10 +346,21 @@ export default function (pi: ExtensionAPI) {
    * message-level `didUserAbortTurn` check can miss. Read again at
    * `session_shutdown` to restore a consumed cancel notice. */
   let lastRunAborted = false;
+  /** Set at `agent_end` when the parent's interrupt marker was there: the
+   * abort came from `pmux_interrupt`, so the session stays open (D3). */
+  let parentInterrupted = false;
 
   /** Best-effort status write; a failed write never blocks a turn or shutdown. */
   function writeStatus(status: ChildStatus, message?: string): void {
     if (childEnv.sessionFile) writeChildStatus(childEnv.sessionFile, status, message);
+  }
+
+  /** A user abort ends the child; the parent is not woken for it (D1, D2). */
+  function endAsCancelled(sessionFile: string, ctx: { shutdown(): void }): void {
+    clearNudgeTimer();
+    writeStatus("done", "cancelled");
+    writeExitSidecar(sessionFile, { type: "cancelled" });
+    ctx.shutdown();
   }
 
   // Show widget + status bar on session start
@@ -394,6 +406,10 @@ export default function (pi: ExtensionAPI) {
     if (sessionFile && readExitSidecar(sessionFile)?.type === "cancelled") {
       removeExitSidecar(sessionFile);
     }
+    // A marker from an interrupt that found the child idle aborted nothing;
+    // it must not exempt a later user abort (D3).
+    if (sessionFile) takeInterruptMarker(sessionFile);
+    parentInterrupted = false;
     // Agent has started a new generation cycle — clear any pending nudge.
     userInputAfterAgentEnd = false;
     clearNudgeTimer();
@@ -409,6 +425,9 @@ export default function (pi: ExtensionAPI) {
     // assistant message, mistaking the crash for a successful completion.
     const errorInfo = findLatestAssistantError(messages);
     const sessionFile = childEnv.sessionFile;
+    // Taken on every agent end, so a marker never outlives the run it was
+    // written for (D3).
+    parentInterrupted = sessionFile ? takeInterruptMarker(sessionFile) : false;
     if (errorInfo && sessionFile) {
       writeStatus("blocked", errorInfo.errorMessage);
       try {
@@ -429,19 +448,19 @@ export default function (pi: ExtensionAPI) {
       return;
     }
 
+    // A user-aborted turn ends the child as cancelled (D1). An abort from
+    // the parent's `pmux_interrupt` falls through and stays open; the nudge
+    // check below clears any pending nudge for it instead of scheduling one.
+    if (sessionFile && !parentInterrupted && didUserAbortTurn(messages)) {
+      recorder.agentEndDone();
+      endAsCancelled(sessionFile, ctx);
+      return;
+    }
+
     recorder.agentEndWaiting();
     // Only input arriving after this point counts as a takeover; input that
     // landed mid-run (e.g. pmux_message) must not silence the nudge.
     userInputAfterAgentEnd = false;
-
-    // A user-aborted turn is a notification, not an exit: the session stays
-    // open for inspection or another prompt, and the sidecar tells the parent
-    // the user cancelled rather than that the child failed (D1). The flow
-    // still falls through to the nudge check, which clears any pending nudge
-    // for an aborted turn instead of scheduling one.
-    if (sessionFile && didUserAbortTurn(messages)) {
-      writeExitSidecar(sessionFile, { type: "cancelled" });
-    }
 
     // Restored auto-exit: an auto-exit agent whose turn ended normally exits
     // itself instead of waiting on the nudge. A taken-over session stays open
@@ -471,20 +490,19 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("agent_settled", (event) => {
+  pi.on("agent_settled", (event, ctx) => {
     // Backstop for the agent_end gate: an abort that lands between tool
     // calls, or before the next model call starts, leaves no assistant
     // message marked `aborted`, so `didUserAbortTurn` sees nothing and the
-    // parent hears "crashed" when the user then quits. `agent_settled`
-    // carries the run-level abort flag instead. Write only when the settle
-    // left no sidecar at all — never clobber a terminal payload from the
-    // same settle, and the `cancelled` agent_end may have written needs no
-    // second copy.
+    // child would never end. `agent_settled` carries the run-level abort
+    // flag instead. End only when the settle left no sidecar at all — never
+    // clobber a terminal payload from the same settle, and an agent_end that
+    // already ended the child as cancelled needs no second pass.
     lastRunAborted = (event as { aborted?: boolean } | undefined)?.aborted === true;
     const sessionFile = childEnv.sessionFile;
-    if (!sessionFile || !lastRunAborted) return;
+    if (!sessionFile || !lastRunAborted || parentInterrupted) return;
     if (readExitSidecar(sessionFile) === null) {
-      writeExitSidecar(sessionFile, { type: "cancelled" });
+      endAsCancelled(sessionFile, ctx);
     }
   });
 

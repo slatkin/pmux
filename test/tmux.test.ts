@@ -7,7 +7,7 @@
 import "./host-env.ts";
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -26,15 +26,6 @@ import {
   splitPane,
 } from "../pi-extension/pmux/tmux.ts";
 import { argValue, placementRow } from "./tmux-fakes.ts";
-
-/** Wait until a predicate is true, failing after a bounded number of polls. */
-async function waitFor(predicate: () => boolean, label: string): Promise<void> {
-  for (let i = 0; i < 200; i++) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
 
 /** Record every tmux call and answer with `reply`. */
 function stub(reply: (args: string[]) => string): string[][] {
@@ -466,51 +457,18 @@ describe("tmux backend", () => {
     }
   });
 
-  it("notifies a cancel once per sidecar and keeps polling for a real completion", async () => {
+  it("ends the poll on a cancelled sidecar", async () => {
     stub(() => "");
     const dir = mkdtempSync(join(tmpdir(), "pmux-tmux-"));
     const sessionFile = join(dir, "child.jsonl");
-    const cancels: string[] = [];
     writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "cancelled" }));
     try {
-      const pending = pollForExit("%9", new AbortController().signal, {
+      const result = await pollForExit("%9", new AbortController().signal, {
         interval: 10,
         sessionFile,
-        onCancel: (result) => cancels.push(result.reason),
       });
-
-      await waitFor(() => cancels.length === 1, "the first cancel notice");
-      assert.deepEqual(cancels, ["cancelled"]);
-      // The notice consumed the file, so no second notice for it.
-      assert.equal(existsSync(`${sessionFile}.exit`), false);
-
-      // A later abort writes a new sidecar and notifies again.
-      writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "cancelled" }));
-      await waitFor(() => cancels.length === 2, "the second cancel notice");
-      assert.deepEqual(cancels, ["cancelled", "cancelled"]);
-
-      writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
-      const result = await pending;
-      assert.equal(result.reason, "done");
+      assert.equal(result.reason, "cancelled");
       assert.equal(result.exitCode, 0);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps polling on a cancel when no onCancel handler is wired", async () => {
-    stub(() => "");
-    const dir = mkdtempSync(join(tmpdir(), "pmux-tmux-"));
-    const sessionFile = join(dir, "child.jsonl");
-    writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "cancelled" }));
-    try {
-      const pending = pollForExit("%9", new AbortController().signal, {
-        interval: 10,
-        sessionFile,
-      });
-      writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "handoff", message: "Left: B" }));
-      const result = await pending;
-      assert.equal(result.reason, "handoff");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

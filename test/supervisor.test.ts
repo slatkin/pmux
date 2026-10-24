@@ -134,12 +134,6 @@ function createPollQueue(override?: TmuxPoll) {
   return {
     poll,
     signals,
-    /** Simulate the poll reading one `cancelled` sidecar. */
-    cancel() {
-      const options = pollOptions.at(-1);
-      assert.ok(options?.onCancel, "expected the supervisor to wire onCancel");
-      options.onCancel({ reason: "cancelled", exitCode: 0 });
-    },
     finish(result: PollResult) {
       const resolve = pending.shift();
       assert.ok(resolve, "expected a pending poll");
@@ -1153,7 +1147,7 @@ describe("supervisor watcher", () => {
     });
   });
 
-  it("notifies a cancel without ending the run, and still completes on a later done", async () => {
+  it("ends a cancelled run quietly: the pane closes and the parent gets no message", async () => {
     await withHarness(async (h, env) => {
       writeAgentFile(
         join(env.dir, "agent", "agents"),
@@ -1166,44 +1160,11 @@ describe("supervisor watcher", () => {
         env.ctx,
       );
 
-      h.polls.cancel();
-      await waitFor(() => h.sent.length === 1, "the cancel steer");
-
-      const { message, options } = h.sent[0];
-      assert.equal(message.customType, "pmux_cancel");
-      assert.deepEqual(options, { triggerTurn: true, deliverAs: "steer" });
-      assert.match(
-        message.content,
-        /Sub-agent "Worker" was cancelled in its pane \(Escape\) after \d+s\./,
-      );
-      assert.match(
-        message.content,
-        /The session is still open and the child is still registered\./,
-      );
-      assert.match(
-        message.content,
-        /ask the user how to proceed before resuming with `pmux_resume` or spawning a replacement/,
-      );
-      assert.equal(message.details?.name, "Worker");
-      assert.equal(message.details?.task, "implement rows 5.x");
-      assert.equal(message.details?.agent, "worker");
-      assert.equal(message.details?.sessionFile, running.sessionFile);
-      assert.equal(
-        h.supervisor.running().some((agent) => agent.id === running.id),
-        true,
-      );
-
-      // Each cancel notifies once; the run keeps watching.
-      h.polls.cancel();
-      await waitFor(() => h.sent.length === 2, "the second cancel steer");
-      assert.equal(h.sent[1].message.customType, "pmux_cancel");
-
-      writePiSession(running.sessionFile);
-      h.polls.finish({ reason: "done", exitCode: 0 });
-      await waitFor(() => h.sent.length === 3, "the completion steer");
-
-      assert.equal(h.sent[2].message.customType, "pmux_result");
+      h.polls.finish({ reason: "cancelled", exitCode: 0 });
       await waitFor(() => h.supervisor.running().length === 0, "the run to leave the registry");
+
+      assert.deepEqual(h.closed, [running.surface]);
+      assert.deepEqual(h.sent, []);
     });
   });
 

@@ -2,9 +2,9 @@
  * The `.exit` sidecar protocol — host independent.
  *
  * A child writes `<session file>.exit` when it finishes (done, ping, handoff
- * or error). A child whose turn the user aborted also writes a `cancelled`
- * sidecar, which is a notification rather than a completion: the session is
- * still open (report-user-cancel D1). The parent polls that file, so the
+ * or error). A child whose turn the user aborted writes a `cancelled` sidecar
+ * and exits; no parent is woken for it (quiet-cancel-exit D1, D2). The parent
+ * polls that file, so the
  * completion channel does not depend on the terminal host. Both backends read
  * it through this module so they decode a payload the same way.
  */
@@ -106,5 +106,34 @@ export function removeExitSidecar(sessionFile: string): void {
     rmSync(exitSidecarPath(sessionFile), { force: true });
   } catch {
     // Best effort: a stale sidecar only costs one poll cycle.
+  }
+}
+
+/** The interrupt marker next to a session file (quiet-cancel-exit D3). */
+export function interruptMarkerPath(sessionFile: string): string {
+  return `${sessionFile}.interrupt`;
+}
+
+/**
+ * Mark the next abort as the parent's `pmux_interrupt`, so the child stays
+ * open instead of ending as cancelled. Never throws: without the marker the
+ * interrupt ends the child as a user cancel would.
+ */
+export function writeInterruptMarker(sessionFile: string): boolean {
+  try {
+    writeFileSync(interruptMarkerPath(sessionFile), "");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove the interrupt marker and say whether it was there. Never throws. */
+export function takeInterruptMarker(sessionFile: string): boolean {
+  try {
+    rmSync(interruptMarkerPath(sessionFile));
+    return true;
+  } catch {
+    return false;
   }
 }

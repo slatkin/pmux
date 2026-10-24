@@ -703,6 +703,19 @@ describe("runSpec close on done", () => {
     });
   });
 
+  it("closes the pane and wakes no one for a cancelled sidecar", async () => {
+    await withTempDirAsync(async (dir) => {
+      const result = await runStubCase(dir, {
+        spec: { parent: "%12", report: "send", closeOnDone: { graceMs: 5000 } },
+        env: { PI_STUB_EXIT_BODY: '{"type":"cancelled"}' },
+      });
+      assert.deepEqual(result.woken, []);
+      assert.deepEqual(result.sleptMs, [5000]);
+      assert.deepEqual(result.closedPanes, ["%77"]);
+      assert.equal(result.sidecar, '{"type":"cancelled"}');
+    });
+  });
+
   it("leaves the pane open for a malformed sidecar", async () => {
     await withTempDirAsync(async (dir) => {
       const result = await runStubCase(dir, {

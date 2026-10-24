@@ -176,8 +176,13 @@ export async function runSpec(
 
   // A send-mode child that exits without a report leaves the parent asleep
   // forever; wake it with the exit state so it can read the session. A ping
-  // sidecar carries the question, so the wake-up quotes it directly.
-  if (parent !== undefined && countReportsTo(spec.sessionFile, parent) <= reportsBefore) {
+  // sidecar carries the question, so the wake-up quotes it directly. A user
+  // cancel wakes no one (quiet-cancel-exit D2).
+  if (
+    parent !== undefined &&
+    sidecar?.type !== "cancelled" &&
+    countReportsTo(spec.sessionFile, parent) <= reportsBefore
+  ) {
     const cliHint = deps.cliPath ?? "<pmux-cli>";
     let wake: string;
     if (sidecar?.type === "ping" && typeof sidecar.message === "string") {
@@ -202,9 +207,10 @@ export async function runSpec(
     // Read the sidecar directly rather than through `interpretExitSidecar`:
     // that function maps unknown payloads to `done`, which would close panes
     // on malformed sidecars. `handoff` closes like `done` — the child ended
-    // cleanly and its result lives in the sidecar and its session file.
+    // cleanly and its result lives in the sidecar and its session file. So
+    // does `cancelled`: the user stopped the child (quiet-cancel-exit D4).
     const sidecarType = sidecar?.type;
-    if (sidecarType === "done" || sidecarType === "handoff") {
+    if (sidecarType === "done" || sidecarType === "handoff" || sidecarType === "cancelled") {
       if (spec.closeOnDone.graceMs > 0) await sleep(spec.closeOnDone.graceMs);
       closePane(pane);
     }

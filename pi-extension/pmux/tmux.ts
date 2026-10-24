@@ -465,9 +465,8 @@ export async function pushNotificationAsync(text: string): Promise<void> {
 /**
  * Poll until the subagent exits. The `.exit` sidecar is the primary signal
  * (host independent); the terminal sentinel is the fallback for a child that
- * died without writing one. A `cancelled` sidecar is a notification, not an
- * exit: `onCancel` reports it and the poll keeps watching (report-user-cancel
- * D4).
+ * died without writing one. A `cancelled` sidecar ends the poll like any
+ * other: the user stopped the child (quiet-cancel-exit D2).
  */
 export async function pollForExit(
   surface: string,
@@ -477,29 +476,18 @@ export async function pollForExit(
     sessionFile?: string;
     sentinelFile?: string;
     onTick?: (elapsed: number) => void;
-    onCancel?: (result: PollResult) => void;
     maySkipScreenScan?: () => boolean;
   },
 ): Promise<PollResult> {
   const start = Date.now();
 
-  /**
-   * Read and consume the sidecar. A completion is returned; a `cancelled`
-   * payload is handed to `onCancel` and leaves the poll running. Consuming
-   * the file is the de-duplication: each cancel notifies exactly once, and a
-   * later abort writes a new file that notifies again.
-   */
+  /** Read and consume the sidecar. */
   const readSidecar = (): PollResult | null => {
     if (!options.sessionFile) return null;
     const data = readExitSidecar(options.sessionFile);
     if (data === null) return null;
     rmSync(exitSidecarPath(options.sessionFile), { force: true });
-    const result = interpretExitSidecar(data);
-    if (result.reason === "cancelled") {
-      options.onCancel?.(result);
-      return null;
-    }
-    return result;
+    return interpretExitSidecar(data);
   };
 
   for (;;) {

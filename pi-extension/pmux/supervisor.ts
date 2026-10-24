@@ -24,7 +24,12 @@ import {
   runInPane,
   sendEscape,
 } from "./tmux.ts";
-import { exitSidecarPath, removeExitSidecar, type PollResult } from "./exit-sidecar.ts";
+import {
+  exitSidecarPath,
+  removeExitSidecar,
+  writeInterruptMarker,
+  type PollResult,
+} from "./exit-sidecar.ts";
 import { removeChildStatus } from "./status-file.ts";
 import { resolvePlacement, type SurfaceDefault } from "./placement.ts";
 import { type AgentDefaults, type SubagentSessionMode } from "./agent-defs.ts";
@@ -199,6 +204,8 @@ export interface SubagentResult {
   ping?: { name: string; message: string };
   /** Handoff text when the child ended with a `handoff` sidecar (D5) */
   handoff?: { message: string };
+  /** The user stopped the child (`cancelled` sidecar); nothing is delivered. */
+  userCancelled?: boolean;
 }
 
 /**
@@ -765,6 +772,9 @@ export function requestSubagentInterrupt(
   running: RunningSubagent,
   sendEscapeKey: (surface: string) => void,
 ): { ok: true } | { error: string } {
+  // The marker tells the child the abort is the parent's, so it stays open
+  // instead of ending as a user cancel (quiet-cancel-exit D3).
+  writeInterruptMarker(running.sessionFile);
   try {
     sendEscapeKey(running.surface);
     return { ok: true };
@@ -1473,11 +1483,6 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
         interval: 1000,
         sessionFile,
         sentinelFile: running.sentinelFile,
-        // A cancel is a notification, not an exit: report it and keep watching
-        // for the child's real completion (report-user-cancel D4).
-        onCancel() {
-          deliverSubagentCancel(running, send);
-        },
         // The screen read is only the crash fallback; while the child's activity
         // snapshot is demonstrably fresh, skip the per-second process spawn.
         // Claude-backed runs have no snapshots, so they keep scanning.
@@ -1512,6 +1517,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
         elapsed,
         ...extracted,
         ...(afterExit.claudeSessionId ? { claudeSessionId: afterExit.claudeSessionId } : {}),
+        ...(result.reason === "cancelled" ? { userCancelled: true } : {}),
       };
     } catch (err: any) {
       releaseRun(running);
@@ -1620,34 +1626,6 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     );
   }
 
-  /**
-   * Tell the parent the user aborted a child's turn without ending its run.
-   * The child stays registered so a later completion still reports; the
-   * wording steers the parent toward asking the user how to proceed rather
-   * than toward recovering a failure (report-user-cancel D4).
-   */
-  function deliverSubagentCancel(running: RunningSubagent, send: SendFn): void {
-    const elapsed = Math.floor((Date.now() - running.startTime) / 1000);
-    send(
-      {
-        customType: "pmux_cancel",
-        content:
-          `Sub-agent "${running.name}" was cancelled in its pane (Escape) after ${formatElapsed(elapsed)}. ` +
-          "The session is still open and the child is still registered. " +
-          "The user interrupted it deliberately — ask the user how to proceed before " +
-          "resuming with `pmux_resume` or spawning a replacement.",
-        display: true,
-        details: {
-          name: running.name,
-          task: running.task,
-          agent: running.agent,
-          sessionFile: running.sessionFile,
-        },
-      },
-      { triggerTurn: true, deliverAs: "steer" },
-    );
-  }
-
   /** Report a watcher failure to the parent; see deliverSubagentCompletion. */
   function deliverSubagentError(running: RunningSubagent, err: unknown, send: SendFn): void {
     const message = (err as { message?: string } | undefined)?.message;
@@ -1682,6 +1660,12 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     // Fire-and-forget: start watching in background
     watchSubagent(running, watcherAbort.signal, deps.send)
       .then((result) => {
+        // A user cancel ends the run quietly: no message, no turn
+        // (quiet-cancel-exit D2).
+        if (result.userCancelled) {
+          updateWidget();
+          return;
+        }
         deliverSubagentCompletion(running, result, deps.send);
       })
       .catch((err) => {

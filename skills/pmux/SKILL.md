@@ -36,9 +36,9 @@ reach you — see [External orchestrators (Claude Code)](#external-orchestrators
 - **The completion signal** = the `<session>.exit` sidecar file, written by
   `pmux_done` when the child ends: `{"type":"done"}`,
   `{"type":"handoff","message":...}`, `{"type":"ping",...}` or
-  `{"type":"error",...}`. A user who aborts the child's turn with Escape
-  writes `{"type":"cancelled"}` instead; that is a notification, not a
-  completion — the session stays open (see the sidecar wait). The pane-side
+  `{"type":"error",...}`. A user who stops the child with Escape
+  writes `{"type":"cancelled"}` instead: the child exits, its pane closes,
+  and no one is woken (see the sidecar wait). The pane-side
   wrapper also writes an `error` sidecar
   when the child exits without one (a crash); that one carries
   `"source":"wrapper"` and the exit code. You read the exit after every wait,
@@ -147,16 +147,10 @@ with user consent).
      beside its session file (one from an older version) cannot be
      resumed — `resume` exits 1 and its message names `start`, so run
      `start` again. The pane stays open until you close it.
-   - `cancelled` → the user aborted the child's turn in its pane (Escape).
-     Nothing failed and the session is still open; the child is not
-     finished, so do not treat this as a result. The child removes the
-     cancelled sidecar when a new turn starts, so a re-issued
-     `wait --signal sidecar` waits for the next, real completion. A
-     `wait --signal status` does not return on a cancel, because no
-     status-file entry is written and the session stays open — use the
-     sidecar wait when you want the cancel promptly. The pane stays open.
-     Ask the user how to proceed, or resume the session to let the child
-     continue, before spawning a replacement.
+   - `cancelled` → the user stopped the child in its pane (Escape). The
+     child has exited and its pane closes after the grace period; there is
+     no result. A `wait --signal status` returns `done` with the message
+     `cancelled`. Do not resume or replace the child unless the user asks.
    - `{"sidecar":null}` (timeout) + `__SUBAGENT_DONE_<n>__` at the tail of
      the child's pane → the wrapper itself was killed, so it wrote no
      sidecar (a child crash writes an `error` sidecar, which the wait
@@ -245,16 +239,11 @@ your pane.
      the wake-up text the wrapper sent you. Answer it with a `resume`
      (see [While it runs / after](#while-it-runs--after)). The pane stays
      open until you close it.
-   - `cancelled` → the user aborted the child's turn in its pane (Escape).
-     Nothing failed, no report is coming, and the session is still open.
-     The child removes the cancelled sidecar when a new turn starts, so
-     leave the file alone: a re-issued `wait --signal sidecar` then waits
-     for the real completion. A `wait --signal status` does not return on
-     a cancel, because no status-file entry is written. The pane stays
-     open. Answer with a `resume` (see
-     [While it runs / after](#while-it-runs--after)) when the user wants
-     the child to continue, or ask the user how to proceed before
-     spawning a replacement.
+   - `cancelled` → the user stopped the child in its pane (Escape). The
+     child has exited, its pane closes, no report is coming, and the
+     wrapper does not wake you. Do not resume or replace the child unless
+     the user asks; to continue it, use a `resume` (see
+     [While it runs / after](#while-it-runs--after)).
    - No sidecar at all (timeout) and `__SUBAGENT_DONE_<n>__` at the tail of
      the child's pane → the wrapper itself was killed, so the child wrote
      no sidecar. The pane stays open. Read the last assistant message and
@@ -265,7 +254,8 @@ The wrapper also wakes you when a child exits without sending a report: it
 types `<child> <state> without sending a report. Read its last message: node
 <cli> last-message --session <session>` into your pane, where `<state>` is
 the sidecar type, or `exited` or `crashed (code <n>)` when no sidecar was
-written. A `ping` is quoted as `<child> pinged: <message>`. A child that
+written. A `ping` is quoted as `<child> pinged: <message>`. A `cancelled`
+child sends no wake-up: the user stopped it and is in control. A child that
 ignored its footer therefore still wakes you.
 
 A follow-up (a recheck, or the answer to the child's question) always runs
