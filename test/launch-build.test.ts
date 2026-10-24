@@ -64,9 +64,10 @@ Plain text printed in your own pane is never seen. The only way to reach it is b
 If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of this before you stop:
 1. Finish the task.
 2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
-   This wakes the orchestrator with your report; without it, it only learns that you exited.
-   The text may be long, contain quotes or span lines: read it from a file into the argument if you like. A line break arrives as the two characters \\n, so the orchestrator still reads one message.
-   The command prints one confirmation line — the target pane, the size of the text, the receipt file. That line is the delivery receipt. Do not send anything else to the parent to check whether the report arrived; a second message only gives the parent something to answer.
+   The text may be long, contain quotes or span lines: read it into the argument from a file if you like. A line break arrives as the two characters \\n, so the orchestrator still reads one message.
+   Send writes the report to a durable file and types only a one-line pointer naming it into the parent's pane. It prints one result line: sent:true means the pointer was submitted to the parent's pane, acknowledged:true means the orchestrator read the report file, and the line is not a delivery receipt.
+   On sent:false, call the pmux_done tool without improvising retries.
+   On acknowledged:false, the orchestrator is busy: do not resend the report and do not send anything else to check, because the run wrapper re-delivers an unacknowledged report at exit.
 3. Then call the pmux_done tool to close your session.
 
 If you are blocked, send your question with the same command and stop. The session closes; the parent resumes it with the answer. Do not reach the parent any other way.
@@ -168,23 +169,29 @@ describe("external parent contact (design D3)", () => {
         baseRequest(join(dir, "send"), externalContact({ report: "send", closeGraceMs: 0 })),
       );
 
-      for (const spec of [last, send]) {
-        assert.deepEqual(spec.env, {
-          PI_PMUX_NAME: "Worker",
-          PI_PMUX_AGENT: "worker",
-          PI_PMUX_SESSION: SESSION_FILE,
-          PI_PMUX_ID: "abcd1234",
-          PI_PMUX_ACTIVITY_FILE: ACTIVITY_FILE,
-          PI_PMUX_EXTERNAL_PARENT: "1",
-          PI_PMUX_AUTO_EXIT: "1",
-          PI_DENY_TOOLS: "claude",
-          PI_SUBAGENT_DEPTH: "1",
-          PI_BLACKHOLE_SUBAGENT_MARKERS: "PI_PMUX_SESSION",
-        });
-        assert.equal(spec.command, "pi");
-        assert.equal(spec.name, "Worker");
-        assert.equal(spec.cwd, "/repo");
-      }
+      const sharedEnv = {
+        PI_PMUX_NAME: "Worker",
+        PI_PMUX_AGENT: "worker",
+        PI_PMUX_SESSION: SESSION_FILE,
+        PI_PMUX_ID: "abcd1234",
+        PI_PMUX_ACTIVITY_FILE: ACTIVITY_FILE,
+        PI_PMUX_EXTERNAL_PARENT: "1",
+        PI_PMUX_AUTO_EXIT: "1",
+        PI_DENY_TOOLS: "claude",
+        PI_SUBAGENT_DEPTH: "1",
+        PI_BLACKHOLE_SUBAGENT_MARKERS: "PI_PMUX_SESSION",
+      };
+      assert.deepEqual(last.env, sharedEnv);
+      // A send-mode spec alone carries the report-protocol marker (design
+      // D1): it selects the file-ack behaviour in `send` and the wrapper.
+      assert.deepEqual(send.env, { ...sharedEnv, PI_PMUX_REPORT_PROTOCOL: "file-ack-v1" });
+
+      assert.equal(last.command, "pi");
+      assert.equal(last.name, "Worker");
+      assert.equal(last.cwd, "/repo");
+      assert.equal(send.command, "pi");
+      assert.equal(send.name, "Worker");
+      assert.equal(send.cwd, "/repo");
 
       assert.equal(last.parent, "orch");
       assert.equal(last.report, undefined);
@@ -412,14 +419,19 @@ describe("reportFooter dispatch", () => {
     assert.equal(reportFooter("orch", undefined, "%21"), parentFooter("orch", "%21"));
   });
 
-  // A child that cannot tell a delivery from a no-op probes the parent with
-  // a second message. The footer names the confirmation line so the child
-  // reads it instead of asking.
-  it("the send footer names the confirmation line and forbids a second message", () => {
+  // A child that cannot tell a submission from a delivery probes the parent
+  // with a second message. The footer names the result line so the child
+  // reads it instead of asking, and forbids the retry the timeout would
+  // otherwise tempt it into.
+  it("the send footer names the result line and forbids a retry", () => {
     const footer = sendFooter("%12", "/pkg/cli.ts");
-    assert.match(footer, /prints one confirmation line/);
-    assert.match(footer, /That line is the delivery receipt/);
-    assert.match(footer, /Do not send anything else to the parent to check/);
+    assert.match(footer, /prints one result line/);
+    assert.match(footer, /sent:true means the pointer was submitted to the parent's pane/);
+    assert.match(footer, /acknowledged:true means the orchestrator read the report file/);
+    assert.match(footer, /not a delivery receipt/);
+    assert.match(footer, /do not resend the report and do not send anything else to check/);
+    assert.match(footer, /the run wrapper re-delivers an unacknowledged report at exit/);
+    assert.match(footer, /On sent:false, call the pmux_done tool without improvising retries/);
   });
 });
 

@@ -36,7 +36,14 @@ import {
 } from "./exit-sidecar.ts";
 import { resolvePlacement } from "./placement.ts";
 import { encodePaneText } from "./pane-input.ts";
-import { appendReportReceipt, reportReceiptPath } from "./report-receipt.ts";
+import { deliverReport, registerReport } from "./report-delivery.ts";
+import {
+  appendReportAck,
+  appendReportReceipt,
+  readReportLog,
+  reportReceiptPath,
+} from "./report-receipt.ts";
+import { isReportId, reportArtifactPath } from "./report-artifact.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
@@ -53,6 +60,7 @@ import {
 import { slugifyName } from "./slug.ts";
 import {
   SUBAGENTS_CLI_PATH,
+  REPORT_PROTOCOL,
   artifactDirFor,
   buildPiLaunch,
   isFile,
@@ -78,7 +86,8 @@ const MIN_NODE: readonly [number, number] = [22, 18];
 const USAGE = [
   "Usage:",
   "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--report last|send]",
-  "  node cli.ts send --to <pane> --text <text>",
+  "  node cli.ts send --to <pane> --text <text> [--ack-timeout <seconds>]",
+  "  node cli.ts ack --session <file> --id <id>",
   "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>]",
   "  node cli.ts run <spec> [<prompt>]",
   "  node cli.ts last-message --session <file>",
@@ -97,6 +106,8 @@ const CLI_OPTIONS = {
   report: { type: "string" },
   to: { type: "string" },
   text: { type: "string" },
+  id: { type: "string" },
+  "ack-timeout": { type: "string" },
   launch: { type: "string" },
   prompt: { type: "string" },
   session: { type: "string" },
@@ -119,6 +130,8 @@ interface CliValues {
   report?: string;
   to?: string;
   text?: string;
+  id?: string;
+  "ack-timeout"?: string;
   launch?: string;
   prompt?: string;
   session?: string;
@@ -496,20 +509,165 @@ function writeReportReceipt(env: NodeJS.ProcessEnv, to: string, text: string): s
   return written ? resolve(reportReceiptPath(session)) : null;
 }
 
+/** Defaults for the marked `send`'s ack wait (design D6). */
+const DEFAULT_ACK_TIMEOUT_S = 15;
+
+/** An operational `ack` failure: exit 2, not the usage-error exit 1. */
+class ReportAckFailure extends Error {}
+
 /**
- * Report one command failure on stderr and return the usage-error exit code.
- *
- * A usage error must leave stdout empty and stay out of the entry wrapper,
- * so each command catches it instead of letting it bubble up.
+ * Parse `--ack-timeout` for the marked `send` (design D6). The default is
+ * `DEFAULT_ACK_TIMEOUT_S`; `0` checks the log once. A negative or non-finite
+ * value is a usage error, named like the other flag errors.
  */
-function usageFailure(error: unknown, writeErr: (text: string) => void): number {
-  const message = error instanceof Error ? error.message : String(error);
-  writeErr(`cli.ts: ${message}\n`);
-  return 1;
+function parseAckTimeoutSeconds(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_ACK_TIMEOUT_S;
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    throw new Error(`--ack-timeout must be a non-negative number of seconds: ${value}`);
+  }
+  return seconds;
 }
 
-/** `send`: deliver one report into a pane as one input (type it, then Enter). */
-function sendCommand(values: CliValues, deps: CliDeps): number {
+/** The fields the structured failure line of a refused send carries. */
+interface SendRefusalFields {
+  notification: "not-submitted" | "unknown";
+  enterAttempted: boolean;
+  error?: string;
+  id: string;
+  to: string;
+  bytes: number;
+  report: string;
+  receipt: string;
+}
+
+/** Print the structured failure line of a refused send; the caller exits 2. */
+function writeSendRefusalLine(write: (text: string) => void, fields: SendRefusalFields): void {
+  write(
+    JSON.stringify({
+      sent: false,
+      notification: fields.notification,
+      acknowledged: false,
+      id: fields.id,
+      to: fields.to,
+      bytes: fields.bytes,
+      report: resolve(fields.report),
+      receipt: fields.receipt,
+      notificationRecorded: false,
+      ...(fields.error !== undefined ? { error: fields.error } : {}),
+      enterAttempted: fields.enterAttempted,
+    }) + "\n",
+  );
+}
+
+/**
+ * `send` under the marked protocol (design D6): the report becomes a durable
+ * artifact and a `report` registration before any pane input (design D2),
+ * only the one-line pointer is submitted through the verified path, and the
+ * command waits up to `--ack-timeout` for the parent's `ack`.
+ *
+ * Any successful submission exits 0: `acknowledged:false` means the parent
+ * is busy, not a failure — the wrapper re-delivers the report at exit. A
+ * refusal or an unknown Enter outcome exits 2 with the structured failure
+ * line on stdout and the operational error on stderr. The artifact and its
+ * registration always survive, so even a refused send remains re-deliverable.
+ */
+async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<number> {
+  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  try {
+    const to = required("--to", values.to);
+    const text = required("--text", values.text);
+    const ackTimeoutSeconds = parseAckTimeoutSeconds(values["ack-timeout"]);
+    const session = deps.env?.PI_PMUX_SESSION;
+    if (!session) {
+      throw new Error(
+        "send under the report protocol needs PI_PMUX_SESSION: run this command inside a pmux child",
+      );
+    }
+
+    // The artifact and its registration come first (design D2): a failure
+    // here must refuse the send before the pane is touched.
+    let registered: ReturnType<typeof registerReport>;
+    try {
+      registered = registerReport({ sessionFile: session, to, text });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      writeErr(
+        `cli.ts: refused before any pane input: could not write or register the report: ${message}\n`,
+      );
+      return 2;
+    }
+    const receipt = resolve(reportReceiptPath(session));
+    // The ack wait shares the injected timer, so a test compresses it; a
+    // real run uses a real `setTimeout` (design D6: any successful
+    // submission exits 0 after the wait, whatever it decided).
+    const delivery = await deliverReport(
+      {
+        sessionFile: session,
+        to,
+        id: registered.id,
+        reportPath: registered.reportPath,
+        bytes: registered.bytes,
+        cliPath: CLI_PATH,
+        ackTimeoutSeconds,
+      },
+      deps.sleep !== undefined ? { sleep: deps.sleep } : {},
+    );
+    if (delivery.submitted) {
+      // `acknowledged:false` is the parent being busy (design D6): the
+      // wrapper re-delivers at exit, so the child must not retry.
+      write(
+        JSON.stringify({
+          sent: true,
+          notification: "submitted",
+          acknowledged: delivery.acknowledged,
+          id: registered.id,
+          to,
+          bytes: registered.bytes,
+          report: resolve(registered.reportPath),
+          receipt,
+          notificationRecorded: delivery.notificationRecorded,
+        }) + "\n",
+      );
+      return 0;
+    }
+    writeErr(`cli.ts: could not submit the report: ${delivery.error ?? delivery.status}\n`);
+    writeSendRefusalLine(write, {
+      notification: delivery.status === "not-submitted" ? "not-submitted" : "unknown",
+      enterAttempted: delivery.enterAttempted,
+      error: delivery.error,
+      id: registered.id,
+      to,
+      bytes: registered.bytes,
+      report: registered.reportPath,
+      receipt,
+    });
+    return 2;
+  } catch (error) {
+    return usageFailure(error, writeErr);
+  }
+}
+
+/**
+ * `send`: deliver one report into a pane as one input (type it, then Enter).
+ *
+ * The behaviour is selected by `PI_PMUX_REPORT_PROTOCOL` (design D1): a
+ * marked child runs the `file-ack-v1` flow, an unmarked one (or any other
+ * marker value) keeps the legacy raw-text send — the text is typed and one
+ * Enter follows, a kindless receipt line lands in `<session>.sent`, and
+ * `--ack-timeout` is a usage error there because it would be silent no-op.
+ */
+async function sendCommand(values: CliValues, deps: CliDeps): Promise<number> {
+  if ((deps.env ?? process.env).PI_PMUX_REPORT_PROTOCOL === REPORT_PROTOCOL) {
+    return sendMarkedCommand(values, deps);
+  }
+  if (values["ack-timeout"] !== undefined) {
+    (deps.stderr ?? ((text: string) => process.stderr.write(text)))(
+      "cli.ts: --ack-timeout is a report-protocol flag: it needs PI_PMUX_REPORT_PROTOCOL=file-ack-v1\n",
+    );
+    return 1;
+  }
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
   const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
   try {
@@ -534,6 +692,62 @@ function sendCommand(values: CliValues, deps: CliDeps): number {
     );
     return 0;
   } catch (error) {
+    return usageFailure(error, writeErr);
+  }
+}
+
+/**
+ * Report one command failure on stderr and return the usage-error exit code.
+ *
+ * A usage error must leave stdout empty and stay out of the entry wrapper,
+ * so each command catches it instead of letting it bubble up.
+ */
+function usageFailure(error: unknown, writeErr: (text: string) => void): number {
+  const message = error instanceof Error ? error.message : String(error);
+  writeErr(`cli.ts: ${message}\n`);
+  return 1;
+}
+
+/**
+ * `ack`: append the read receipt for one report (design D7). The ID must be
+ * well formed and its report file must exist; a repeat ack appends nothing
+ * and reports `alreadyAcknowledged:true`. Unlike the notification
+ * bookkeeping, a failed append is operational failure: exit 2, never a
+ * claimed success.
+ */
+function ackCommand(values: CliValues, deps: CliDeps): number {
+  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  try {
+    const session = required("--session", values.session);
+    const id = required("--id", values.id);
+    if (!isReportId(id)) {
+      throw new Error(`--id must be a report id of 32 lowercase hex characters: ${id}`);
+    }
+    if (!isFile(reportArtifactPath(session, id))) {
+      throw new ReportAckFailure(`no report file for ${id}: ${reportArtifactPath(session, id)}`);
+    }
+    const alreadyAcknowledged = readReportLog(session).ackedIds.has(id);
+    if (!alreadyAcknowledged && !appendReportAck(session, id)) {
+      throw new ReportAckFailure(
+        `could not append the ack record to ${reportReceiptPath(session)}`,
+      );
+    }
+    write(
+      JSON.stringify({
+        acked: true,
+        alreadyAcknowledged,
+        id,
+        session: resolve(session),
+        receipt: resolve(reportReceiptPath(session)),
+      }) + "\n",
+    );
+    return 0;
+  } catch (error) {
+    if (error instanceof ReportAckFailure) {
+      writeErr(`cli.ts: ${error.message}\n`);
+      return 2;
+    }
     return usageFailure(error, writeErr);
   }
 }
@@ -766,6 +980,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   }
   if (command === "run") return runCommand(positionals.slice(1), deps);
   if (command === "send") return sendCommand(values as CliValues, deps);
+  if (command === "ack") return ackCommand(values as CliValues, deps);
   if (command === "last-message") return lastMessageCommand(values as CliValues, deps);
   if (command === "wait") return await waitCommand(values as CliValues, deps);
   if (command === "prune") return pruneCommand(values as CliValues, deps);

@@ -33,6 +33,9 @@ import { getLaunchRecordFile, readLaunchRecord } from "../pi-extension/pmux/laun
 import { main } from "../pi-extension/pmux/cli.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 import { argValue, placementRow, useTmuxPaneFake } from "./tmux-fakes.ts";
+import { registerReport, REPORT_ACK_POLL_MS } from "../pi-extension/pmux/report-delivery.ts";
+import { reportArtifactPath } from "../pi-extension/pmux/report-artifact.ts";
+import { appendReportAck, readReportLog } from "../pi-extension/pmux/report-receipt.ts";
 import { main as shimMain } from "../skills/pmux/launch.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
@@ -778,6 +781,9 @@ after(() => {
 beforeEach(() => {
   paneCalls.length = 0;
   paneFake.paneSessionId = undefined;
+  paneFake.echoTyped = null;
+  paneFake.paneInMode = undefined;
+  paneFake.failEnter = undefined;
 });
 
 /** tmux environment for a CLI run, with ambient host keys replaced. */
@@ -1030,6 +1036,8 @@ describe("cli.ts start", () => {
     assert.equal(spec.sessionFile, res.json.session);
     assert.equal(spec.env.PI_PMUX_NAME, "fix-7");
     assert.equal(spec.env.PI_PMUX_EXTERNAL_PARENT, "1");
+    // A last-mode spec carries no report-protocol marker (design D1).
+    assert.equal(spec.env.PI_PMUX_REPORT_PROTOCOL, undefined);
     assert.equal(spec.env.PI_PMUX_AGENT, "doer");
     assert.equal(spec.env.PI_PMUX_SESSION, res.json.session);
     assert.equal(spec.env.PI_PMUX_SURFACE, undefined);
@@ -1136,6 +1144,8 @@ describe("cli.ts start", () => {
           `If a reminder tells you to call pmux_done, ignore its claim that your last message was already delivered.\n`,
       ),
     );
+    // The launch contract: a last-mode spec carries no protocol marker.
+    assert.equal(res.spec.env.PI_PMUX_REPORT_PROTOCOL, undefined);
   });
 
   it("records report send and appends the send footer", async () => {
@@ -1145,6 +1155,9 @@ describe("cli.ts start", () => {
 
     assert.equal(res.spec.report, "send");
     assert.equal(res.spec.parent, "%12");
+    // A send-mode spec carries the protocol marker (design D1), which
+    // selects the file-ack behaviour in `send` and in the wrapper.
+    assert.equal(res.spec.env.PI_PMUX_REPORT_PROTOCOL, "file-ack-v1");
     const promptText = readFileSync(res.promptPath, "utf8");
     assert.ok(promptText.includes("Your parent is the tmux pane %12."));
     assert.ok(promptText.includes(`send --to %12 --text`));
@@ -1163,7 +1176,26 @@ describe("cli.ts start", () => {
       ),
     );
     assert.ok(promptText.includes("Whether it does or not, do ALL of this before you stop:"));
+    // The footer teaches the pointer workflow (designs D1 and D6): the
+    // durable file, the pointer, and what the result line does and does not
+    // mean — and it forbids the retry the wrapper already covers.
+    assert.ok(
+      promptText.includes("writes the report to a durable file and types only a one-line pointer"),
+    );
+    assert.ok(promptText.includes("sent:true means the pointer was submitted"));
+    assert.ok(promptText.includes("acknowledged:true means the orchestrator read the report file"));
+    assert.ok(promptText.includes("the line is not a delivery receipt"));
+    assert.ok(
+      promptText.includes("On sent:false, call the pmux_done tool without improvising retries."),
+    );
+    assert.ok(
+      promptText.includes("do not resend the report and do not send anything else to check"),
+    );
+    assert.ok(promptText.includes("the run wrapper re-delivers an unacknowledged report at exit"));
     assert.doesNotMatch(promptText, /last assistant message is the report the parent reads/);
+    // The wake-up reports the exit state, so the footer no longer claims a
+    // missing report leaves the parent unaware of the exit.
+    assert.doesNotMatch(promptText, /only learns that you exited/);
     // The report step and the wake-up hint name this checkout's CLI.
     assert.ok(promptText.includes(`node ${CLI} send --to %12 --text '<verdict`));
   });
@@ -1739,16 +1771,23 @@ describe("cli.ts resume", () => {
 
     const res = await runResume(started);
     assert.equal(res.code, 0);
-    // The rebuilt spec keeps the report mode and the parent.
+    // The rebuilt spec keeps the report mode and the parent, and the marker
+    // a resumed child needs (design D1).
     assert.equal(res.spec.report, "send");
     assert.equal(res.spec.parent, "%12");
+    assert.equal(res.spec.env.PI_PMUX_REPORT_PROTOCOL, "file-ack-v1");
     // The follow-up message is the head; the send footer, with the parent's
     // pane, is the tail — nothing follows it.
     const sent = readFileSync(res.promptPath, "utf8");
     assert.ok(sent.startsWith("Follow-up task.\n"));
     assert.ok(sent.includes("Your parent is the tmux pane %12."));
     assert.ok(sent.includes(`node ${CLI} send --to %12 --text`));
+    assert.ok(
+      sent.includes("writes the report to a durable file and types only a one-line pointer"),
+    );
+    assert.ok(sent.includes("the run wrapper re-delivers an unacknowledged report at exit"));
     assert.doesNotMatch(sent, /last assistant message is the report the parent reads/);
+    assert.doesNotMatch(sent, /only learns that you exited/);
     assert.ok(
       sent.endsWith(
         "If you are blocked, send your question with the same command and stop. The session closes; the parent resumes it with the answer. Do not reach the parent any other way.\n" +
@@ -2202,6 +2241,395 @@ describe("cli.ts send", () => {
         bytes: 2,
         receipt: null,
       });
+    });
+  });
+
+  // ─── the file-ack-v1 protocol (designs D1, D2, D3, D6) ─────────────
+
+  /** A marked-send environment: the protocol marker plus a session file. */
+  function protocolEnv(sessionFile: string): NodeJS.ProcessEnv {
+    return tmuxEnv({
+      PI_PMUX_SESSION: sessionFile,
+      PI_PMUX_REPORT_PROTOCOL: "file-ack-v1",
+    });
+  }
+
+  /**
+   * Run `send` with a recorded poll timer: the sleeps come back, so a test
+   * can drive the ack wait itself (the ack lands mid-wait in the test that
+   * appends it) and assert the cadence.
+   */
+  async function runSend(
+    argv: string[],
+    env: NodeJS.ProcessEnv,
+    sleep?: (ms: number) => Promise<void>,
+  ): Promise<{ code: number; stdout: string; stderr: string; sleeps: number[] }> {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const sleeps: number[] = [];
+    const code = await main(argv, {
+      env,
+      stdout: (text) => stdout.push(text),
+      stderr: (text) => stderr.push(text),
+      sleep:
+        sleep ??
+        (async (ms) => {
+          sleeps.push(ms);
+        }),
+      configPath: defaultConfigPath,
+    });
+    return { code, stdout: stdout.join(""), stderr: stderr.join(""), sleeps };
+  }
+
+  /** The JSON of a one-line stdout, typed for the assertions. */
+  function jsonLine(text: string): Record<string, unknown> {
+    return JSON.parse(text) as Record<string, unknown>;
+  }
+
+  it("writes the artifact and submits a pointer under the protocol", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      const res = await runSend(
+        ["send", "--to", "%3", "--text", "PASS abc123", "--ack-timeout", "0"],
+        protocolEnv(sessionFile),
+      );
+
+      assert.equal(res.code, 0);
+      assert.equal(res.stderr, "");
+      const line = jsonLine(res.stdout);
+      const id = String(line.id);
+      assert.match(id, /^[0-9a-f]{32}$/);
+      assert.equal(line.sent, true);
+      assert.equal(line.notification, "submitted");
+      // A zero timeout checks the log once: no ack is present, and the
+      // timeout is not a failure (design D6).
+      assert.equal(line.acknowledged, false);
+      assert.equal(line.to, "%3");
+      assert.equal(line.bytes, Buffer.byteLength("PASS abc123", "utf8"));
+      const reportPath = reportArtifactPath(sessionFile, id);
+      assert.equal(line.report, resolve(reportPath));
+      assert.equal(readFileSync(reportPath, "utf8"), "PASS abc123");
+      assert.equal(line.receipt, resolve(`${sessionFile}.sent`));
+      assert.equal(line.notificationRecorded, true);
+      // The zero wait never slept.
+      assert.deepEqual(res.sleeps, []);
+
+      // The typed input is the one-line pointer; the report body itself is
+      // never typed. Exactly one Enter submits it.
+      const typed = paneCalls.filter((c) => c.startsWith("send-keys -t %3 -l"));
+      assert.equal(typed.length, 1);
+      const pointer = typed[0]!.slice("send-keys -t %3 -l ".length);
+      assert.ok(!pointer.includes("\n"));
+      assert.ok(!pointer.includes("PASS abc123"));
+      assert.match(pointer, new RegExp(`^pmux report ${id}\\. Read '`));
+      assert.ok(pointer.includes(`node '${CLI}' ack --session '${sessionFile}' --id ${id}`));
+      assert.match(pointer, /\[pmux-eom-[0-9a-f]{32}\]$/);
+      assert.equal(paneCalls.filter((c) => c === "send-keys -t %3 Enter").length, 1);
+
+      // The event log holds the registration before the notification.
+      const events = readFileSync(`${sessionFile}.sent`, "utf8")
+        .trimEnd()
+        .split("\n")
+        .map((event) => JSON.parse(event) as { kind?: string; id?: string });
+      assert.equal(events[0]!.kind, "report");
+      assert.equal(events[0]!.id, id);
+      assert.equal(events[1]!.kind, "notification");
+      assert.equal(events[1]!.id, id);
+    });
+  });
+
+  it("keeps a multiline report in the file and the pointer on one line", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      const text = "line one\nline two";
+      const res = await runSend(
+        ["send", "--to", "%3", "--text", text, "--ack-timeout", "0"],
+        protocolEnv(sessionFile),
+      );
+      assert.equal(res.code, 0);
+      const id = String(jsonLine(res.stdout).id);
+      // The file holds the report exactly as received, no pane-input
+      // encoding (design D2).
+      assert.equal(readFileSync(reportArtifactPath(sessionFile, id), "utf8"), text);
+      const typed = paneCalls.filter((c) => c.startsWith("send-keys -t %3 -l"));
+      assert.equal(typed.length, 1);
+      assert.ok(!typed[0]!.includes("\n"));
+    });
+  });
+
+  it("waits for the ack at the 250 ms cadence and reports acknowledged", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      // The parent's ack lands while the child waits: the poll timer appends
+      // it for the report the send registered.
+      let acked = false;
+      const sleeps: number[] = [];
+      const res = await runSend(
+        ["send", "--to", "%3", "--text", "PASS abc123"],
+        protocolEnv(sessionFile),
+        async (ms) => {
+          sleeps.push(ms);
+          if (!acked) {
+            acked = true;
+            const state = readReportLog(sessionFile);
+            appendReportAck(sessionFile, state.reports.at(-1)!.id);
+          }
+        },
+      );
+      assert.equal(res.code, 0);
+      const line = jsonLine(res.stdout);
+      assert.equal(line.sent, true);
+      assert.equal(line.notification, "submitted");
+      assert.equal(line.acknowledged, true);
+      // The wait polls at the documented cadence (design D6).
+      assert.equal(sleeps[0], REPORT_ACK_POLL_MS);
+    });
+  });
+
+  it("exits 2 with the structured refusal when the pane is in a mode", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      paneFake.paneInMode = true;
+      const res = await runSend(
+        ["send", "--to", "%3", "--text", "PASS abc123", "--ack-timeout", "0"],
+        protocolEnv(sessionFile),
+      );
+      assert.equal(res.code, 2);
+      const line = jsonLine(res.stdout);
+      assert.equal(line.sent, false);
+      assert.equal(line.notification, "not-submitted");
+      assert.equal(line.enterAttempted, false);
+      assert.equal(line.acknowledged, false);
+      assert.equal(line.notificationRecorded, false);
+      assert.match(String(line.error), /mode/);
+      // The report survives the refusal: the artifact exists and is
+      // registered, so the wrapper re-delivers it at exit.
+      const id = String(line.id);
+      assert.ok(existsSync(reportArtifactPath(sessionFile, id)));
+      const events = readFileSync(`${sessionFile}.sent`, "utf8")
+        .trimEnd()
+        .split("\n")
+        .map((event) => JSON.parse(event) as { kind?: string });
+      assert.deepEqual(
+        events.map((event) => event.kind),
+        ["report"],
+      );
+      // No keys were typed into the pane.
+      assert.deepEqual(
+        paneCalls.filter((c) => c.startsWith("send-keys")),
+        [],
+      );
+      assert.match(res.stderr, /could not submit the report/);
+    });
+  });
+
+  it("exits 2 with notification unknown when the Enter call throws", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      paneFake.failEnter = true;
+      const res = await runSend(
+        ["send", "--to", "%3", "--text", "PASS abc123", "--ack-timeout", "0"],
+        protocolEnv(sessionFile),
+      );
+      assert.equal(res.code, 2);
+      const line = jsonLine(res.stdout);
+      assert.equal(line.sent, false);
+      assert.equal(line.notification, "unknown");
+      assert.equal(line.enterAttempted, true);
+      assert.equal(line.notificationRecorded, false);
+      assert.match(String(line.error), /Enter call failed/);
+      // The unknown Enter appended no notification record.
+      const state = readReportLog(sessionFile);
+      assert.equal(state.reports.length, 1);
+      assert.equal(state.notifications.length, 0);
+    });
+  });
+
+  it("refuses a marked send without PI_PMUX_SESSION", async () => {
+    await withTempDirAsync(async (dir) => {
+      const res = await runSend(
+        ["send", "--to", "%3", "--text", "hi"],
+        tmuxEnv({ PI_PMUX_REPORT_PROTOCOL: "file-ack-v1" }),
+      );
+      // A configuration error, not a legacy fallback (design D1).
+      assert.equal(res.code, 1);
+      assert.match(res.stderr, /PI_PMUX_SESSION/);
+      assert.equal(res.stdout, "");
+      assert.deepEqual(
+        paneCalls.filter((c) => c.startsWith("send-keys")),
+        [],
+      );
+      assert.deepEqual(
+        readdirSync(dir).filter((name) => name.endsWith(".report.md")),
+        [],
+      );
+    });
+  });
+
+  it("rejects --ack-timeout for an unmarked send", async () => {
+    const res = await runSend(
+      ["send", "--to", "%3", "--text", "hi", "--ack-timeout", "15"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 1);
+    assert.match(res.stderr, /--ack-timeout/);
+    assert.equal(res.stdout, "");
+    assert.deepEqual(paneCalls, []);
+  });
+
+  it("keeps the legacy path when the marker holds another value", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      const res = await runSend(["send", "--to", "%3", "--text", "hi"], {
+        ...tmuxEnv(),
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_REPORT_PROTOCOL: "v2",
+      });
+      assert.equal(res.code, 0);
+      assert.deepEqual(JSON.parse(res.stdout), {
+        sent: true,
+        to: "%3",
+        bytes: 2,
+        receipt: resolve(`${sessionFile}.sent`),
+      });
+      assert.deepEqual(paneCalls, ["send-keys -t %3 -l hi", "send-keys -t %3 Enter"]);
+      // The legacy receipt line stays kindless.
+      const events = readFileSync(`${sessionFile}.sent`, "utf8")
+        .trimEnd()
+        .split("\n")
+        .map((event) => JSON.parse(event) as Record<string, unknown>);
+      assert.equal(events.length, 1);
+      assert.equal(events[0]!.kind, undefined);
+    });
+  });
+
+  it("rejects a negative --ack-timeout before any side effect", async () => {
+    await withTempDirAsync(async (dir) => {
+      const res = await runSend(
+        ["send", "--to", "%3", "--text", "hi", "--ack-timeout=-1"],
+        protocolEnv(join(dir, "session.jsonl")),
+      );
+      assert.equal(res.code, 1);
+      assert.match(res.stderr, /--ack-timeout/);
+      assert.equal(res.stdout, "");
+      assert.deepEqual(paneCalls, []);
+      assert.deepEqual(
+        readdirSync(dir).filter((name) => name.endsWith(".report.md") || name.endsWith(".sent")),
+        [],
+      );
+    });
+  });
+
+  it("refuses the send when the artifact cannot be written", async () => {
+    const sessionFile = join("/nonexistent-dir-pmux-cli", "session.jsonl");
+    const res = await runSend(["send", "--to", "%3", "--text", "hi"], protocolEnv(sessionFile));
+    assert.equal(res.code, 2);
+    assert.match(res.stderr, /could not write or register the report/);
+    assert.equal(res.stdout, "");
+    assert.deepEqual(paneCalls, []);
+  });
+
+  it("refuses the send when the registration cannot be appended", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      mkdirSync(`${sessionFile}.sent`);
+      const res = await runSend(["send", "--to", "%3", "--text", "hi"], protocolEnv(sessionFile));
+      assert.equal(res.code, 2);
+      assert.match(res.stderr, /could not write or register the report/);
+      assert.equal(res.stdout, "");
+      assert.deepEqual(paneCalls, []);
+    });
+  });
+});
+
+// ─── cli.ts ack ─────────────────────────────────────────────────
+
+describe("cli.ts ack", () => {
+  it("acks a registered report once, and idempotently after that", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+
+      const first = await runCli(["ack", "--session", sessionFile, "--id", report.id], tmuxEnv());
+      assert.equal(first.code, 0);
+      assert.deepEqual(JSON.parse(first.stdout), {
+        acked: true,
+        alreadyAcknowledged: false,
+        id: report.id,
+        session: resolve(sessionFile),
+        receipt: resolve(`${sessionFile}.sent`),
+      });
+      // The ack record carries no `to`, so it can never pass for a report.
+      const readLines = (): Array<Record<string, unknown>> =>
+        readFileSync(`${sessionFile}.sent`, "utf8")
+          .trimEnd()
+          .split("\n")
+          .map((event) => JSON.parse(event) as Record<string, unknown>);
+      const ack = readLines().at(-1)!;
+      assert.equal(ack.kind, "ack");
+      assert.equal(ack.id, report.id);
+      assert.equal("to" in ack, false);
+
+      const again = await runCli(["ack", "--session", sessionFile, "--id", report.id], tmuxEnv());
+      assert.equal(again.code, 0);
+      assert.deepEqual(JSON.parse(again.stdout), {
+        acked: true,
+        alreadyAcknowledged: true,
+        id: report.id,
+        session: resolve(sessionFile),
+        receipt: resolve(`${sessionFile}.sent`),
+      });
+      // The repeat appended nothing.
+      assert.equal(readLines().length, 2);
+    });
+  });
+
+  it("exits 2 when the report file for the ID does not exist", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const id = "aa".repeat(16);
+      const res = await runCli(["ack", "--session", sessionFile, "--id", id], tmuxEnv());
+      assert.equal(res.code, 2);
+      assert.match(res.stderr, /no report file/);
+      assert.equal(res.stdout, "");
+      assert.equal(existsSync(`${sessionFile}.sent`), false);
+    });
+  });
+
+  it("exits 1 on a malformed ID and appends nothing", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const res = await runCli(["ack", "--session", sessionFile, "--id", "hello"], tmuxEnv());
+      assert.equal(res.code, 1);
+      assert.match(res.stderr, /--id/);
+      assert.equal(res.stdout, "");
+      assert.equal(existsSync(`${sessionFile}.sent`), false);
+    });
+  });
+
+  it("requires --session and --id", async () => {
+    const noSession = await runCli(["ack", "--id", "aa".repeat(16)], tmuxEnv());
+    assert.equal(noSession.code, 1);
+    assert.match(noSession.stderr, /missing --session/);
+    assert.equal(noSession.stdout, "");
+    const noId = await runCli(["ack", "--session", "/s/w.jsonl"], tmuxEnv());
+    assert.equal(noId.code, 1);
+    assert.match(noId.stderr, /missing --id/);
+    assert.equal(noId.stdout, "");
+  });
+
+  it("exits 2 and claims no success when the append fails", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const id = "bb".repeat(16);
+      // The artifact exists, but the log path is a directory, so the append
+      // cannot land.
+      writeFileSync(reportArtifactPath(sessionFile, id), "body");
+      mkdirSync(`${sessionFile}.sent`);
+      const res = await runCli(["ack", "--session", sessionFile, "--id", id], tmuxEnv());
+      assert.equal(res.code, 2);
+      assert.match(res.stderr, /could not append the ack record/);
+      assert.equal(res.stdout, "");
     });
   });
 });

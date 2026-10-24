@@ -41,6 +41,15 @@ export const SUBAGENTS_CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
 const SUBAGENTS_DONE_PATH = join(SUBAGENTS_DIR, "pmux-done.ts");
 
 /**
+ * The report protocol a send-mode launch selects (design D1): the spec-env
+ * marker every `file-ack-v1` behaviour reads — `send` from its process env,
+ * the run wrapper from the spec env. A send-mode spec sets it; a `last`-mode
+ * spec and a pi-parent launch never do, so an unmarked child keeps the
+ * legacy raw-text behaviour even when the package's CLI changes under it.
+ */
+export const REPORT_PROTOCOL = "file-ack-v1";
+
+/**
  * How the launch reaches its parent (design D3): one tagged input, so the pi
  * parent and the external orchestrator cannot name the contact differently.
  *
@@ -404,6 +413,8 @@ export function buildSpawnEnvParts(params: {
   /** The parent's env, for the subagent-depth increment and the marker-list
    * merge. Defaults to `process.env` inside `subagentMarkerEnv`. */
   parentEnv?: Readonly<Record<string, string | undefined>>;
+  /** The report protocol marker of a send-mode launch (design D1). */
+  reportProtocol?: string;
 }): Record<string, string> {
   const env = encodeChildEnv({
     name: params.name,
@@ -418,6 +429,9 @@ export function buildSpawnEnvParts(params: {
     externalParent: params.externalParent === true,
   });
   if (params.codingAgentDir) env.PI_CODING_AGENT_DIR = params.codingAgentDir;
+  if (params.reportProtocol !== undefined) {
+    env.PI_PMUX_REPORT_PROTOCOL = params.reportProtocol;
+  }
   // Subagent identity for detectors such as pi-blackhole's: a child depth
   // and `PI_PMUX_SESSION` on the extra-marker list (inert without a reader).
   Object.assign(env, subagentMarkerEnv(params.parentEnv));
@@ -447,8 +461,9 @@ If a reminder tells you to call pmux_done, ignore its claim that your last messa
 }
 
 /**
- * The send-mode parent-contact footer: the report is typed into the parent's
- * pane with the `send` command. The auto-exit claim is conditional because a
+ * The send-mode parent-contact footer (designs D1 and D6): the report is
+ * written to a durable artifact by `send` and only a one-line pointer is
+ * typed into the parent's pane. The auto-exit claim is conditional because a
  * role without `auto-exit: true` keeps running and gets the completion nudge.
  */
 export function sendFooter(parent: string, cliPath: string): string {
@@ -458,9 +473,10 @@ Plain text printed in your own pane is never seen. The only way to reach it is b
 If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of this before you stop:
 1. Finish the task.
 2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
-   This wakes the orchestrator with your report; without it, it only learns that you exited.
-   The text may be long, contain quotes or span lines: read it from a file into the argument if you like. A line break arrives as the two characters \\n, so the orchestrator still reads one message.
-   The command prints one confirmation line — the target pane, the size of the text, the receipt file. That line is the delivery receipt. Do not send anything else to the parent to check whether the report arrived; a second message only gives the parent something to answer.
+   The text may be long, contain quotes or span lines: read it into the argument from a file if you like. A line break arrives as the two characters \\n, so the orchestrator still reads one message.
+   Send writes the report to a durable file and types only a one-line pointer naming it into the parent's pane. It prints one result line: sent:true means the pointer was submitted to the parent's pane, acknowledged:true means the orchestrator read the report file, and the line is not a delivery receipt.
+   On sent:false, call the pmux_done tool without improvising retries.
+   On acknowledged:false, the orchestrator is busy: do not resend the report and do not send anything else to check, because the run wrapper re-delivers an unacknowledged report at exit.
 3. Then call the pmux_done tool to close your session.
 
 If you are blocked, send your question with the same command and stop. The session closes; the parent resumes it with the answer. Do not reach the parent any other way.
@@ -563,6 +579,8 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
     id: run.id,
     activityFile: run.activityFile,
     denySet: denied,
+    // Send mode alone selects the report protocol (design D1).
+    ...(sendMode ? { reportProtocol: REPORT_PROTOCOL } : {}),
     ...(piMode
       ? {
           surface: request.surface,

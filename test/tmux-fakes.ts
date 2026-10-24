@@ -33,6 +33,20 @@ export interface TmuxPaneFake {
    * tests assert; an unset or empty answer reads as no id.
    */
   paneSessionId?: string | null;
+  /**
+   * The literal text the fake last typed with `send-keys ... -l`, and the
+   * pane it typed it into. When it is set, `capture-pane` for that pane
+   * echoes the text: the verified-input flow reads the visible screen, and
+   * the fake must put the typed text there for the visibility token to be
+   * seen. Clear it before a test that needs a virgin screen.
+   */
+  echoTyped: { pane: string; text: string } | null;
+  /** When true, `display-message ... #{pane_in_mode}` answers `1`, so the
+   * verified-input flow refuses at its first check. */
+  paneInMode?: boolean;
+  /** When true, the Enter `send-keys` (no `-l`) throws, as a failing tmux
+   * call would; the verified-input flow then reports `unknown`. */
+  failEnter?: boolean;
 }
 
 /**
@@ -76,7 +90,7 @@ export function argValue(args: string[], flag: string): string | undefined {
  */
 export function useTmuxPaneFake(): TmuxPaneFake {
   const lines: string[] = [];
-  const fake: TmuxPaneFake = { lines, placementRows: null };
+  const fake: TmuxPaneFake = { lines, placementRows: null, echoTyped: null };
   __setTmuxExecForTests__((args) => {
     const joined = args.join(" ");
     if (args[0] === "show") {
@@ -97,6 +111,22 @@ export function useTmuxPaneFake(): TmuxPaneFake {
       return `${placementRow(caller, 200, 50)}\n`;
     }
     if (args[0] === "set-option") return "";
+    if (fake.paneInMode === true && args.includes("#{pane_in_mode}")) return "1";
+    if (args[0] === "send-keys" && args.includes("-l")) {
+      // Literal typing: remember the pane and the text, so a later
+      // `capture-pane` of that pane can echo them.
+      fake.echoTyped = {
+        pane: args[args.indexOf("-t") + 1] ?? "",
+        text: args[args.indexOf("-l") + 1] ?? "",
+      };
+    }
+    if (args[0] === "capture-pane") {
+      const target = args[args.indexOf("-t") + 1] ?? "";
+      if (fake.echoTyped !== null && fake.echoTyped.pane === target) return fake.echoTyped.text;
+    }
+    if (fake.failEnter === true && args[0] === "send-keys" && !args.includes("-l")) {
+      throw new Error("tmux: the Enter call failed");
+    }
     lines.push(joined);
     if (args[0] === "split-window" || args[0] === "new-window" || args[0] === "new-pane") {
       return "%24";
