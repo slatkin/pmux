@@ -463,6 +463,7 @@ function makeSupervisorHarness(): SupervisorHarness {
       enabled: true,
       lineLimit: DEFAULT_STATUS_LINE_LIMIT,
       notifyEnabled: false,
+      quietCancel: false,
       contextAlert: { enabled: false, threshold: { kind: "tokens", value: 200000 } },
     },
   });

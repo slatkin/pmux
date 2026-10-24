@@ -236,6 +236,12 @@ export interface RunningSubagent {
    * subagent's pane (e.g. an interactive child).
    */
   interactive: boolean;
+  /**
+   * Set when a reported user cancel parked this run (quiet-cancel D3). While
+   * it stands, the idle watchdog skips its nudge/finish arm; a fresh `active`
+   * activity read clears it. Memory-only, like the rest of the per-run state.
+   */
+  userCancelled?: boolean;
   /** Parent-side idle watchdog progress (see idle-watchdog.ts). */
   idleWatch?: IdleWatchState;
 }
@@ -736,6 +742,12 @@ function runIdleWatchdog(
     }
     return;
   }
+
+  // quiet-cancel D4: a user-cancelled child is deliberately parked, so the
+  // nudge (which would restart the aborted turn) and the finish (a fabricated
+  // done) are both suppressed. The gone arm above still applies: a cancelled
+  // child whose pane dies is a real failure the parent should hear about.
+  if (running.userCancelled) return;
 
   const action = decideIdleAction({
     interactive: running.interactive,
@@ -1476,6 +1488,9 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
         // A cancel is a notification, not an exit: report it and keep watching
         // for the child's real completion (report-user-cancel D4).
         onCancel() {
+          // quiet-cancel D3: the cancel itself marks the run; the mark lives
+          // until a fresh `active` activity read clears it in onTick below.
+          running.userCancelled = true;
           deliverSubagentCancel(running, send);
         },
         // The screen read is only the crash fallback; while the child's activity
@@ -1489,6 +1504,18 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
           : undefined,
         onTick() {
           observeRunningSubagent(running);
+          // quiet-cancel D3: on the tick that reported the cancel,
+          // `running.activity` still held the previous tick's `active`
+          // snapshot. Clear the mark only now — after observe — and only on a
+          // fresh `active` read; a failed read leaves the stale snapshot in
+          // place and must not clear it.
+          if (
+            running.userCancelled &&
+            running.activityRead?.ok === true &&
+            running.activity?.phase === "active"
+          ) {
+            running.userCancelled = false;
+          }
           deliverParentMessages(running, send);
           runIdleWatchdog(running, deps.pmux.agentPrompt);
         },
@@ -1644,7 +1671,11 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
           sessionFile: running.sessionFile,
         },
       },
-      { triggerTurn: true, deliverAs: "steer" },
+      // quiet-cancel D2: quiet mode appends the same message to the parent
+      // session without starting a turn; wake mode steers as before.
+      deps.statusConfig.quietCancel
+        ? { triggerTurn: false }
+        : { triggerTurn: true, deliverAs: "steer" },
     );
   }
 

@@ -3,7 +3,8 @@
     "enabled": true
   },
   "notify": {
-    "enabled": true
+    "enabled": true,
+    "quietCancel": false
   },
   "contextAlert": {
     "enabled": false,
