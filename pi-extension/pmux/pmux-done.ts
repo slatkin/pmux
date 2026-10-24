@@ -341,6 +341,10 @@ export default function (pi: ExtensionAPI) {
 
   let userTookOver = false;
   let agentStarted = false;
+  /** Set from `agent_settled.aborted`: the run-level abort flag the
+   * message-level `didUserAbortTurn` check can miss. Read again at
+   * `session_shutdown` to restore a consumed cancel notice. */
+  let lastRunAborted = false;
 
   /** Best-effort status write; a failed write never blocks a turn or shutdown. */
   function writeStatus(status: ChildStatus, message?: string): void {
@@ -353,6 +357,7 @@ export default function (pi: ExtensionAPI) {
     doneCalled = false;
     userInputAfterAgentEnd = false;
     userTookOver = false;
+    lastRunAborted = false;
     alertFired = false;
     clearNudgeTimer();
     const tools = pi.getAllTools();
@@ -466,6 +471,23 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  pi.on("agent_settled", (event) => {
+    // Backstop for the agent_end gate: an abort that lands between tool
+    // calls, or before the next model call starts, leaves no assistant
+    // message marked `aborted`, so `didUserAbortTurn` sees nothing and the
+    // parent hears "crashed" when the user then quits. `agent_settled`
+    // carries the run-level abort flag instead. Write only when the settle
+    // left no sidecar at all — never clobber a terminal payload from the
+    // same settle, and the `cancelled` agent_end may have written needs no
+    // second copy.
+    lastRunAborted = (event as { aborted?: boolean } | undefined)?.aborted === true;
+    const sessionFile = childEnv.sessionFile;
+    if (!sessionFile || !lastRunAborted) return;
+    if (readExitSidecar(sessionFile) === null) {
+      writeExitSidecar(sessionFile, { type: "cancelled" });
+    }
+  });
+
   pi.on("turn_start", (event) => {
     writeStatus("working");
     recorder.turnStart((event as any).turnIndex);
@@ -512,6 +534,15 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", (event) => {
     clearNudgeTimer();
     recorder.sessionShutdown((event as any).reason);
+    // A quit that races the parent's poll: the settle wrote `cancelled`,
+    // the poll may already have consumed it, and the run wrapper would
+    // otherwise read no sidecar and report the exit as a crash. Rewrite the
+    // notification when the last run was aborted and nothing terminal was
+    // left behind.
+    const sessionFile = childEnv.sessionFile;
+    if (sessionFile && lastRunAborted && readExitSidecar(sessionFile) === null) {
+      writeExitSidecar(sessionFile, { type: "cancelled" });
+    }
   });
 
   // Toggle expand/collapse with Ctrl+H (ctrl+j is the built-in new-line binding)

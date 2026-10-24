@@ -1982,6 +1982,109 @@ describe("pmux-done nudge", () => {
     }
   });
 
+  it("agent_settled writes the cancelled sidecar for an abort with no aborted message", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const { handlers, restoreEnv } = loadChildExtension({
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DISABLE: "1",
+      });
+      try {
+        fire(handlers, "agent_start");
+        // An abort between tool calls leaves no assistant message marked
+        // aborted; agent_end wrote nothing, so the settle must.
+        fire(handlers, "agent_settled", { aborted: true });
+        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
+          type: "cancelled",
+        });
+      } finally {
+        restoreEnv();
+      }
+    });
+  });
+
+  it("agent_settled writes nothing on a clean settle and never clobbers a terminal sidecar", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const { handlers, restoreEnv } = loadChildExtension({
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DISABLE: "1",
+      });
+      try {
+        fire(handlers, "agent_start");
+        fire(handlers, "agent_settled", { aborted: false });
+        assert.equal(existsSync(`${sessionFile}.exit`), false);
+
+        writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
+        fire(handlers, "agent_settled", { aborted: true });
+        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
+          type: "done",
+        });
+      } finally {
+        restoreEnv();
+      }
+    });
+  });
+
+  it("session_shutdown rewrites the cancelled notice the poll already consumed", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const { handlers, restoreEnv } = loadChildExtension({
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DISABLE: "1",
+      });
+      try {
+        fire(handlers, "agent_start");
+        fire(handlers, "agent_settled", { aborted: true });
+        // The parent's poll consumed the notification; the user then quit.
+        rmSync(`${sessionFile}.exit`, { force: true });
+        fire(handlers, "session_shutdown", { reason: "user" });
+        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
+          type: "cancelled",
+        });
+      } finally {
+        restoreEnv();
+      }
+    });
+  });
+
+  it("session_shutdown writes nothing after a clean settle or over a terminal sidecar", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const { handlers, restoreEnv } = loadChildExtension({
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DISABLE: "1",
+      });
+      try {
+        fire(handlers, "agent_start");
+        fire(handlers, "agent_settled", { aborted: false });
+        fire(handlers, "session_shutdown", { reason: "user" });
+        assert.equal(existsSync(`${sessionFile}.exit`), false);
+      } finally {
+        restoreEnv();
+      }
+    });
+
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const { handlers, restoreEnv } = loadChildExtension({
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DISABLE: "1",
+      });
+      try {
+        fire(handlers, "agent_start");
+        writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
+        fire(handlers, "agent_settled", { aborted: true });
+        fire(handlers, "session_shutdown", { reason: "user" });
+        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
+          type: "done",
+        });
+      } finally {
+        restoreEnv();
+      }
+    });
+  });
+
   it("user takeover keeps an auto-exit session open after a normal stop", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
