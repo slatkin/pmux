@@ -16,7 +16,7 @@
  */
 import { encodePaneText } from "./pane-input.ts";
 import { buildReportPointer, writeReportArtifact } from "./report-artifact.ts";
-import { defaultSleep } from "./report-artifact.ts";
+import { defaultSleep } from "./sleep.ts";
 import {
   appendReportNotification,
   appendReportRegistration,

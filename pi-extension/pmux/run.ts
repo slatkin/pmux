@@ -22,6 +22,7 @@ import {
   reportAcknowledged,
   type DeliverReportArgs,
   type DeliverReportResult,
+  type RegisteredReportFile,
 } from "./report-delivery.ts";
 import { isTerminalChildStatus, readChildStatus, writeChildStatus } from "./status-file.ts";
 
@@ -212,20 +213,16 @@ function contactRows(context: ContactContext): WakeRow[] {
  * both rows end in one `deliver` call. Throwing here (a failed wake-row
  * registration) is the row's one failure path, caught by the caller's try.
  */
-function markedDeliverArgs(
-  row: WakeRow,
-  context: ContactContext,
-): { id: string; reportPath: string; bytes: number } | null {
+function markedDeliverArgs(row: WakeRow, context: ContactContext): RegisteredReportFile | null {
   if (row.kind === "report") {
     if (reportAcknowledged(context.sessionFile, row.id)) return null;
     return { id: row.id, reportPath: row.reportPath, bytes: row.bytes };
   }
-  const registered = registerReport({
+  return registerReport({
     sessionFile: context.sessionFile,
     to: context.parent,
     text: row.text,
   });
-  return { id: registered.id, reportPath: registered.reportPath, bytes: registered.bytes };
 }
 
 /**

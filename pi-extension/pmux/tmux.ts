@@ -19,7 +19,7 @@ import {
   readExitSidecar,
   type PollResult,
 } from "./exit-sidecar.ts";
-import { defaultSleep } from "./report-artifact.ts";
+import { defaultSleep } from "./sleep.ts";
 import {
   DEFAULT_SURFACE_PLACEMENT,
   type SplitDirection,
@@ -679,6 +679,6 @@ export async function pollForExit(
  * really finished.
  */
 async function paneStillAlive(surface: string): Promise<boolean> {
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  await defaultSleep(150);
   return paneExists(surface);
 }
