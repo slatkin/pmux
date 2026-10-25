@@ -14,8 +14,8 @@
 
 ## 3. External orchestrator: CLI and skill
 
-- [ ] 3.1 In `pi-extension/pmux/cli.ts`, add `fallback: { type: "boolean" }` to `CLI_OPTIONS` and `fallback?: boolean` to `CliValues`, add `[--fallback]` to the `start` usage line, and pass `fallback: values.fallback === true` in the `overrides` of `startCommand`. Make `resume` reject the flag with exit 1 and a message that points at `start` (design D6). Verify with tests in `test/cli.test.ts`: `start --fallback` writes a launch spec with the fallback model; the missing-fallback case exits non-zero, writes no scratch file and splits no pane; a role with only `model-fallback` starts; `resume --fallback` exits 1 with no pane.
-- [ ] 3.2 In `skills/pmux/SKILL.md`, add `--fallback` to the `start` usage lines and a short paragraph for the cases, the failure and the "no automatic switch" rule from the `external-orchestration` delta. Keep `launch.ts` untouched. Verify by reading the section against the delta scenario "The skill teaches the flag", and run `node --test test/skill-install.test.ts` to confirm the skill still installs.
+- [x] 3.1 In `pi-extension/pmux/cli.ts`, add `fallback: { type: "boolean" }` to `CLI_OPTIONS` and `fallback?: boolean` to `CliValues`, add `[--fallback]` to the `start` usage line, and pass `fallback: values.fallback === true` in the `overrides` of `startCommand`. Make `resume` reject the flag with exit 1 and a message that points at `start` (design D6). Verify with tests in `test/cli.test.ts`: `start --fallback` writes a launch spec with the fallback model; the missing-fallback case exits non-zero, writes no scratch file and splits no pane; a role with only `model-fallback` starts; `resume --fallback` exits 1 with no pane.
+- [x] 3.2 In `skills/pmux/SKILL.md`, add `--fallback` to the `start` usage lines and a short paragraph for the cases, the failure and the "no automatic switch" rule from the `external-orchestration` delta. Keep `launch.ts` untouched. Verify by reading the section against the delta scenario "The skill teaches the flag", and run `node --test test/skill-install.test.ts` to confirm the skill still installs.
 
 ## 4. Documentation
 
