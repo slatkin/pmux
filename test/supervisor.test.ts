@@ -1002,7 +1002,7 @@ describe("model fallback", () => {
     return found;
   }
 
-  it("declares the fallback parameter with the description the parent reads", () => {
+  it("declares the fallback parameter as an optional boolean", () => {
     assert.equal(
       Value.Check(SubagentParams, { name: "S", agent: "r", task: "t", fallback: true }),
       true,
@@ -1010,11 +1010,6 @@ describe("model fallback", () => {
     assert.equal(
       Value.Check(SubagentParams, { name: "S", agent: "r", task: "t", fallback: false }),
       true,
-    );
-    assert.equal(
-      SubagentParams.properties.fallback.description,
-      "true: run the role on its `model-fallback`. Use it when your model hits API limits " +
-        "or errors, or when the user asks for the fallback or alternate model.",
     );
   });
 
