@@ -20,11 +20,8 @@
  */
 import { encodePaneText } from "./pane-input.ts";
 import { buildReportPointer, writeReportArtifact } from "./report-artifact.ts";
-import {
-  submitChannel,
-  type ChannelSubmitResult,
-  type ChannelUnavailableReason,
-} from "./channel-endpoint.ts";
+import { submitChannel, type ChannelSubmitResult } from "./channel-endpoint.ts";
+import { type ChannelUnavailableReason } from "./channel-reason.ts";
 import { defaultSleep } from "./sleep.ts";
 import {
   appendReportNotification,
@@ -147,13 +144,15 @@ export type PointerSubmitResult = Pick<
 };
 
 /**
- * The transport fields a fallback result and its `notification` record
- * share: the tmux transport plus, after a channel that ran out, the reason.
+ * The transport fields a result and its `notification` record share, read
+ * from the channel outcome: the channel transport on `emitted`, otherwise
+ * the verified input plus the channel's reason (design D3, D5).
  */
-function tmuxTransportFields(channel: ChannelSubmitResult): {
+function transportFields(channel: ChannelSubmitResult): {
   via: ReportVia;
   channelError?: ChannelUnavailableReason;
 } {
+  if (channel.status === "emitted") return { via: "channel" };
   return {
     via: "tmux",
     ...(channel.reason !== undefined ? { channelError: channel.reason } : {}),
@@ -203,13 +202,14 @@ export async function submitReportPointer(
     env: deps.env ?? process.env,
   });
   if (channel.status === "emitted") {
+    const transport = transportFields(channel);
     const notificationRecorded = appendReportNotification(args.sessionFile, {
       id: args.id,
       token: pointer.token,
       to: args.to,
       bytes: args.bytes,
       report: args.reportPath,
-      via: "channel",
+      ...transport,
     });
     return {
       status: "submitted",
@@ -217,7 +217,7 @@ export async function submitReportPointer(
       enterAttempted: true,
       token: pointer.token,
       notificationRecorded,
-      via: "channel",
+      ...transport,
     };
   }
   const result = await submit(args.to, text, pointer.token, {
@@ -231,7 +231,7 @@ export async function submitReportPointer(
       enterAttempted: result.enterAttempted,
       token: pointer.token,
       notificationRecorded: false,
-      ...tmuxTransportFields(channel),
+      ...transportFields(channel),
       ...(result.error !== undefined ? { error: result.error } : {}),
     };
   }
@@ -241,7 +241,7 @@ export async function submitReportPointer(
     to: args.to,
     bytes: args.bytes,
     report: args.reportPath,
-    ...tmuxTransportFields(channel),
+    ...transportFields(channel),
   });
   return {
     status: "submitted",
@@ -249,7 +249,7 @@ export async function submitReportPointer(
     enterAttempted: true,
     token: pointer.token,
     notificationRecorded,
-    ...tmuxTransportFields(channel),
+    ...transportFields(channel),
   };
 }
 

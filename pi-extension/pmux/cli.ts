@@ -43,7 +43,8 @@ import {
   type RegisteredReportFile,
 } from "./report-delivery.ts";
 import { appendReportAck, appendReportReceipt, reportReceiptPath } from "./report-receipt.ts";
-import { submitChannel, type ChannelUnavailableReason } from "./channel-endpoint.ts";
+import { submitChannel } from "./channel-endpoint.ts";
+import { type ChannelUnavailableReason } from "./channel-reason.ts";
 import { isReportId, reportArtifactPath } from "./report-artifact.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
@@ -659,7 +660,7 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
       notification: delivery.status === "not-submitted" ? "not-submitted" : "unknown",
       enterAttempted: delivery.enterAttempted,
       error: delivery.error,
-      channelError: delivery.channelError,
+      ...(delivery.channelError !== undefined ? { channelError: delivery.channelError } : {}),
       id: registered.id,
       to,
       bytes: registered.bytes,

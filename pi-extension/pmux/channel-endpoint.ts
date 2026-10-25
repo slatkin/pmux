@@ -21,6 +21,7 @@
 import { connect as netConnect } from "node:net";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { type ChannelUnavailableReason } from "./channel-reason.ts";
 
 /** The hard budget for the connect, the write and the reply together. */
 export const CHANNEL_TIMEOUT_MS = 2000;
@@ -82,30 +83,10 @@ export function channelEndpointPath(args: {
 }
 
 /**
- * The reasons a channel attempt can end without a delivery. `no-endpoint`,
- * `refused`, `timeout` and `bad-reply` are this client's own; `unarmed`,
- * `write-failed` and `invalid` come from the endpoint itself.
+ * The outcome of one channel attempt. `emitted` is the only positive result.
+ * The reason vocabulary (`ChannelUnavailableReason`) and its guard live in
+ * `channel-reason.ts`, the module both sides of the `.sent` log share.
  */
-export type ChannelUnavailableReason =
-  "no-endpoint" | "refused" | "timeout" | "unarmed" | "write-failed" | "invalid" | "bad-reply";
-
-/** The reasons this module can name, for readers that narrow an unknown value. */
-const CHANNEL_REASONS: readonly ChannelUnavailableReason[] = [
-  "no-endpoint",
-  "refused",
-  "timeout",
-  "unarmed",
-  "write-failed",
-  "invalid",
-  "bad-reply",
-];
-
-/** True when `value` is one of the known `ChannelUnavailableReason` strings. */
-export function isChannelUnavailableReason(value: unknown): value is ChannelUnavailableReason {
-  return typeof value === "string" && (CHANNEL_REASONS as readonly string[]).includes(value);
-}
-
-/** The outcome of one channel attempt. `emitted` is the only positive result. */
 export interface ChannelSubmitResult {
   status: "emitted" | "unavailable";
   /** Set only when `status` is `unavailable`. */
@@ -160,8 +141,10 @@ export function __setChannelConnectForTests__(fn: ChannelConnect | null): void {
   connectOverride = fn;
 }
 
-/** The real socket acquisition: connect and resolve once connected. */
-function defaultConnect(args: { path: string; timeoutMs: number }): Promise<ChannelSocket> {
+/** The real socket acquisition: connect and resolve once connected. The
+ * budget is enforced by the caller's timer, so the connect needs no slice
+ * of it. */
+function defaultConnect(args: { path: string }): Promise<ChannelSocket> {
   return new Promise((resolve, reject) => {
     const socket = netConnect(args.path);
     socket.once("error", reject);
@@ -188,7 +171,16 @@ function requestLine(args: ChannelSubmitArgs): string {
 }
 
 /** The reply shapes the endpoint's own reasons can travel in. */
-const ENDPOINT_REASONS: readonly string[] = ["unarmed", "write-failed", "invalid"];
+const ENDPOINT_REASONS: readonly ChannelUnavailableReason[] = [
+  "unarmed",
+  "write-failed",
+  "invalid",
+];
+
+/** True when `value` is one of the reasons the endpoint's own reply carries. */
+function isEndpointReason(value: unknown): value is ChannelUnavailableReason {
+  return typeof value === "string" && (ENDPOINT_REASONS as readonly string[]).includes(value);
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -204,12 +196,8 @@ function interpretReply(line: string): ChannelSubmitResult {
   }
   if (!isPlainObject(value)) return { status: "unavailable", reason: "bad-reply" };
   if (value.ok === true && value.emitted === true) return { status: "emitted" };
-  if (
-    value.ok === false &&
-    typeof value.reason === "string" &&
-    ENDPOINT_REASONS.includes(value.reason)
-  ) {
-    return { status: "unavailable", reason: value.reason as ChannelUnavailableReason };
+  if (value.ok === false && isEndpointReason(value.reason)) {
+    return { status: "unavailable", reason: value.reason };
   }
   return { status: "unavailable", reason: "bad-reply" };
 }
@@ -225,6 +213,20 @@ function interpretReply(line: string): ChannelSubmitResult {
  * — a refused connect, a failed write, a reply outside the known shapes —
  * is `unavailable`, so the caller falls back to the verified input.
  */
+
+/**
+ * The reason one failed connect reads as. A connect that reaches the socket
+ * and is denied is `refused`; an endpoint file that vanished between the
+ * existence check and the connect is the same `no-endpoint` case the check
+ * covers. Any other connect error — `ENOTSOCK`, `EACCES` — has no class of
+ * its own in the vocabulary, so it keeps the refused bucket; the fallback is
+ * identical whatever the reason reads.
+ */
+function connectRejectionReason(error: unknown): ChannelUnavailableReason {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ENOENT") return "no-endpoint";
+  return "refused";
+}
 export function submitChannel(args: ChannelSubmitArgs): Promise<ChannelSubmitResult> {
   const path = channelEndpointPath({
     ...(args.env !== undefined ? { env: args.env } : {}),
@@ -279,7 +281,7 @@ export function submitChannel(args: ChannelSubmitArgs): Promise<ChannelSubmitRes
             if (err) fail("write-failed");
           });
         },
-        () => fail("refused"),
+        (error: unknown) => fail(connectRejectionReason(error)),
       );
   });
 }

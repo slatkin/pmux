@@ -23,7 +23,7 @@
  * through this module, so the name and the record shapes live in one place.
  */
 import { appendFileSync, readFileSync } from "node:fs";
-import { isChannelUnavailableReason, type ChannelUnavailableReason } from "./channel-endpoint.ts";
+import { type ChannelUnavailableReason, isChannelUnavailableReason } from "./channel-reason.ts";
 
 /** The suffix the receipt file carries next to the session file. */
 export const REPORT_RECEIPT_SUFFIX = ".sent";

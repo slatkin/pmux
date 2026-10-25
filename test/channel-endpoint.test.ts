@@ -18,6 +18,7 @@ import {
   type ChannelSocket,
   type ChannelSubmitResult,
 } from "../pi-extension/pmux/channel-endpoint.ts";
+import { isChannelUnavailableReason } from "../pi-extension/pmux/channel-reason.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
 const { withTempDirAsync } = tempDirHelpers("pmux-channel-");
@@ -101,6 +102,25 @@ function startEndpoint(
     );
   });
 }
+
+describe("isChannelUnavailableReason", () => {
+  it("accepts exactly the reasons the spec names", () => {
+    for (const reason of [
+      "no-endpoint",
+      "refused",
+      "timeout",
+      "unarmed",
+      "write-failed",
+      "invalid",
+      "bad-reply",
+    ]) {
+      assert.equal(isChannelUnavailableReason(reason), true, reason);
+    }
+    for (const value of [undefined, null, 42, "", "mystery", "REFUSED"]) {
+      assert.equal(isChannelUnavailableReason(value), false, String(value));
+    }
+  });
+});
 
 describe("channelEndpointPath", () => {
   it("derives the shared vector's path", () => {
@@ -239,6 +259,37 @@ describe("submitChannel", () => {
       writeFileSync(socketPath, "");
       const result = await submitChannel({ ...BASE_ARGS, env: liveEndpointEnv(dir) });
       assert.deepEqual(result, { status: "unavailable", reason: "refused" });
+    });
+  });
+
+  it("maps connect rejections by errno", async () => {
+    await withTempDirAsync(async (dir) => {
+      const socketPath = channelEndpointPath({ env: liveEndpointEnv(dir), targetPane: TARGET });
+      assert.ok(socketPath);
+      // The endpoint file exists when the attempt starts, so each injected
+      // connect failure is a rejection between the check and the connect.
+      writeFileSync(socketPath, "");
+      const cases: readonly (readonly [string, ChannelSubmitResult])[] = [
+        ["ECONNREFUSED", { status: "unavailable", reason: "refused" }],
+        // A file that vanished between the check and the connect reads as
+        // `no-endpoint`, the same case the check covers.
+        ["ENOENT", { status: "unavailable", reason: "no-endpoint" }],
+        // `ENOTSOCK` and `EACCES` have no class of their own; they keep the
+        // refused bucket, and the fallback is identical either way.
+        ["ENOTSOCK", { status: "unavailable", reason: "refused" }],
+        ["EACCES", { status: "unavailable", reason: "refused" }],
+      ];
+      for (const [code, expected] of cases) {
+        __setChannelConnectForTests__(async () => {
+          throw Object.assign(new Error(code), { code });
+        });
+        try {
+          const result = await submitChannel({ ...BASE_ARGS, env: liveEndpointEnv(dir) });
+          assert.deepEqual(result, expected, code);
+        } finally {
+          __setChannelConnectForTests__(null);
+        }
+      }
     });
   });
 
