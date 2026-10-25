@@ -21,6 +21,7 @@ import {
   getArtifactDir,
   getRosterFile,
   SubagentParams,
+  type ResumeParams,
   type RunningSubagent,
   type SendOptions,
   type SteerMessage,
@@ -980,6 +981,168 @@ describe("supervisor resume", () => {
       assert.deepEqual(h.surfaces, []);
       assert.deepEqual(h.runs, []);
       assert.deepEqual(h.supervisor.running(), []);
+    });
+  });
+});
+
+describe("model fallback", () => {
+  /** Every `.launch.json` under `root`; the record a spawn writes lives
+   * beside the child session file, so a tree walk says whether one exists. */
+  function allLaunchRecordFiles(root: string): string[] {
+    const found: string[] = [];
+    const walk = (dir: string): void => {
+      if (!existsSync(dir)) return;
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.name.endsWith(".launch.json")) found.push(full);
+      }
+    };
+    walk(root);
+    return found;
+  }
+
+  it("declares the fallback parameter with the description the parent reads", () => {
+    assert.equal(
+      Value.Check(SubagentParams, { name: "S", agent: "r", task: "t", fallback: true }),
+      true,
+    );
+    assert.equal(
+      Value.Check(SubagentParams, { name: "S", agent: "r", task: "t", fallback: false }),
+      true,
+    );
+    assert.equal(
+      SubagentParams.properties.fallback.description,
+      "true: run the role on its `model-fallback`. Use it when your model hits API limits " +
+        "or errors, or when the user asks for the fallback or alternate model.",
+    );
+  });
+
+  it("spawns the role on its model-fallback when fallback is true", async () => {
+    await withHarness(async (h, env) => {
+      writeAgentFile(
+        agentsDir(env),
+        "fb-role",
+        "model: hyper/glm-5.1\nmodel-fallback: opencode-go/glm-5.3-flash\ntools: read,bash",
+        "You have a fallback.",
+      );
+
+      const running = await h.supervisor.spawn(
+        { name: "Scout", task: "survey the repo", agent: "fb-role", fallback: true },
+        env.ctx,
+      );
+
+      // The record holds the fallback model, and the other role values apply
+      // as before.
+      const record = readLaunchRecord(getLaunchRecordFile(running.sessionFile));
+      assert.ok(record);
+      assert.equal(record.model, "opencode-go/glm-5.3-flash");
+      assert.equal(record.tools, "read,bash");
+      assert.equal(
+        flagValue(readLaunchSpec(running.launchScriptFile as string).args, "--model"),
+        "opencode-go/glm-5.3-flash",
+      );
+    });
+  });
+
+  it("spawns the role's own model without the parameter or with a false one", async () => {
+    await withHarness(async (h, env) => {
+      writeAgentFile(
+        agentsDir(env),
+        "fb-role",
+        "model: hyper/glm-5.1\nmodel-fallback: opencode-go/glm-5.3-flash",
+        "You have a fallback.",
+      );
+
+      const withoutFlag = await h.supervisor.spawn(
+        { name: "Scout", task: "survey the repo", agent: "fb-role" },
+        env.ctx,
+      );
+      const withoutRecord = readLaunchRecord(getLaunchRecordFile(withoutFlag.sessionFile));
+      assert.ok(withoutRecord);
+      assert.equal(withoutRecord.model, "hyper/glm-5.1");
+
+      const falseFlag = await h.supervisor.spawn(
+        { name: "Scout2", task: "survey again", agent: "fb-role", fallback: false },
+        env.ctx,
+      );
+      const falseRecord = readLaunchRecord(getLaunchRecordFile(falseFlag.sessionFile));
+      assert.ok(falseRecord);
+      assert.equal(falseRecord.model, "hyper/glm-5.1");
+    });
+  });
+
+  it("refuses a fallback on a role without model-fallback, and writes nothing", async () => {
+    await withHarness(async (h, env) => {
+      writeAgentFile(agentsDir(env), "no-fb-role", "model: hyper/glm-5.1", "You have no fallback.");
+
+      await assert.rejects(
+        h.supervisor.spawn(
+          { name: "Scout", task: "survey the repo", agent: "no-fb-role", fallback: true },
+          env.ctx,
+        ),
+        /role 'no-fb-role' has no model-fallback/,
+      );
+
+      // No pane and no record: the error throws before both.
+      assert.deepEqual(h.surfaces, []);
+      assert.deepEqual(allLaunchRecordFiles(env.dir), []);
+    });
+  });
+
+  it("refuses fallback together with a model override, and writes nothing", async () => {
+    await withHarness(async (h, env) => {
+      writeAgentFile(
+        agentsDir(env),
+        "fb-role",
+        "model: hyper/glm-5.1\nmodel-fallback: opencode-go/glm-5.3-flash",
+        "You have a fallback.",
+      );
+
+      await assert.rejects(
+        h.supervisor.spawn(
+          {
+            name: "Scout",
+            task: "survey the repo",
+            agent: "fb-role",
+            model: "other/model",
+            fallback: true,
+          },
+          env.ctx,
+        ),
+        /fallback conflicts with model/,
+      );
+
+      assert.deepEqual(h.surfaces, []);
+      assert.deepEqual(allLaunchRecordFiles(env.dir), []);
+    });
+  });
+
+  it("resumes a fallback spawn on the record's model, and takes no fallback parameter", async () => {
+    await withHarness(async (h, env) => {
+      writeAgentFile(
+        agentsDir(env),
+        "fb-role",
+        "model: hyper/glm-5.1\nmodel-fallback: opencode-go/glm-5.3-flash",
+        "You have a fallback.",
+      );
+      const spawned = await h.supervisor.spawn(
+        { name: "Scout", task: "survey the repo", agent: "fb-role", fallback: true },
+        env.ctx,
+      );
+
+      // A stray `fallback` key on the resume params is not a parameter: the
+      // record's model still decides.
+      const result = await h.supervisor.resume(
+        { sessionPath: spawned.sessionFile, fallback: true } as ResumeParams,
+        env.ctx,
+      );
+
+      const record = readLaunchRecord(getLaunchRecordFile(spawned.sessionFile));
+      assert.ok(record);
+      assert.equal(record.model, "opencode-go/glm-5.3-flash");
+      const spec = readLaunchSpec(result.details.launchScriptFile as string);
+      assert.equal(flagValue(spec.args, "--model"), "opencode-go/glm-5.3-flash");
     });
   });
 });

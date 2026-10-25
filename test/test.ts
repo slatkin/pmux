@@ -1669,6 +1669,85 @@ describe("subagent discovery", () => {
     });
   });
 
+  it("lists a role's model-fallback next to its model, and no fallback for a role without one", async () => {
+    await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
+      writeAgentFile(
+        projectAgentsDir,
+        "fallback-listing-test-agent",
+        [
+          "name: fallback-listing-test-agent",
+          "description: Worker with an alternate model",
+          "model: hyper/glm-5.1",
+          "model-fallback: opencode-go/glm-5.3-flash",
+        ].join("\n"),
+      );
+      writeAgentFile(
+        projectAgentsDir,
+        "plain-model-listing-test-agent",
+        [
+          "name: plain-model-listing-test-agent",
+          "description: Worker with one model",
+          "model: hyper/glm-5.1",
+        ].join("\n"),
+      );
+
+      const { api, registeredTools } = createMockExtensionApi();
+      (subagentsModule as any).default(api);
+
+      const tool = registeredTools.find((tool) => tool.name === "pmux_list");
+      assert.ok(tool, "expected pmux_list to be registered");
+
+      const result = await tool.execute();
+      const text = result.content[0].text as string;
+
+      // The text line shows both models, the second marked as the fallback.
+      const fallbackLine = text
+        .split("\n")
+        .find((line: string) => line.includes("fallback-listing-test-agent"));
+      assert.equal(
+        fallbackLine,
+        "• fallback-listing-test-agent (project) [hyper/glm-5.1] " +
+          "(fallback: opencode-go/glm-5.3-flash) — Worker with an alternate model",
+      );
+
+      // A role without model-fallback shows no fallback text.
+      const plainLine = text
+        .split("\n")
+        .find((line: string) => line.includes("plain-model-listing-test-agent"));
+      assert.ok(plainLine, "expected the plain role in the listing");
+      assert.equal(plainLine.includes("fallback"), false);
+
+      // The TUI line marks the fallback part with the model's dim style.
+      const rendered = tool
+        .renderResult(
+          result,
+          {},
+          {
+            fg: (color: string, input: string) => `<${color}>${input}</${color}>`,
+            bold: (input: string) => input,
+          },
+        )
+        .render(400)
+        .join("\n");
+      const renderedFallbackLine = rendered
+        .split("\n")
+        .map((line: string) => line.trimEnd())
+        .find((line: string) => line.includes("fallback-listing-test-agent"));
+      assert.equal(
+        renderedFallbackLine,
+        "  <toolTitle>fallback-listing-test-agent</toolTitle>" +
+          "<accent> (project)</accent>" +
+          "<dim> [hyper/glm-5.1]</dim>" +
+          "<dim> (fallback: opencode-go/glm-5.3-flash)</dim>" +
+          "<dim> — Worker with an alternate model</dim>",
+      );
+      const renderedPlainLine = rendered
+        .split("\n")
+        .find((line: string) => line.includes("plain-model-listing-test-agent"));
+      assert.equal(renderedPlainLine.includes("fallback"), false);
+    });
+  });
+
   it("hides disable-model-invocation agents from listings but keeps direct loading", async () => {
     await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
       writeAgentFile(

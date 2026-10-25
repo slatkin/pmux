@@ -853,7 +853,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           const badge = a.source === "project" ? " (project)" : "";
           const desc = a.description ? ` — ${a.description}` : "";
           const model = a.model ? ` [${a.model}]` : "";
-          return `• ${a.name}${badge}${model}${desc}`;
+          const fallback = a.modelFallback ? ` (fallback: ${a.modelFallback})` : "";
+          return `• ${a.name}${badge}${model}${fallback}${desc}`;
         });
 
         return {
@@ -872,7 +873,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           const badge = a.source === "project" ? theme.fg("accent", " (project)") : "";
           const desc = a.description ? theme.fg("dim", ` — ${a.description}`) : "";
           const model = a.model ? theme.fg("dim", ` [${a.model}]`) : "";
-          return `  ${theme.fg("toolTitle", theme.bold(a.name))}${badge}${model}${desc}`;
+          const fallback = a.modelFallback
+            ? theme.fg("dim", ` (fallback: ${a.modelFallback})`)
+            : "";
+          return `  ${theme.fg("toolTitle", theme.bold(a.name))}${badge}${model}${fallback}${desc}`;
         });
         return new Text(lines.join("\n"), 0, 0);
       },
