@@ -67,7 +67,7 @@ with user consent).
    procedure) itself.
 2. Start the child:
    ```bash
-   node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>]
+   node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--fallback]
    ```
    `<cwd>` is the child's working directory; `--scratch` (default
    `${TMPDIR:-/tmp}/pmux`) holds the generated context files. `start`
@@ -90,6 +90,16 @@ with user consent).
    ```bash
    node <skill-dir>/launch.ts prune [--scratch <dir>] [--max-age-days <n>] [--dry-run]
    ```
+   The `--fallback` flag runs the child on the role's `model-fallback:`
+   frontmatter value instead of its `model:`. Use it when the role's
+   primary model hits API limits or errors, or when the user asks for the
+   fallback or alternate model. The role must set `model-fallback:`: a
+   launch with `--fallback` fails naming the role and `model-fallback`,
+   before any pane opens or any file is written. Nothing switches models
+   automatically — nobody retries a child that failed on its model, so
+   running it again with `--fallback` is your decision. And `resume` takes
+   no `--fallback`: the launch record holds the model launch time chose,
+   and the follow-up runs on it.
    Placement comes from the role's `surface:` frontmatter when it names
    `pane`, `tab` or `float`, and then the extension's `config.json`:
    `pane` (the default) places the child automatically in your window —
@@ -187,7 +197,7 @@ into your pane.
    itself.
 2. Start the child:
    ```bash
-   node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent "$TMUX_PANE" --report send [--scratch <dir>] [--close-grace-ms <n>]
+   node <skill-dir>/launch.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent "$TMUX_PANE" --report send [--scratch <dir>] [--close-grace-ms <n>] [--fallback]
    ```
    On success it prints JSON on stdout:
    `{"pane":..., "session":..., "launch":...}` — the session file (the
