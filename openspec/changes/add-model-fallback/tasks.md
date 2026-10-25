@@ -19,8 +19,8 @@
 
 ## 4. Documentation
 
-- [ ] 4.1 In `README.md` (the "Bundled Agents" section), document `model-fallback:` and the `fallback` parameter with one example role file that matches the proposal. State that pmux ships no fallback value, that nothing switches automatically, and that a parent that cannot act (a hard limit on its own model) needs the user to start the child. Verify the example parses by running it through the parser test from 1.1.
-- [ ] 4.2 In `docs/guide.md`, add `model-fallback` to the Frontmatter Reference table (next to `model`), `fallback` to the `pmux_spawn` parameter table, and `--fallback` to the external-orchestrator `start` text; note in the `pmux_resume` section that a resumed child keeps its launch model. Verify by reading each edited table row against the spec scenarios and against its neighbours for column consistency. Prettier ignores `*.md`, so `format:check` does not cover this.
+- [x] 4.1 In `README.md` (the "Bundled Agents" section), document `model-fallback:` and the `fallback` parameter with one example role file that matches the proposal. State that pmux ships no fallback value, that nothing switches automatically, and that a parent that cannot act (a hard limit on its own model) needs the user to start the child. Verify the example parses by running it through the parser test from 1.1.
+- [x] 4.2 In `docs/guide.md`, add `model-fallback` to the Frontmatter Reference table (next to `model`), `fallback` to the `pmux_spawn` parameter table, and `--fallback` to the external-orchestrator `start` text; note in the `pmux_resume` section that a resumed child keeps its launch model. Verify by reading each edited table row against the spec scenarios and against its neighbours for column consistency. Prettier ignores `*.md`, so `format:check` does not cover this.
 
 ## 5. Integration
 
