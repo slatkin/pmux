@@ -163,11 +163,11 @@ interface ContactContext {
  * wake row only when the child reported nothing new to the parent.
  */
 function contactRows(context: ContactContext): WakeRow[] {
-  const log = readReportLog(context.sessionFile);
   if (context.marked) {
     // Only registrations newer than the baseline, and only the parent's
     // address: another pane's report is that pane's business, and an older
     // run's report was already offered once (design D8).
+    const log = readReportLog(context.sessionFile);
     const reports: WakeRow[] = log.reports.flatMap((report) =>
       report.to === context.parent && !context.baselineReportIds?.has(report.id)
         ? [
@@ -184,11 +184,10 @@ function contactRows(context: ContactContext): WakeRow[] {
   }
   // Parent contact without a report ID still counts against the wake-up:
   // a kindless receipt line, addressed to the parent, means an unmarked
-  // `send` typed its report there. A legacy receipt is its only record, and
-  // the file is read once for both counts.
-  const receiptsAfter = log.notifications.filter(
-    (notification) => notification.id === undefined && notification.to === context.parent,
-  ).length;
+  // `send` typed its report there. A legacy receipt is its only record;
+  // `countReportsTo` decides this count, the same function the baseline
+  // applied before the spawn, so one function counts both sides.
+  const receiptsAfter = countReportsTo(context.sessionFile, context.parent);
   if (receiptsAfter <= context.receiptsBefore) {
     return [
       {
@@ -204,6 +203,29 @@ function contactRows(context: ContactContext): WakeRow[] {
     ];
   }
   return [];
+}
+
+/**
+ * The registered fields one marked row delivers (design D8), or null when a
+ * report row is already acked and its delivery is skipped. A report row
+ * supplies its registration as is; a wake row registers itself first, so
+ * both rows end in one `deliver` call. Throwing here (a failed wake-row
+ * registration) is the row's one failure path, caught by the caller's try.
+ */
+function markedDeliverArgs(
+  row: WakeRow,
+  context: ContactContext,
+): { id: string; reportPath: string; bytes: number } | null {
+  if (row.kind === "report") {
+    if (reportAcknowledged(context.sessionFile, row.id)) return null;
+    return { id: row.id, reportPath: row.reportPath, bytes: row.bytes };
+  }
+  const registered = registerReport({
+    sessionFile: context.sessionFile,
+    to: context.parent,
+    text: row.text,
+  });
+  return { id: registered.id, reportPath: registered.reportPath, bytes: registered.bytes };
 }
 
 /**
@@ -244,33 +266,17 @@ async function contactParent(args: {
         // while the child ran on) is skipped. The wake row becomes its own
         // artifact, registered as `send` registers a report, delivered
         // through the same flow.
-        if (row.kind === "report") {
-          if (reportAcknowledged(context.sessionFile, row.id)) continue;
-          const result = await deliver({
-            sessionFile: context.sessionFile,
-            to: context.parent,
-            id: row.id,
-            reportPath: row.reportPath,
-            bytes: row.bytes,
-            cliPath: context.cliPath,
-          });
-          if (!result.submitted) fail(result.error ?? result.status);
-        } else {
-          const registered = registerReport({
-            sessionFile: context.sessionFile,
-            to: context.parent,
-            text: row.text,
-          });
-          const result = await deliver({
-            sessionFile: context.sessionFile,
-            to: context.parent,
-            id: registered.id,
-            reportPath: registered.reportPath,
-            bytes: registered.bytes,
-            cliPath: context.cliPath,
-          });
-          if (!result.submitted) fail(result.error ?? result.status);
-        }
+        const toDeliver = markedDeliverArgs(row, context);
+        if (toDeliver === null) continue;
+        const result = await deliver({
+          sessionFile: context.sessionFile,
+          to: context.parent,
+          id: toDeliver.id,
+          reportPath: toDeliver.reportPath,
+          bytes: toDeliver.bytes,
+          cliPath: context.cliPath,
+        });
+        if (!result.submitted) fail(result.error ?? result.status);
       } else if (row.kind === "wake") {
         // Legacy text contact — an unmarked spec keeps its behavior (design
         // D1). The ping question is the child's own text and can span lines,

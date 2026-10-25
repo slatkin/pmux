@@ -13,6 +13,15 @@
 import { randomBytes } from "node:crypto";
 import { renameSync, writeFileSync } from "node:fs";
 
+/** The poll/deadline timer the report-protocol waits default to: a real
+ * `setTimeout`. Both `awaitReportAck` (`report-delivery.ts`) and the
+ * verified screen poll (`tmux.ts`) share it, so an injected poll clock in
+ * tests compresses them together. Host independent, like the rest of the
+ * report-protocol primitives. */
+export function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** The suffix a report artifact — and its abandoned temporary — carries. */
 export const REPORT_ARTIFACT_SUFFIX = ".report.md";
 

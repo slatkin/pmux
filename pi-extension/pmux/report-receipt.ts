@@ -202,17 +202,16 @@ function legacyReceiptTarget(record: Record<string, unknown>): string | null {
 /** Fold one parsed record into the session's log state. */
 function foldRecord(record: Record<string, unknown>, state: ReportLogState): void {
   const at = typeof record.at === "string" ? record.at : undefined;
-  if (record.kind === undefined) {
-    // A legacy delivery is the one kindless shape that reaches the
-    // notifications: the rule lives in `legacyReceiptTarget`.
-    const to = legacyReceiptTarget(record);
-    if (to !== null) {
-      state.notifications.push({
-        to,
-        ...(typeof record.bytes === "number" ? { bytes: record.bytes } : {}),
-        ...(at !== undefined ? { at } : {}),
-      });
-    }
+  // A legacy delivery is the one kindless shape that reaches the
+  // notifications: the rule lives in `legacyReceiptTarget`, which the kind
+  // checks below never need to restate.
+  const to = legacyReceiptTarget(record);
+  if (to !== null) {
+    state.notifications.push({
+      to,
+      ...(typeof record.bytes === "number" ? { bytes: record.bytes } : {}),
+      ...(at !== undefined ? { at } : {}),
+    });
     return;
   }
   if (record.kind === "report") {

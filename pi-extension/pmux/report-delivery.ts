@@ -16,12 +16,13 @@
  */
 import { encodePaneText } from "./pane-input.ts";
 import { buildReportPointer, writeReportArtifact } from "./report-artifact.ts";
+import { defaultSleep } from "./report-artifact.ts";
 import {
   appendReportNotification,
   appendReportRegistration,
   readReportLog,
 } from "./report-receipt.ts";
-import { defaultSleep, verifiedAgentPrompt, type VerifiedPromptResult } from "./tmux.ts";
+import { verifiedAgentPrompt, type VerifiedPromptResult } from "./tmux.ts";
 
 /** The interval the ack wait polls the event log at. */
 export const REPORT_ACK_POLL_MS = 250;

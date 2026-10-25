@@ -667,10 +667,12 @@ async function sendCommand(values: CliValues, deps: CliDeps): Promise<number> {
     return sendMarkedCommand(values, deps);
   }
   if (values["ack-timeout"] !== undefined) {
-    (deps.stderr ?? ((text: string) => process.stderr.write(text)))(
-      "cli.ts: --ack-timeout is a report-protocol flag: it needs PI_PMUX_REPORT_PROTOCOL=file-ack-v1\n",
+    return usageFailure(
+      new Error(
+        "--ack-timeout is a report-protocol flag: it needs PI_PMUX_REPORT_PROTOCOL=file-ack-v1",
+      ),
+      deps.stderr ?? ((text: string) => process.stderr.write(text)),
     );
-    return 1;
   }
   return sendLegacyCommand(values, deps);
 }
@@ -685,7 +687,7 @@ async function sendCommand(values: CliValues, deps: CliDeps): Promise<number> {
  * guesses or probes the parent with a second message. The line names the
  * pane it typed into, the size of the text it sent and the receipt it wrote.
  */
-async function sendLegacyCommand(values: CliValues, deps: CliDeps): Promise<number> {
+function sendLegacyCommand(values: CliValues, deps: CliDeps): number {
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
   const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
   try {
