@@ -43,6 +43,8 @@ import {
   type RegisteredReportFile,
 } from "./report-delivery.ts";
 import { appendReportAck, appendReportReceipt, reportReceiptPath } from "./report-receipt.ts";
+import { submitChannel } from "./channel-endpoint.ts";
+import { type ChannelUnavailableReason } from "./channel-reason.ts";
 import { isReportId, reportArtifactPath } from "./report-artifact.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
@@ -157,6 +159,11 @@ export interface CliDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Config path holding the `surface` default; defaults to the extension config. */
   configPath?: string;
+  /**
+   * The channel endpoint client; defaults to the real `submitChannel`. The
+   * report delivery offers the parent's channel first (design D3).
+   */
+  submitChannel?: typeof submitChannel;
 }
 
 function required(flag: string, value: string | undefined): string {
@@ -543,6 +550,8 @@ interface SendRefusalFields {
   bytes: number;
   report: string;
   receipt: string;
+  /** Why the channel fell back; a refusal only ever follows a fallback. */
+  channelError?: ChannelUnavailableReason;
 }
 
 /** Print the structured failure line of a refused send; the caller exits 2. */
@@ -559,6 +568,7 @@ function writeSendRefusalLine(write: (text: string) => void, fields: SendRefusal
       receipt: fields.receipt,
       notificationRecorded: false,
       ...(fields.error !== undefined ? { error: fields.error } : {}),
+      ...(fields.channelError !== undefined ? { channelError: fields.channelError } : {}),
       enterAttempted: fields.enterAttempted,
     }) + "\n",
   );
@@ -619,7 +629,11 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
         cliPath: CLI_PATH,
         ackTimeoutSeconds,
       },
-      deps.sleep !== undefined ? { sleep: deps.sleep } : {},
+      {
+        ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
+        ...(deps.submitChannel !== undefined ? { submitChannel: deps.submitChannel } : {}),
+        ...(deps.env !== undefined ? { env: deps.env } : {}),
+      },
     );
     if (delivery.submitted) {
       // `acknowledged:false` is the parent being busy (design D6): the
@@ -635,6 +649,8 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
           report: resolve(registered.reportPath),
           receipt,
           notificationRecorded: delivery.notificationRecorded,
+          via: delivery.via,
+          ...(delivery.channelError !== undefined ? { channelError: delivery.channelError } : {}),
         }) + "\n",
       );
       return 0;
@@ -644,6 +660,7 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
       notification: delivery.status === "not-submitted" ? "not-submitted" : "unknown",
       enterAttempted: delivery.enterAttempted,
       error: delivery.error,
+      ...(delivery.channelError !== undefined ? { channelError: delivery.channelError } : {}),
       id: registered.id,
       to,
       bytes: registered.bytes,

@@ -26,7 +26,9 @@ import {
   registerReport,
   type DeliverReportArgs,
   type DeliverReportResult,
+  type ReportDeliveryDeps,
 } from "../pi-extension/pmux/report-delivery.ts";
+import type { ChannelSubmitArgs } from "../pi-extension/pmux/channel-endpoint.ts";
 import { newReportId, reportArtifactPath } from "../pi-extension/pmux/report-artifact.ts";
 import {
   appendReportAck,
@@ -79,6 +81,8 @@ interface MarkedCaseOptions {
   deliver?: (args: DeliverReportArgs) => Promise<DeliverReportResult>;
   /** When true, the wrapped recorder invokes the real delivery flow. */
   realDelivery?: boolean;
+  /** Deps the real delivery flow runs with, e.g. an injected channel client. */
+  deliveryDeps?: ReportDeliveryDeps;
 }
 
 /** Run the wrapper on a send-mode spec with every side effect recorded. */
@@ -95,7 +99,7 @@ async function runMarkedCase(
   const deliver = async (args: DeliverReportArgs): Promise<DeliverReportResult> => {
     deliveries.push(args);
     events.push(`deliver ${args.id}`);
-    if (options.realDelivery === true) return sharedDeliverReport(args);
+    if (options.realDelivery === true) return sharedDeliverReport(args, options.deliveryDeps);
     if (options.deliver !== undefined) return options.deliver(args);
     return {
       status: "submitted",
@@ -103,6 +107,7 @@ async function runMarkedCase(
       enterAttempted: true,
       token: newReportId(),
       notificationRecorded: true,
+      via: "tmux",
       acknowledged: false,
     };
   };
@@ -209,6 +214,7 @@ function submittedResult(): DeliverReportResult {
     enterAttempted: true,
     token: newReportId(),
     notificationRecorded: true,
+    via: "tmux",
     acknowledged: false,
   };
 }
@@ -483,6 +489,7 @@ describe("runSpec under file-ack-v1 (design D8)", () => {
                 enterAttempted: false,
                 token: newReportId(),
                 notificationRecorded: false,
+                via: "tmux",
                 error: "the pane is in a mode",
                 acknowledged: false,
               }
@@ -678,6 +685,58 @@ describe("runSpec with the real delivery (the default seam, tmux fake)", () => {
         paneCalls.filter((call) => call.startsWith("send-keys")),
         [],
       );
+    });
+  });
+
+  it("re-delivers through the channel: same ID, fresh token, no pane input", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      const id = newReportId();
+      // The child's own `send` notification token, from its recorded event.
+      const childToken = "ee".repeat(16);
+      const channelCalls: ChannelSubmitArgs[] = [];
+      const res = await runMarkedCase(dir, markedSpec(dir), {
+        childScript: childReportScript({
+          sessionFile,
+          id,
+          to: PARENT,
+          exitBody: '{"type":"done"}',
+        }),
+        realDelivery: true,
+        deliveryDeps: {
+          submitChannel: async (args) => {
+            channelCalls.push(args);
+            return { status: "emitted" };
+          },
+        },
+      });
+      // The exit re-delivery reached the parent through the channel.
+      assert.equal(res.deliveries.length, 1);
+      assert.equal(res.deliveries[0]!.id, id);
+      assert.equal(channelCalls.length, 1);
+      assert.equal(channelCalls[0]!.id, id);
+      assert.equal(channelCalls[0]!.to, PARENT);
+      // A fresh visibility token, not the child's own notification token.
+      assert.notEqual(channelCalls[0]!.token, childToken);
+      assert.match(channelCalls[0]!.token, /^[0-9a-f]{32}$/);
+      assert.ok(channelCalls[0]!.text.includes(`pmux report ${id}.`));
+      // `emitted` ends the attempt: no pane input at all.
+      assert.deepEqual(
+        paneCalls.filter((call) => call.startsWith("send-keys")),
+        [],
+      );
+      // The submission was still recorded, keyed on the fresh token —
+      // alongside the child's own `send` notification, which stays untouched.
+      const log = readReportLog(sessionFile);
+      assert.equal(log.notifications.length, 2);
+      const redelivered = log.notifications.filter(
+        (notification) => notification.token === channelCalls[0]!.token,
+      );
+      assert.deepEqual(
+        redelivered.map((notification) => notification.id),
+        [id],
+      );
+      assert.equal(res.stderr, "");
     });
   });
 });

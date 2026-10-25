@@ -7,8 +7,12 @@
  * any pane input (`registerReport`); both `send` and the run wrapper's
  * no-report wake-up start there. The transport is `submitReportPointer`: a
  * fresh pointer is built for the attempt (same report ID, fresh visibility
- * token), submitted through `verifiedAgentPrompt`, and a `notification`
- * event is recorded — best effort — after a submission. `awaitReportAck`
+ * token), offered to the parent's channel endpoint first (design D3), and —
+ * when the channel is `unavailable`, whatever the reason — submitted through
+ * `verifiedAgentPrompt` as the fallback. A `notification` event is recorded —
+ * best effort — after a submission through either transport, naming the
+ * transport that ran and, after a fallback, the channel's reason (design D5).
+ * `awaitReportAck`
  * then polls the event log for the `ack`: `send` waits up to its
  * `--ack-timeout`, while the wrapper's exit re-delivery passes no timeout
  * and instead rechecks the ack immediately before each retry
@@ -16,11 +20,14 @@
  */
 import { encodePaneText } from "./pane-input.ts";
 import { buildReportPointer, writeReportArtifact } from "./report-artifact.ts";
+import { submitChannel, type ChannelSubmitResult } from "./channel-endpoint.ts";
+import { type ChannelUnavailableReason } from "./channel-reason.ts";
 import { defaultSleep } from "./sleep.ts";
 import {
   appendReportNotification,
   appendReportRegistration,
   readReportLog,
+  type ReportVia,
 } from "./report-receipt.ts";
 import { verifiedAgentPrompt, type VerifiedPromptResult } from "./tmux.ts";
 
@@ -43,6 +50,18 @@ export interface ReportDeliveryDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Poll and deadline clock; defaults to `Date.now`. */
   now?: () => number;
+  /**
+   * The process environment the delivery runs in; defaults to `process.env`.
+   * The channel client derives its endpoint from the same environment the
+   * mode gate reads, so an injected env routes the channel too — never the
+   * ambient one (the seam rule `PI_PMUX_SESSION` already follows).
+   */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * The channel endpoint client; defaults to the real `submitChannel`. The
+   * fallback only decides after this has answered (design D3).
+   */
+  submitChannel?: typeof submitChannel;
 }
 
 /** The registered artifact a report text becomes before any pane input. */
@@ -112,14 +131,45 @@ export type PointerSubmitResult = Pick<
    * refusal: the record means the pointer was submitted to the pane.
    */
   notificationRecorded: boolean;
+  /** The transport the pointer reached the parent through (design D3). */
+  via: ReportVia;
+  /**
+   * Why the channel was `unavailable`, present only after a fallback to the
+   * verified input ran (design D3, D5).
+   */
+  channelError?: ChannelUnavailableReason;
 };
 
 /**
- * Build a fresh pointer for a registered report and submit it through the
- * verified pane input. Every attempt mints a new visibility token while the
- * report ID stays stable, so a re-delivery can prove the new pointer
- * appeared even when an earlier one is still on screen. A submission appends
- * the `notification` event — best effort, never fatal (design D2).
+ * The transport fields a result and its `notification` record share, read
+ * from the channel outcome: the channel transport on `emitted`, otherwise
+ * the verified input plus the channel's reason (design D3, D5).
+ */
+function transportFields(channel: ChannelSubmitResult): {
+  via: ReportVia;
+  channelError?: ChannelUnavailableReason;
+} {
+  if (channel.status === "emitted") return { via: "channel" };
+  return {
+    via: "tmux",
+    ...(channel.reason !== undefined ? { channelError: channel.reason } : {}),
+  };
+}
+
+/**
+ * Build a fresh pointer for a registered report and submit it to the parent.
+ * Every attempt mints a new visibility token while the report ID stays
+ * stable, so a re-delivery can prove the new pointer appeared even when an
+ * earlier one is still on screen.
+ *
+ * The channel goes first (design D3): an `emitted` result ends the attempt —
+ * nothing is typed into the pane, whatever the later `ack` decides. Every
+ * `unavailable` reason falls back to the verified pane input with the SAME
+ * pointer, and the result then carries the channel's reason as
+ * `channelError`. A missing or late `ack` is never a fallback: the ack wait
+ * belongs to the caller, after one submission. A submission through either
+ * transport appends the `notification` event — best effort, never fatal
+ * (design D2).
  */
 export async function submitReportPointer(
   args: SubmitPointerArgs,
@@ -133,8 +183,42 @@ export async function submitReportPointer(
     cliPath: args.cliPath,
   });
   // The pointer is already one line; the encoding is the same rule `send`
-  // applies to any text it types, kept in one place.
-  const result = await submit(args.to, encodePaneText(pointer.text), pointer.token, {
+  // applies to any text it types, kept in one place. The channel request
+  // carries the exact text the verified input would type (design D4), so
+  // both transports hold one pointer shape.
+  const text = encodePaneText(pointer.text);
+  const channel = await (deps.submitChannel ?? submitChannel)({
+    to: args.to,
+    id: args.id,
+    text,
+    bytes: args.bytes,
+    token: pointer.token,
+    // The endpoint path comes from the environment; the delivery's env is
+    // the same lookup the mode gate reads, so an injected env routes the
+    // channel too and a live pane's ambient `TMUX` cannot leak in.
+    env: deps.env ?? process.env,
+  });
+  if (channel.status === "emitted") {
+    const transport = transportFields(channel);
+    const notificationRecorded = appendReportNotification(args.sessionFile, {
+      id: args.id,
+      token: pointer.token,
+      to: args.to,
+      bytes: args.bytes,
+      report: args.reportPath,
+      ...transport,
+    });
+    return {
+      status: "submitted",
+      submitted: true,
+      // The channel ran no pane input, so no Enter keypress was attempted.
+      enterAttempted: false,
+      token: pointer.token,
+      notificationRecorded,
+      ...transport,
+    };
+  }
+  const result = await submit(args.to, text, pointer.token, {
     ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
     ...(deps.now !== undefined ? { now: deps.now } : {}),
   });
@@ -145,6 +229,7 @@ export async function submitReportPointer(
       enterAttempted: result.enterAttempted,
       token: pointer.token,
       notificationRecorded: false,
+      ...transportFields(channel),
       ...(result.error !== undefined ? { error: result.error } : {}),
     };
   }
@@ -154,6 +239,7 @@ export async function submitReportPointer(
     to: args.to,
     bytes: args.bytes,
     report: args.reportPath,
+    ...transportFields(channel),
   });
   return {
     status: "submitted",
@@ -161,6 +247,7 @@ export async function submitReportPointer(
     enterAttempted: true,
     token: pointer.token,
     notificationRecorded,
+    ...transportFields(channel),
   };
 }
 

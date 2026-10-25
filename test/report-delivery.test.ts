@@ -17,6 +17,10 @@ import {
   REPORT_ACK_POLL_MS,
   type ReportDeliveryDeps,
 } from "../pi-extension/pmux/report-delivery.ts";
+import type {
+  ChannelSubmitArgs,
+  ChannelSubmitResult,
+} from "../pi-extension/pmux/channel-endpoint.ts";
 import {
   isReportId,
   reportArtifactPath,
@@ -52,6 +56,16 @@ function fakeSubmit(
     };
   };
   return { submit, calls };
+}
+
+/** A channel dep that records its arguments and answers `result`. */
+function fakeChannel(result: ChannelSubmitResult) {
+  const calls: ChannelSubmitArgs[] = [];
+  const submitChannel = async (args: ChannelSubmitArgs): Promise<ChannelSubmitResult> => {
+    calls.push(args);
+    return result;
+  };
+  return { submitChannel, calls };
 }
 
 function submitArgs(sessionFile: string) {
@@ -134,12 +148,16 @@ describe("submitReportPointer", () => {
 
       const state = readReportLog(sessionFile);
       assert.equal(state.notifications.length, 1);
+      // No injected endpoint: the fallback ran, so the record names the
+      // transport and the channel's reason (design D5).
       assert.deepEqual(state.notifications[0], {
         id: ID,
         token: result.token,
         to: "%12",
         bytes: 7,
         report: reportArtifactPath(sessionFile, ID),
+        via: "tmux",
+        channelError: "no-endpoint",
         at: state.notifications[0]!.at,
       });
     });
@@ -182,6 +200,132 @@ describe("submitReportPointer", () => {
       assert.equal(result.enterAttempted, true);
       assert.equal(result.notificationRecorded, false);
       assert.equal(readReportLog(sessionFile).notifications.length, 0);
+    });
+  });
+
+  it("delivers by the channel and never touches the pane on `emitted`", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const { submit, calls } = fakeSubmit({ status: "submitted" });
+      const { submitChannel, calls: channelCalls } = fakeChannel({ status: "emitted" });
+      const result = await submitReportPointer(submitArgs(sessionFile), { submit, submitChannel });
+
+      // `emitted` ends the attempt: no verified-input call at all.
+      assert.equal(calls.length, 0);
+      assert.equal(result.status, "submitted");
+      assert.equal(result.submitted, true);
+      // The channel ran no pane input, so no Enter was attempted.
+      assert.equal(result.enterAttempted, false);
+      assert.equal(result.via, "channel");
+      assert.equal(result.channelError, undefined);
+      assert.equal(isReportId(result.token), true);
+
+      // The channel request carried the report and the pointer.
+      assert.equal(channelCalls.length, 1);
+      assert.equal(channelCalls[0]!.id, ID);
+      assert.equal(channelCalls[0]!.to, "%12");
+      assert.equal(channelCalls[0]!.bytes, 7);
+      assert.equal(channelCalls[0]!.token, result.token);
+
+      // The submission was still recorded, with the channel's token.
+      assert.equal(result.notificationRecorded, true);
+      const state = readReportLog(sessionFile);
+      assert.equal(state.notifications.length, 1);
+      assert.equal(state.notifications[0]!.token, result.token);
+    });
+  });
+
+  it("falls back to the same pointer through the verified input on `unavailable`", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const { submit, calls } = fakeSubmit({ status: "submitted" });
+      const { submitChannel, calls: channelCalls } = fakeChannel({
+        status: "unavailable",
+        reason: "unarmed",
+      });
+      const result = await submitReportPointer(submitArgs(sessionFile), { submit, submitChannel });
+
+      // One fallback call, with the SAME pointer the channel was offered.
+      assert.equal(calls.length, 1);
+      assert.equal(channelCalls.length, 1);
+      assert.equal(calls[0]!.text, channelCalls[0]!.text);
+      assert.equal(calls[0]!.token, channelCalls[0]!.token);
+      assert.equal(calls[0]!.pane, "%12");
+      assert.equal(result.status, "submitted");
+      assert.equal(result.via, "tmux");
+      assert.equal(result.channelError, "unarmed");
+      assert.equal(result.token, calls[0]!.token);
+      assert.equal(result.notificationRecorded, true);
+    });
+  });
+
+  it("reports not-submitted with the channel error when both transports fail", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const { submit } = fakeSubmit({
+        status: "not-submitted",
+        enterAttempted: false,
+        error: "the pane is in a mode",
+      });
+      const { submitChannel, calls: channelCalls } = fakeChannel({
+        status: "unavailable",
+        reason: "refused",
+      });
+      const result = await submitReportPointer(submitArgs(sessionFile), { submit, submitChannel });
+
+      assert.equal(result.status, "not-submitted");
+      assert.equal(result.submitted, false);
+      assert.equal(result.via, "tmux");
+      assert.equal(result.channelError, "refused");
+      assert.equal(result.error, "the pane is in a mode");
+      assert.equal(result.notificationRecorded, false);
+      // The channel was still the first try.
+      assert.equal(channelCalls.length, 1);
+      assert.equal(readReportLog(sessionFile).notifications.length, 0);
+    });
+  });
+
+  it("passes the delivery env to the channel client, not the ambient one", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const env = { TMUX: "/tmp/tmux-1000/default,1,0" };
+      const { submit } = fakeSubmit({ status: "submitted" });
+      const { submitChannel, calls: channelCalls } = fakeChannel({
+        status: "unavailable",
+        reason: "no-endpoint",
+      });
+      await submitReportPointer(submitArgs(sessionFile), { submit, submitChannel, env });
+
+      // The channel request carried the injected env — the same lookup the
+      // mode gate reads — so an injected env routes the channel too.
+      assert.equal(channelCalls.length, 1);
+      assert.equal(channelCalls[0]!.env, env);
+    });
+  });
+
+  it("never falls back on a missing or late ack after `emitted`", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const { submit, calls } = fakeSubmit({ status: "submitted" });
+      const { submitChannel } = fakeChannel({ status: "emitted" });
+      let t = 0;
+      const result = await deliverReport(
+        { ...submitArgs(sessionFile), ackTimeoutSeconds: 1 },
+        {
+          submit,
+          submitChannel,
+          now: () => t,
+          sleep: async (ms) => {
+            t += ms;
+          },
+        },
+      );
+      // The channel emitted once, the pane was never touched, and the ack
+      // timeout alone decided `acknowledged:false` — no second submission.
+      assert.equal(calls.length, 0);
+      assert.equal(result.submitted, true);
+      assert.equal(result.via, "channel");
+      assert.equal(result.acknowledged, false);
     });
   });
 });
