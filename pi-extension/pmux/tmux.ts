@@ -448,6 +448,15 @@ export const VERIFIED_PROMPT_POLL_MS = 100;
 /** The deadline the typed text's token must appear within. */
 const VERIFIED_PROMPT_TIMEOUT_MS = 2000;
 
+/**
+ * The poll timer when none is injected: a real `setTimeout`. The report
+ * protocol's waits share it (`report-delivery.ts`), so an injected
+ * `--ack-timeout` poll clock and the token poll can be compressed together.
+ */
+export function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** The outcome of `verifiedAgentPrompt`, as the report protocol names it. */
 export type VerifiedPromptStatus = "submitted" | "not-submitted" | "unknown";
 
@@ -502,7 +511,7 @@ export async function verifiedAgentPrompt(
     now?: () => number;
   } = {},
 ): Promise<VerifiedPromptResult> {
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
 
   const refuse = (error: string): VerifiedPromptResult => ({

@@ -124,6 +124,33 @@ function wakeText(
 }
 
 /**
+ * The contact context one send-mode run assembles once (design D8) and
+ * passes whole: the parent's address, the wording inputs, and the mode and
+ * baseline values that decide the rows. Both the row builder
+ * (`contactRows`) and the deliverer (`contactParent`) read it.
+ */
+interface ContactContext {
+  /** The parent pane the contact targets. */
+  parent: string;
+  /** The child's final sidecar, for the wake wording. */
+  sidecar: WakeSidecar | undefined;
+  /** The child's exit code, for the wake wording. */
+  code: number;
+  /** Whether the spec runs the `file-ack-v1` protocol. */
+  marked: boolean;
+  /** The session file the event log and artifacts live beside. */
+  sessionFile: string;
+  /** The spec's child name, for the wake wording. */
+  name: string;
+  /** The CLI path the contact names for reading the session and acknowledging. */
+  cliPath: string;
+  /** The report IDs registered before this run spawned, or null when unmarked. */
+  baselineReportIds: Set<string> | null;
+  /** The parent's legacy receipt count before this run spawned. */
+  receiptsBefore: number;
+}
+
+/**
  * The contact rows of a send-mode run, after the sentinel (design D8), in
  * delivery order. The baseline was read before spawn, so an earlier run's
  * registrations and receipts are out of scope whatever they decide here: a
@@ -135,24 +162,14 @@ function wakeText(
  * wake-text row. A legacy run's contact is a raw text, so it carries the
  * wake row only when the child reported nothing new to the parent.
  */
-function contactRows(args: {
-  sessionFile: string;
-  parent: string;
-  sidecar: WakeSidecar | undefined;
-  code: number;
-  marked: boolean;
-  baselineReportIds: Set<string> | null;
-  receiptsBefore: number;
-  cliPath: string;
-  name: string;
-}): WakeRow[] {
-  const log = readReportLog(args.sessionFile);
-  if (args.marked) {
+function contactRows(context: ContactContext): WakeRow[] {
+  const log = readReportLog(context.sessionFile);
+  if (context.marked) {
     // Only registrations newer than the baseline, and only the parent's
     // address: another pane's report is that pane's business, and an older
     // run's report was already offered once (design D8).
     const reports: WakeRow[] = log.reports.flatMap((report) =>
-      report.to === args.parent && !args.baselineReportIds?.has(report.id)
+      report.to === context.parent && !context.baselineReportIds?.has(report.id)
         ? [
             {
               kind: "report" as const,
@@ -170,13 +187,19 @@ function contactRows(args: {
   // `send` typed its report there. A legacy receipt is its only record, and
   // the file is read once for both counts.
   const receiptsAfter = log.notifications.filter(
-    (notification) => notification.id === undefined && notification.to === args.parent,
+    (notification) => notification.id === undefined && notification.to === context.parent,
   ).length;
-  if (receiptsAfter <= args.receiptsBefore) {
+  if (receiptsAfter <= context.receiptsBefore) {
     return [
       {
         kind: "wake",
-        text: wakeText(args.name, args.cliPath, args.sessionFile, args.sidecar, args.code),
+        text: wakeText(
+          context.name,
+          context.cliPath,
+          context.sessionFile,
+          context.sidecar,
+          context.code,
+        ),
       },
     ];
   }
@@ -190,44 +213,29 @@ function contactRows(args: {
  * delivery seam; the legacy row keeps the raw pane-input primitive.
  */
 async function contactParent(args: {
-  spec: LaunchSpec;
-  parent: string;
-  sidecar: WakeSidecar | undefined;
-  code: number;
-  marked: boolean;
-  baselineReportIds: Set<string> | null;
-  receiptsBefore: number;
+  /** The contact the rows were decided from. */
+  context: ContactContext;
   deliverReport?: (args: DeliverReportArgs) => Promise<DeliverReportResult>;
   sendToParent?: (parent: string, text: string) => void;
-  cliPath?: string;
   writeErr: (text: string) => void;
 }): Promise<void> {
-  const spec = args.spec;
-  const sessionFile = spec.sessionFile;
-  if (sessionFile === undefined) return;
+  const context = args.context;
   // The delivery seam: the shared flow, or the injected recorder.
   const deliver = args.deliverReport ?? sharedDeliverReport;
-  const cliPath = args.cliPath ?? "<pmux-cli>";
-  const rows = contactRows({
-    sessionFile,
-    parent: args.parent,
-    sidecar: args.sidecar,
-    code: args.code,
-    marked: args.marked,
-    baselineReportIds: args.baselineReportIds,
-    receiptsBefore: args.receiptsBefore,
-    cliPath,
-    name: spec.name,
-  });
-  for (const row of rows) {
+  for (const row of contactRows(context)) {
     // One row, one try: a failed contact names the parent on stderr and does
     // not change the child's exit code (design D8), and a later row still
     // runs.
+    //
+    // The failure wording is written once, in `fail`: the flow's own refusal
+    // and the catch below name the parent the same way because `detail` is
+    // known per row before the try.
+    const detail = row.kind === "report" ? `re-deliver report ${row.id} to` : "wake";
+    const fail = (message: string): void => {
+      args.writeErr(`Failed to ${detail} parent ${context.parent}: ${message}\n`);
+    };
     try {
-      const refused = (detail: string, message?: string): void => {
-        args.writeErr(`Failed to ${detail} parent ${args.parent}: ${message}\n`);
-      };
-      if (args.marked) {
+      if (context.marked) {
         // file-ack-v1 (design D8): a durable artifact and its pointer stand
         // in for the raw text. A report row re-delivers the same ID with a
         // fresh token and no ack wait — the parent answers one pointer per
@@ -237,45 +245,41 @@ async function contactParent(args: {
         // artifact, registered as `send` registers a report, delivered
         // through the same flow.
         if (row.kind === "report") {
-          if (reportAcknowledged(sessionFile, row.id)) continue;
+          if (reportAcknowledged(context.sessionFile, row.id)) continue;
           const result = await deliver({
-            sessionFile,
-            to: args.parent,
+            sessionFile: context.sessionFile,
+            to: context.parent,
             id: row.id,
             reportPath: row.reportPath,
             bytes: row.bytes,
-            cliPath,
+            cliPath: context.cliPath,
           });
-          if (!result.submitted) {
-            refused(`re-deliver report ${row.id} to`, result.error ?? result.status);
-          }
+          if (!result.submitted) fail(result.error ?? result.status);
         } else {
           const registered = registerReport({
-            sessionFile,
-            to: args.parent,
+            sessionFile: context.sessionFile,
+            to: context.parent,
             text: row.text,
           });
           const result = await deliver({
-            sessionFile,
-            to: args.parent,
+            sessionFile: context.sessionFile,
+            to: context.parent,
             id: registered.id,
             reportPath: registered.reportPath,
             bytes: registered.bytes,
-            cliPath,
+            cliPath: context.cliPath,
           });
-          if (!result.submitted) refused("wake", result.error ?? result.status);
+          if (!result.submitted) fail(result.error ?? result.status);
         }
       } else if (row.kind === "wake") {
         // Legacy text contact — an unmarked spec keeps its behavior (design
         // D1). The ping question is the child's own text and can span lines,
         // so it is encoded like a report: the parent reads the question as
         // one input.
-        (args.sendToParent ?? agentPrompt)(args.parent, encodePaneText(row.text));
+        (args.sendToParent ?? agentPrompt)(context.parent, encodePaneText(row.text));
       }
     } catch (error) {
-      const detail = row.kind === "report" ? `re-deliver report ${row.id} to` : "wake";
-      const message = error instanceof Error ? error.message : String(error);
-      args.writeErr(`Failed to ${detail} parent ${args.parent}: ${message}\n`);
+      fail(error instanceof Error ? error.message : String(error));
     }
   }
 }
@@ -404,16 +408,19 @@ export async function runSpec(
   // a contact failure is stderr alone, and the exit code stands.
   if (parent !== undefined && sidecar?.type !== "cancelled" && spec.sessionFile) {
     await contactParent({
-      spec,
-      parent,
-      sidecar,
-      code,
-      marked,
-      baselineReportIds: reportIdsBefore,
-      receiptsBefore: reportsBefore,
+      context: {
+        parent,
+        sidecar,
+        code,
+        marked,
+        sessionFile: spec.sessionFile,
+        name: spec.name,
+        cliPath: deps.cliPath ?? "<pmux-cli>",
+        baselineReportIds: reportIdsBefore,
+        receiptsBefore: reportsBefore,
+      },
       deliverReport: deps.deliverReport,
       sendToParent: deps.sendToParent,
-      cliPath: deps.cliPath,
       writeErr,
     });
   }

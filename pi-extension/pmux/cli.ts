@@ -36,13 +36,13 @@ import {
 } from "./exit-sidecar.ts";
 import { resolvePlacement } from "./placement.ts";
 import { encodePaneText } from "./pane-input.ts";
-import { deliverReport, registerReport } from "./report-delivery.ts";
 import {
-  appendReportAck,
-  appendReportReceipt,
-  readReportLog,
-  reportReceiptPath,
-} from "./report-receipt.ts";
+  deliverReport,
+  registerReport,
+  reportAcknowledged,
+  type RegisteredReportFile,
+} from "./report-delivery.ts";
+import { appendReportAck, appendReportReceipt, reportReceiptPath } from "./report-receipt.ts";
 import { isReportId, reportArtifactPath } from "./report-artifact.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
@@ -591,7 +591,7 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
 
     // The artifact and its registration come first (design D2): a failure
     // here must refuse the send before the pane is touched.
-    let registered: ReturnType<typeof registerReport>;
+    let registered: RegisteredReportFile;
     try {
       registered = registerReport({ sessionFile: session, to, text });
     } catch (error) {
@@ -653,13 +653,14 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
 }
 
 /**
- * `send`: deliver one report into a pane as one input (type it, then Enter).
+ * `send`: the protocol gate (design D1). `PI_PMUX_REPORT_PROTOCOL` picks
+ * the transport: a marked child runs the `file-ack-v1` flow
+ * (`sendMarkedCommand`), an unmarked one (or any other marker value) keeps
+ * the legacy raw-text send (`sendLegacyCommand`).
  *
- * The behaviour is selected by `PI_PMUX_REPORT_PROTOCOL` (design D1): a
- * marked child runs the `file-ack-v1` flow, an unmarked one (or any other
- * marker value) keeps the legacy raw-text send — the text is typed and one
- * Enter follows, a kindless receipt line lands in `<session>.sent`, and
- * `--ack-timeout` is a usage error there because it would be silent no-op.
+ * `--ack-timeout` is rejected before the legacy leg runs — under the legacy
+ * protocol the flag would be a silent no-op, so the caller must drop it or
+ * mark the child.
  */
 async function sendCommand(values: CliValues, deps: CliDeps): Promise<number> {
   if ((deps.env ?? process.env).PI_PMUX_REPORT_PROTOCOL === REPORT_PROTOCOL) {
@@ -671,20 +672,27 @@ async function sendCommand(values: CliValues, deps: CliDeps): Promise<number> {
     );
     return 1;
   }
+  return sendLegacyCommand(values, deps);
+}
+
+/**
+ * `send` under the legacy protocol (design D1's other leg): deliver one
+ * report into a pane as one input (type it, then Enter). The report is
+ * encoded so it reaches the parent as one input: a raw newline would end the
+ * line in the parent's pane, and the rest of the report would arrive as
+ * separate input. The command answers, because the caller is an agent:
+ * silence reads as failure, and an agent that cannot read the result either
+ * guesses or probes the parent with a second message. The line names the
+ * pane it typed into, the size of the text it sent and the receipt it wrote.
+ */
+async function sendLegacyCommand(values: CliValues, deps: CliDeps): Promise<number> {
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
   const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
   try {
     const to = required("--to", values.to);
     const text = required("--text", values.text);
-    // The report is encoded so it reaches the parent as one input: a raw
-    // newline would end the line in the parent's pane, and the rest of the
-    // report would arrive as separate input.
     agentPrompt(to, encodePaneText(text));
     const receipt = writeReportReceipt(deps.env ?? process.env, to, text);
-    // The command answers, because the caller is an agent: silence reads as
-    // failure, and an agent that cannot read the result either guesses or
-    // probes the parent with a second message. The line names the pane it
-    // typed into, the size of the text it sent and the receipt it wrote.
     write(
       JSON.stringify({
         sent: true,
@@ -730,7 +738,7 @@ function ackCommand(values: CliValues, deps: CliDeps): number {
     if (!isFile(reportArtifactPath(session, id))) {
       throw new ReportAckFailure(`no report file for ${id}: ${reportArtifactPath(session, id)}`);
     }
-    const alreadyAcknowledged = readReportLog(session).ackedIds.has(id);
+    const alreadyAcknowledged = reportAcknowledged(session, id);
     if (!alreadyAcknowledged && !appendReportAck(session, id)) {
       throw new ReportAckFailure(
         `could not append the ack record to ${reportReceiptPath(session)}`,

@@ -34,6 +34,8 @@ describe("report ids", () => {
   });
 
   it("mints distinct IDs, so concurrent sends never share a file", () => {
+    // The generator alone: many draws, all distinct. The write path's use of
+    // the generator is a separate test below.
     const ids = new Set(Array.from({ length: 64 }, () => newReportId()));
     assert.equal(ids.size, 64);
   });
@@ -62,6 +64,9 @@ describe("writeReportArtifact", () => {
   });
 
   it("mints a fresh ID per write, so concurrent reports coexist", () => {
+    // Not a repeat of the generator's distinct-ID test above: this one covers
+    // the whole write — two calls take different IDs, name different paths
+    // and each file keeps its own body.
     withTempDir((dir) => {
       const sessionFile = join(dir, "session.jsonl");
       const first = writeReportArtifact(sessionFile, "one");

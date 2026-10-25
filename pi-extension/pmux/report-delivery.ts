@@ -21,7 +21,7 @@ import {
   appendReportRegistration,
   readReportLog,
 } from "./report-receipt.ts";
-import { verifiedAgentPrompt, type VerifiedPromptResult } from "./tmux.ts";
+import { defaultSleep, verifiedAgentPrompt, type VerifiedPromptResult } from "./tmux.ts";
 
 /** The interval the ack wait polls the event log at. */
 export const REPORT_ACK_POLL_MS = 250;
@@ -95,14 +95,15 @@ export interface SubmitPointerArgs {
   cliPath: string;
 }
 
-/** The outcome of one pointer submission. */
-export interface PointerSubmitResult {
-  /** `submitted`, `not-submitted` or `unknown`, as the input reported it. */
-  status: "submitted" | "not-submitted" | "unknown";
-  /** True only when the Enter call returned without an exception. */
-  submitted: boolean;
-  /** True once the Enter call was attempted. */
-  enterAttempted: boolean;
+/**
+ * The outcome of one pointer submission. It reports the verified-input fields
+ * shown to callers of the flow (`VerifiedPromptResult` without the `pane`,
+ * which the flow consumes itself) plus the fields the flow adds.
+ */
+export type PointerSubmitResult = Pick<
+  VerifiedPromptResult,
+  "status" | "submitted" | "enterAttempted" | "error"
+> & {
   /** The fresh visibility token this attempt ended its pointer with. */
   token: string;
   /**
@@ -110,9 +111,7 @@ export interface PointerSubmitResult {
    * refusal: the record means the pointer was submitted to the pane.
    */
   notificationRecorded: boolean;
-  /** Why the submission was refused or its outcome is unknown. */
-  error?: string;
-}
+};
 
 /**
  * Build a fresh pointer for a registered report and submit it through the
@@ -179,7 +178,7 @@ export async function awaitReportAck(
   deps: ReportDeliveryDeps = {},
 ): Promise<boolean> {
   const now = deps.now ?? Date.now;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const sleep = deps.sleep ?? defaultSleep;
   if (reportAcknowledged(args.sessionFile, args.id)) return true;
   if (args.timeoutSeconds <= 0) return false;
   const deadline = now() + args.timeoutSeconds * 1000;

@@ -217,9 +217,10 @@ into your pane.
    success it prints one JSON line and exits 0:
    `{"reason":"done","exitCode":0,"sidecar":"/abs/path/<session>.exit"}`.
    `reason` is one of `done`, `handoff`, `ping`, `error`, `cancelled`; a
-   sidecar the
-   wrapper wrote itself carries `"source":"wrapper"`, printed in the wait
-   JSON as `"errorSource":"wrapper"`. A timeout prints
+   `handoff` prints its handoff text as `handoff.message`, a `ping` prints
+   its question as `ping.message`, and a sidecar the wrapper wrote itself
+   carries `"source":"wrapper"`, printed in the wait JSON as
+   `"errorSource":"wrapper"`. A timeout prints
    `{"sidecar":null}` and exits 2 (a child may simply still be working —
    wait again, or nudge it); a usage error exits 1 and prints nothing on
    stdout. `wait` never deletes the sidecar, and neither may you — read the

@@ -185,15 +185,30 @@ function parseLogLine(line: string): Record<string, unknown> | null {
   }
 }
 
+/**
+ * The pane a parsed record was delivered to as a legacy receipt, or null when
+ * it names none — the rule in one place, shared by `foldRecord` and the
+ * receipt count. A legacy delivery is a kindless line with a string `to`: a
+ * record delivered under the pre-`file-ack-v1` protocol. Every record that
+ * carries a `kind` — a `report` registration, a `notification` record or an
+ * `ack` — is an event-log entry, never a legacy delivery, so a `report` line
+ * with a `to` must not pass as a delivered report.
+ */
+function legacyReceiptTarget(record: Record<string, unknown>): string | null {
+  if (record.kind !== undefined) return null;
+  return typeof record.to === "string" ? record.to : null;
+}
+
 /** Fold one parsed record into the session's log state. */
 function foldRecord(record: Record<string, unknown>, state: ReportLogState): void {
   const at = typeof record.at === "string" ? record.at : undefined;
   if (record.kind === undefined) {
-    // A kindless line with a string `to` is a legacy notification: a report
-    // delivered under the pre-`file-ack-v1` protocol.
-    if (typeof record.to === "string") {
+    // A legacy delivery is the one kindless shape that reaches the
+    // notifications: the rule lives in `legacyReceiptTarget`.
+    const to = legacyReceiptTarget(record);
+    if (to !== null) {
       state.notifications.push({
-        to: record.to,
+        to,
         ...(typeof record.bytes === "number" ? { bytes: record.bytes } : {}),
         ...(at !== undefined ? { at } : {}),
       });
@@ -265,15 +280,14 @@ export function readReportLog(sessionFile: string | undefined): ReportLogState {
 }
 
 /**
- * The pane a kindless receipt line names, or null when the line names none —
- * including every record that carries a `kind`: a `report` registration or a
- * `notification` record is an event-log entry, never a legacy delivery, so a
- * `report` line with a `to` must not pass as a delivered report.
+ * The pane a log line was delivered to as a legacy receipt, or null when the
+ * line names none. The rule lives in `legacyReceiptTarget`, which both the
+ * log fold and the receipt count apply.
  */
 function receiptTarget(line: string): string | null {
   const record = parseLogLine(line);
-  if (record === null || record.kind !== undefined) return null;
-  return typeof record.to === "string" ? record.to : null;
+  if (record === null) return null;
+  return legacyReceiptTarget(record);
 }
 
 /**

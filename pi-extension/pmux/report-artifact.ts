@@ -27,14 +27,19 @@ export function isReportId(value: unknown): value is string {
   return typeof value === "string" && REPORT_ID_PATTERN.test(value);
 }
 
+/** Mint a fresh 32-hex value: 16 random bytes, lowercase — the report-ID shape. */
+function newHex(): string {
+  return randomBytes(16).toString("hex");
+}
+
 /** Mint a fresh report ID. */
 export function newReportId(): string {
-  return randomBytes(16).toString("hex");
+  return newHex();
 }
 
 /** Mint a fresh visibility token: the same 32-hex shape as a report ID. */
 export function newVisibilityToken(): string {
-  return randomBytes(16).toString("hex");
+  return newHex();
 }
 
 /** The artifact path a report ID gets next to its session file. */

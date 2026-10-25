@@ -36,7 +36,7 @@ The pane runs `cli.ts run`. It starts the child from the spec with no shell, rep
 
 ### tmux backend
 
-- `tmux.ts` is the only pane backend. It requires `TMUX` and `TMUX_PANE`; without them the tools refuse with a message that names tmux. `placement.ts`, `exit-sidecar.ts`, `status-file.ts`, `surface-types.ts`, `pane-input.ts` and `report-receipt.ts` hold the host-independent parts.
+- `tmux.ts` is the only pane backend. It requires `TMUX` and `TMUX_PANE`; without them the tools refuse with a message that names tmux. `placement.ts`, `exit-sidecar.ts`, `status-file.ts`, `surface-types.ts`, `pane-input.ts`, `report-receipt.ts` and `report-artifact.ts` hold the host-independent parts; `report-delivery.ts` is host independent except that its pane submission defaults to the tmux backend's verified input.
 - Every split anchors on a pane in the caller's own window: the caller's newest living child pane, tracked by the `@pmux_parent` pane option, or the caller's own pane (`TMUX_PANE`) when it has none. Never use a "current" pane, and never an untargeted window. tmux resolves an untargeted command against the server's most recently used window, so another client can move the split.
 - A pane starts empty, and the launch command goes in afterwards. The pane therefore outlives the child, so the parent can read it and close it.
 
