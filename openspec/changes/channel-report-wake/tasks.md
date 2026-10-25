@@ -2,11 +2,22 @@
 
 ## 0. Prerequisite
 
-- [ ] 0.1 Confirm that the `pmux-explorer` change `channel-endpoint` is
+- [x] 0.1 Confirm that the `pmux-explorer` change `channel-endpoint` is
   merged, and that its endpoint path test vector is
   `79301cf9592f327a-12.sock` for `/tmp/tmux-1000/default,1,0` + `%12`.
   Verify by reading its merged spec and test. Do not start group 1 before
   this is done.
+
+  Verified 2026-10-25: slatkin/pmux-explorer PR #11 MERGED
+  (merge commit `4ab2ecd`). Its merged spec
+  (`openspec/changes/channel-endpoint/specs/channel-endpoint/spec.md`,
+  "Endpoint path" + "Shared test vector") pins the same vector
+  (`/run/user/1000/pmux-channel/79301cf9592f327a-12.sock` for
+  `TMUX=/tmp/tmux-1000/default,1,0` + `TMUX_PANE=%12`), the same path
+  rule (FNV-1a 64 of the first `TMUX` comma field, pane without `%`),
+  and the same report request shape
+  (`{"v":1,"kind":"report","id","text","bytes","token"}`),
+  which is what `channel-endpoint.ts` sends.
 
 ## 1. Channel endpoint client
 
