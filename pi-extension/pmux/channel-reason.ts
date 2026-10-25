@@ -7,19 +7,15 @@
  */
 
 /**
- * The reasons a channel attempt can end without a delivery. `no-endpoint`,
+ * The reasons a channel attempt can end without a delivery, in the order the
+ * spec lists them (report-channel, "Channel result classes"). `no-endpoint`,
  * `refused`, `timeout` and `bad-reply` are the client's own; `unarmed`,
- * `write-failed` and `invalid` come from the endpoint itself.
+ * `write-failed` and `invalid` come from the endpoint itself. The union is
+ * derived from this array, so a reason added here is a reason everywhere —
+ * a list that drifts from the vocabulary is a compile error, not a silent
+ * strip of `channelError` on read-back.
  */
-export type ChannelUnavailableReason =
-  "no-endpoint" | "refused" | "timeout" | "unarmed" | "write-failed" | "invalid" | "bad-reply";
-
-/**
- * The reasons this vocabulary names, in the order the spec lists them
- * (report-channel, "Channel result classes"). Keep in step with the union
- * above: a reason missing here strips `channelError` on read-back.
- */
-export const CHANNEL_REASONS: readonly ChannelUnavailableReason[] = [
+export const CHANNEL_REASONS = [
   "no-endpoint",
   "refused",
   "timeout",
@@ -27,7 +23,9 @@ export const CHANNEL_REASONS: readonly ChannelUnavailableReason[] = [
   "write-failed",
   "invalid",
   "bad-reply",
-];
+] as const;
+
+export type ChannelUnavailableReason = (typeof CHANNEL_REASONS)[number];
 
 /** True when `value` is one of the known `ChannelUnavailableReason` strings. */
 export function isChannelUnavailableReason(value: unknown): value is ChannelUnavailableReason {

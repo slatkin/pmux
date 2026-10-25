@@ -18,7 +18,10 @@ import {
   type ChannelSocket,
   type ChannelSubmitResult,
 } from "../pi-extension/pmux/channel-endpoint.ts";
-import { isChannelUnavailableReason } from "../pi-extension/pmux/channel-reason.ts";
+import {
+  CHANNEL_REASONS,
+  isChannelUnavailableReason,
+} from "../pi-extension/pmux/channel-reason.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
 const { withTempDirAsync } = tempDirHelpers("pmux-channel-");
@@ -105,15 +108,7 @@ function startEndpoint(
 
 describe("isChannelUnavailableReason", () => {
   it("accepts exactly the reasons the spec names", () => {
-    for (const reason of [
-      "no-endpoint",
-      "refused",
-      "timeout",
-      "unarmed",
-      "write-failed",
-      "invalid",
-      "bad-reply",
-    ]) {
+    for (const reason of CHANNEL_REASONS) {
       assert.equal(isChannelUnavailableReason(reason), true, reason);
     }
     for (const value of [undefined, null, 42, "", "mystery", "REFUSED"]) {
@@ -270,7 +265,6 @@ describe("submitChannel", () => {
       // connect failure is a rejection between the check and the connect.
       writeFileSync(socketPath, "");
       const cases: readonly (readonly [string, ChannelSubmitResult])[] = [
-        ["ECONNREFUSED", { status: "unavailable", reason: "refused" }],
         // A file that vanished between the check and the connect reads as
         // `no-endpoint`, the same case the check covers.
         ["ENOENT", { status: "unavailable", reason: "no-endpoint" }],

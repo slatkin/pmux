@@ -64,9 +64,6 @@ export interface ReportDeliveryDeps {
   submitChannel?: typeof submitChannel;
 }
 
-/** The transport one pointer submission reached the parent through. */
-export type { ReportVia };
-
 /** The registered artifact a report text becomes before any pane input. */
 export interface RegisteredReportFile {
   /** The minted report ID. */
@@ -214,7 +211,8 @@ export async function submitReportPointer(
     return {
       status: "submitted",
       submitted: true,
-      enterAttempted: true,
+      // The channel ran no pane input, so no Enter keypress was attempted.
+      enterAttempted: false,
       token: pointer.token,
       notificationRecorded,
       ...transport,

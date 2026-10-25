@@ -214,6 +214,8 @@ describe("submitReportPointer", () => {
       assert.equal(calls.length, 0);
       assert.equal(result.status, "submitted");
       assert.equal(result.submitted, true);
+      // The channel ran no pane input, so no Enter was attempted.
+      assert.equal(result.enterAttempted, false);
       assert.equal(result.via, "channel");
       assert.equal(result.channelError, undefined);
       assert.equal(isReportId(result.token), true);

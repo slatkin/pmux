@@ -171,14 +171,10 @@ function requestLine(args: ChannelSubmitArgs): string {
 }
 
 /** The reply shapes the endpoint's own reasons can travel in. */
-const ENDPOINT_REASONS: readonly ChannelUnavailableReason[] = [
-  "unarmed",
-  "write-failed",
-  "invalid",
-];
+const ENDPOINT_REASONS = ["unarmed", "write-failed", "invalid"] as const;
 
 /** True when `value` is one of the reasons the endpoint's own reply carries. */
-function isEndpointReason(value: unknown): value is ChannelUnavailableReason {
+function isEndpointReason(value: unknown): value is (typeof ENDPOINT_REASONS)[number] {
   return typeof value === "string" && (ENDPOINT_REASONS as readonly string[]).includes(value);
 }
 
@@ -203,18 +199,6 @@ function interpretReply(line: string): ChannelSubmitResult {
 }
 
 /**
- * Submit one report pointer to the parent's channel endpoint.
- *
- * With no `TMUX`, or with no endpoint file at the derived path, the result
- * is `unavailable` with `no-endpoint` and no connection is attempted.
- * Otherwise the client connects, writes one request line and reads one
- * reply line, all inside the `timeoutMs` budget; a budget that runs out
- * destroys the connection and reads as `timeout`. Every transport failure
- * — a refused connect, a failed write, a reply outside the known shapes —
- * is `unavailable`, so the caller falls back to the verified input.
- */
-
-/**
  * The reason one failed connect reads as. A connect that reaches the socket
  * and is denied is `refused`; an endpoint file that vanished between the
  * existence check and the connect is the same `no-endpoint` case the check
@@ -227,6 +211,17 @@ function connectRejectionReason(error: unknown): ChannelUnavailableReason {
   if (code === "ENOENT") return "no-endpoint";
   return "refused";
 }
+/**
+ * Submit one report pointer to the parent's channel endpoint.
+ *
+ * With no `TMUX`, or with no endpoint file at the derived path, the result
+ * is `unavailable` with `no-endpoint` and no connection is attempted.
+ * Otherwise the client connects, writes one request line and reads one
+ * reply line, all inside the `timeoutMs` budget; a budget that runs out
+ * destroys the connection and reads as `timeout`. Every transport failure
+ * — a refused connect, a failed write, a reply outside the known shapes —
+ * is `unavailable`, so the caller falls back to the verified input.
+ */
 export function submitChannel(args: ChannelSubmitArgs): Promise<ChannelSubmitResult> {
   const path = channelEndpointPath({
     ...(args.env !== undefined ? { env: args.env } : {}),
