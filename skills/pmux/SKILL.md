@@ -204,8 +204,10 @@ into your pane.
    `.exit` sidecar lives next to it), the launch-spec path a resume needs,
    and the child's pane id, which matters only while the child is alive,
    because a `done` child closes its own pane after the close grace.
-3. End the turn. A report arrives as one new prompt line — the pointer the
-   child's `send` command typed into your pane. It carries no report body,
+3. End the turn. A report arrives as one new prompt line — the pointer
+the child's `send` command delivered to your pane, typed in as input or
+emitted as a channel event when the channel transport is armed (see
+[Channel wake-up](#channel-wake-up)). It carries no report body,
    only the report ID, the path of the report file, the `ack` command and a
    visibility-token tail:
    ```text
@@ -288,6 +290,40 @@ in a **new** pane — the `resume` command is in
 [While it runs / after](#while-it-runs--after). In send mode `resume`
 re-appends the send footer, so the resumed child still knows how to reach
 you.
+
+### Channel wake-up
+
+When your pane runs Claude Code, the pointer can reach you without any
+terminal input. Start Claude with the development channels flag:
+
+```bash
+claude --dangerously-load-development-channels plugin:pmux-explorer@slatkin
+```
+
+pmux-explorer then runs a channel endpoint beside that pane: an MCP
+server the Claude session itself spawns, with a Unix socket that pmux
+delivers marked reports to. Claude Code needs claude.ai or Console
+auth, an org policy with `channelsEnabled`, and an interactive session
+for a channel to work. When the session starts, the endpoint emits an
+arm probe — a short turn that asks Claude to prove the channel is
+registered — and until that proof lands it answers every report with
+`unarmed`. The probe costs one turn per flagged session, nothing more.
+
+A marked (`file-ack-v1`) report goes to that endpoint first. On
+`emitted`, no `send-keys` runs: the pointer arrives as a channel event
+and queues until your next turn, so a report can land while you are
+busy with another one. On any transport failure — no endpoint file, a
+refused connection, a timeout, an `unarmed` reply or an error — the
+pointer is submitted through the verified `send-keys` input exactly as
+before. A missing or late `ack` never triggers that fallback: a busy
+parent is not a transport failure, the pointer has been delivered, and
+you dedup by report ID and acknowledge it when you wake.
+
+The `send` result line names the transport it used — `via` is
+`"channel"` or `"tmux"`, and after a fallback `channelError` names why
+— and the `<session>.sent` `notification` record carries the same
+fields. The wrapper's exit re-delivery of an unacknowledged report
+makes the same channel-first choice with a fresh token.
 
 ## While it runs / after
 
