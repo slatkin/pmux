@@ -30,7 +30,7 @@
 
 ## 2. Transport routing
 
-- [ ] 2.1 Route `submitReportPointer` in `report-delivery.ts` channel first,
+- [x] 2.1 Route `submitReportPointer` in `report-delivery.ts` channel first,
   then the verified input (D3). Add `submitChannel` to
   `ReportDeliveryDeps`. The result carries `via` and, after a fallback,
   `channelError`. Verify in `test/report-delivery.test.ts`: `emitted` →
@@ -38,10 +38,10 @@
   with the same pointer; both fail → `not-submitted` with
   `channelError`; `emitted` plus an ack timeout → no tmux call and
   `acknowledged:false`.
-- [ ] 2.2 Check that the existing suites pass with no change: `host-env.ts`
+- [x] 2.2 Check that the existing suites pass with no change: `host-env.ts`
   removes `TMUX`, so every current test gets `no-endpoint` and takes the
   fallback. Verify with `pnpm test`.
-- [ ] 2.3 Add a `run.test.ts` case: exit re-delivery of an unacknowledged
+- [x] 2.3 Add a `run.test.ts` case: exit re-delivery of an unacknowledged
   report through an injected `submitChannel` that returns `emitted` →
   the same ID, a fresh token, and no pane input. Verify with
   `node --test test/run.test.ts`.
