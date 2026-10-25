@@ -883,6 +883,9 @@ interface StartCase {
   configPath?: string;
   /** Report mode passed as `--report`; absent means the flag is not given. */
   report?: "last" | "send";
+  /** The `--fallback` flag passed as `--fallback`; absent means the flag is
+   * not given. */
+  fallback?: boolean;
   /** `@pane_session_id` the caller pane answers: a string, `null` for a
    * failed read; absent answers empty. */
   paneSessionId?: string | null;
@@ -931,6 +934,7 @@ async function runStartWith(entry: CliEntry, options: StartCase): Promise<Starte
   if (options.closeGraceMs !== undefined)
     argv.push("--close-grace-ms", String(options.closeGraceMs));
   if (options.report !== undefined) argv.push("--report", options.report);
+  if (options.fallback === true) argv.push("--fallback");
 
   // The CLI's role search reads the process env, not the injected env, so
   // the config dir is pinned around the call: an empty dir, so a test role
@@ -1646,6 +1650,103 @@ describe("cli.ts start", () => {
   });
 });
 
+describe("cli.ts start --fallback", () => {
+  it("runs the child on the role's model-fallback and keeps the primary without it", async () => {
+    const cwd = mkdtempSync(join(workdir, "fb-start-cwd-"));
+    writeRole(
+      cwd,
+      "fbworker",
+      "model: hyper/glm-5.3-flash\nmodel-fallback: opencode-go/glm-5.3-flash",
+      "Body.",
+    );
+
+    const withFlag = await runStart({ cwd, role: "fbworker", child: "fb-1", fallback: true });
+    assert.equal(withFlag.code, 0);
+    assert.equal(argValue(withFlag.spec.args, "--model"), "opencode-go/glm-5.3-flash");
+    const record = readLaunchRecord(getLaunchRecordFile(withFlag.json.session));
+    assert.ok(record);
+    assert.equal(record.model, "opencode-go/glm-5.3-flash");
+
+    // Without the flag the same role still starts on its own model.
+    const withoutFlag = await runStart({ cwd, role: "fbworker", child: "fb-2" });
+    assert.equal(withoutFlag.code, 0);
+    assert.equal(argValue(withoutFlag.spec.args, "--model"), "hyper/glm-5.3-flash");
+  });
+
+  it("fails with exit 1, no scratch file and no pane when the role has no model-fallback", async () => {
+    const dir = mkdtempSync(join(workdir, "fb-missing-"));
+    const cwd = mkdtempSync(join(dir, "cwd-"));
+    writeRole(cwd, "plain", "model: m\nthinking: low", "Body.");
+    const scratch = join(dir, "scratch");
+    const message = await startFailure({ cwd, role: "plain", scratch, fallback: true });
+    assert.match(message, /no model-fallback/);
+    assert.match(message, /plain/);
+    // The refusal happens in the role resolution, before the scratch
+    // directory is created and before the pane is split.
+    assert.equal(existsSync(scratch), false);
+    assert.equal(paneCalls.length, 0);
+
+    // The direct entry reports the same refusal as exit 1, with nothing
+    // launched. The role search is pinned to an empty global config dir so
+    // the target cwd's own role file is the one that resolves.
+    const brief = join(dir, "brief.md");
+    writeFileSync(brief, "# Task\n");
+    const { status, stderr } = runNodeProcess(
+      [
+        CLI,
+        "start",
+        "--name",
+        "fb-1",
+        "--role",
+        "plain",
+        "--cwd",
+        cwd,
+        "--brief",
+        brief,
+        "--parent",
+        "orch",
+        "--scratch",
+        scratch,
+        "--fallback",
+      ],
+      tmuxEnv({ PI_CODING_AGENT_DIR: join(dir, "agent-config") }),
+    );
+    assert.equal(status, 1);
+    assert.match(stderr, /no model-fallback/);
+    assert.equal(existsSync(scratch), false);
+    assert.equal(paneCalls.length, 0);
+  });
+
+  it("starts a role with only model-fallback, and fails that role without the flag", async () => {
+    const dir = mkdtempSync(join(workdir, "fb-only-"));
+    const cwd = mkdtempSync(join(dir, "cwd-"));
+    writeRole(cwd, "fbonly", "model-fallback: opencode-go/glm-5.3-flash", "Body.");
+
+    // "Fallback without a primary model": the empty-model check applies to
+    // the fallback the flag selects, so the role starts.
+    const started = await runStart({
+      cwd,
+      role: "fbonly",
+      child: "fb-3",
+      fallback: true,
+      scratch: join(dir, "with-scratch"),
+    });
+    assert.equal(started.code, 0);
+    assert.equal(argValue(started.spec.args, "--model"), "opencode-go/glm-5.3-flash");
+    const record = readLaunchRecord(getLaunchRecordFile(started.json.session));
+    assert.ok(record);
+    assert.equal(record.model, "opencode-go/glm-5.3-flash");
+
+    // "No fallback and no model": without the flag the role's empty model
+    // still fails the launch, before any pane is split.
+    paneCalls.length = 0;
+    const message = await startFailure({ cwd, role: "fbonly" });
+    assert.match(message, /empty model/);
+    assert.match(message, /fbonly/);
+    assert.equal(paneCalls.length, 0);
+  });
+});
+
 describe("cli.ts resume", () => {
   /** Start a named child whose spec carries a non-default close grace. */
   async function startNamedChild(): Promise<Started> {
@@ -1894,6 +1995,50 @@ describe("cli.ts resume", () => {
       false,
     );
     assert.equal(readLaunchSpec(started.json.launch).report, undefined);
+  });
+
+  it("rejects --fallback on resume without touching the stored model", async () => {
+    const started = await startNamedChild();
+    const followup = join(dirname(started.json.launch), "followup.md");
+    writeFileSync(followup, "Follow-up task.\n");
+
+    const res = await runCli(
+      ["resume", "--launch", started.json.launch, "--prompt", followup, "--fallback"],
+      tmuxEnv(),
+    );
+    assert.equal(res.code, 1);
+    assert.equal(res.stdout, "");
+    assert.match(res.stderr, /--fallback/);
+    assert.match(res.stderr, /use start/);
+    // Nothing launched, the spec stays as it was, and the record still
+    // holds the model launch time resolved.
+    assert.equal(
+      paneCalls.some((call) => call.startsWith("split-window")),
+      false,
+    );
+    assert.equal(readLaunchRecord(getLaunchRecordFile(started.json.session))?.model, "m");
+  });
+
+  it("resumes a fallback child on the fallback model the record holds", async () => {
+    const cwd = mkdtempSync(join(workdir, "fb-resume-cwd-"));
+    writeRole(
+      cwd,
+      "fbworker",
+      "model: hyper/glm-5.3-flash\nmodel-fallback: opencode-go/glm-5.3-flash",
+      "Body.",
+    );
+    const started = await runStart({ cwd, role: "fbworker", child: "fb-4", fallback: true });
+    paneCalls.length = 0;
+
+    // A resume of a fallback child takes no flag: the record's model is the
+    // fallback, and the rebuilt spec carries it.
+    const res = await runResume(started);
+    assert.equal(res.code, 0);
+    assert.equal(argValue(res.spec.args, "--model"), "opencode-go/glm-5.3-flash");
+    assert.equal(
+      paneCalls.some((call) => call.startsWith("split-window")),
+      true,
+    );
   });
 
   it("uses the spec name when --name is omitted", async () => {

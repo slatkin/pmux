@@ -113,6 +113,12 @@ export const SubagentParams = Type.Object({
     Type.String({ description: "Role instructions to append to the system prompt." }),
   ),
   model: Type.Optional(Type.String({ description: "Model. Overrides the agent default." })),
+  fallback: Type.Optional(
+    Type.Boolean({
+      description:
+        "true: run the role on its `model-fallback`. Use it when your model hits API limits or errors, or when the user asks for the fallback or alternate model.",
+    }),
+  ),
   skills: Type.Optional(
     Type.String({ description: "Comma-separated skills. Overrides the agent default." }),
   ),
@@ -1355,6 +1361,7 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       overrides: {
         name: params.name,
         model: params.model,
+        fallback: params.fallback,
         tools: params.tools,
         skills: params.skills,
         cwd: params.cwd,

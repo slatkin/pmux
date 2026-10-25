@@ -85,7 +85,7 @@ const MIN_NODE: readonly [number, number] = [22, 18];
 
 const USAGE = [
   "Usage:",
-  "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--report last|send]",
+  "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--report last|send] [--fallback]",
   "  node cli.ts send --to <pane> --text <text> [--ack-timeout <seconds>]",
   "  node cli.ts ack --session <file> --id <id>",
   "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>]",
@@ -104,6 +104,7 @@ const CLI_OPTIONS = {
   scratch: { type: "string" },
   "close-grace-ms": { type: "string" },
   report: { type: "string" },
+  fallback: { type: "boolean" },
   to: { type: "string" },
   text: { type: "string" },
   id: { type: "string" },
@@ -128,6 +129,7 @@ interface CliValues {
   scratch?: string;
   "close-grace-ms"?: string;
   report?: string;
+  fallback?: boolean;
   to?: string;
   text?: string;
   id?: string;
@@ -249,10 +251,12 @@ function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): num
   // once here, against the launcher's own cwd, so a relative --cwd joins
   // once and the search stays where it belongs.
   const targetCwd = resolve(cwd);
+  // The flag is a launch override like the report mode: the record holds the
+  // model launch time chose, so a resume needs no flag of its own.
   const { record, definition } = resolveLaunchRecord({
     role,
     anchor: targetCwd,
-    overrides: { name, cwd: targetCwd },
+    overrides: { name, cwd: targetCwd, fallback: values.fallback === true },
     strict: true,
   });
   // The role is known only here, so the placement resolves here: the role's
@@ -977,6 +981,13 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
     // the spec still says `last` while the orchestrator believes `send`.
     if (values.report !== undefined) {
       writeErr("invalid --report for resume: the launch spec holds the mode (use start)\n");
+      return 1;
+    }
+    // The model is a launch property too (design D6): the launch record holds
+    // the model launch time resolved, flag or no flag, so a flag here would
+    // be a silent no-op.
+    if (values.fallback === true) {
+      writeErr("invalid --fallback for resume: the launch record holds the model (use start)\n");
       return 1;
     }
     return resumeCommand(values as CliValues, deps);

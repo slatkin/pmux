@@ -1352,6 +1352,21 @@ describe("subagent discovery", () => {
     }
   });
 
+  it("ships no bundled role with a model-fallback key", () => {
+    const agentsDir = getBundledAgentsDir();
+    const files = readdirSync(agentsDir);
+    assert.ok(files.length > 0, "expected bundled role files to exist");
+    for (const file of files) {
+      const parsed = parseAgentDefinition(readFileSync(join(agentsDir, file), "utf8"), file);
+      assert.ok(parsed, `expected bundled role ${file} to parse`);
+      assert.equal(
+        parsed.modelFallback,
+        undefined,
+        `${file} must not set model-fallback: pmux ships no fallback value`,
+      );
+    }
+  });
+
   it("ignores invalid session-mode values", async () => {
     await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
       writeAgentFile(
@@ -1456,6 +1471,48 @@ describe("subagent discovery", () => {
     assert.equal(parsed.thinking, "low");
   });
 
+  it("parses model-fallback next to model", () => {
+    const parsed = parseAgentDefinition(
+      [
+        "---",
+        "name: fallback-model-test-agent",
+        "model: hyper/glm-5.3-flash",
+        "model-fallback: opencode-go/glm-5.3-flash",
+        "thinking: low",
+        "---",
+        "",
+        "Body.",
+      ].join("\n"),
+      "fallback-model-test-agent",
+    );
+
+    assert.ok(parsed, "expected the definition to parse");
+    assert.equal(parsed.model, "hyper/glm-5.3-flash");
+    assert.equal(parsed.modelFallback, "opencode-go/glm-5.3-flash");
+  });
+
+  it("reads a blank model-fallback key as absent", () => {
+    const parsed = parseAgentDefinition(
+      [
+        "---",
+        "name: blank-fallback-test-agent",
+        "model: hyper/glm-5.3-flash",
+        "model-fallback: ",
+        "thinking: low",
+        "---",
+        "",
+        "Body.",
+      ].join("\n"),
+      "blank-fallback-test-agent",
+    );
+
+    assert.ok(parsed, "expected the definition to parse");
+    // `model` keeps its blank behavior; `model-fallback` reads as absent, so
+    // a fallback launch of the role takes the "no model-fallback" path.
+    assert.equal(parsed.model, "hyper/glm-5.3-flash");
+    assert.equal(parsed.modelFallback, undefined);
+  });
+
   it("parses the role surface from the frontmatter, ignoring invalid values", () => {
     const parse = (lines: string[]) => {
       const parsed = parseAgentDefinition([...lines, "---", "", "Body."].join("\n"), "s");
@@ -1476,6 +1533,7 @@ describe("subagent discovery", () => {
         "---",
         "name: crlf-test-agent",
         "model: anthropic/test-crlf",
+        "model-fallback: opencode-go/test-crlf",
         "tools: read,bash",
         "surface: float",
         "auto-exit: true",
@@ -1494,6 +1552,7 @@ describe("subagent discovery", () => {
       assert.ok(crlf && lfTwin, "expected both role files to parse");
       assert.deepEqual(crlf, lfTwin);
       assert.equal(crlf.model, "anthropic/test-crlf");
+      assert.equal(crlf.modelFallback, "opencode-go/test-crlf");
       assert.equal(crlf.tools, "read,bash");
       assert.equal(crlf.autoExit, true);
       assert.equal(crlf.spawning, false);
@@ -1607,6 +1666,85 @@ describe("subagent discovery", () => {
 
       assert.ok(agents.some((agent: any) => agent.name === "visible-discovery-test-agent"));
       assert.match(result.content[0].text, /visible-discovery-test-agent/);
+    });
+  });
+
+  it("lists a role's model-fallback next to its model, and no fallback for a role without one", async () => {
+    await withIsolatedAgentEnv(async ({ projectAgentsDir }) => {
+      writeAgentFile(
+        projectAgentsDir,
+        "fallback-listing-test-agent",
+        [
+          "name: fallback-listing-test-agent",
+          "description: Worker with an alternate model",
+          "model: hyper/glm-5.1",
+          "model-fallback: opencode-go/glm-5.3-flash",
+        ].join("\n"),
+      );
+      writeAgentFile(
+        projectAgentsDir,
+        "plain-model-listing-test-agent",
+        [
+          "name: plain-model-listing-test-agent",
+          "description: Worker with one model",
+          "model: hyper/glm-5.1",
+        ].join("\n"),
+      );
+
+      const { api, registeredTools } = createMockExtensionApi();
+      (subagentsModule as any).default(api);
+
+      const tool = registeredTools.find((tool) => tool.name === "pmux_list");
+      assert.ok(tool, "expected pmux_list to be registered");
+
+      const result = await tool.execute();
+      const text = result.content[0].text as string;
+
+      // The text line shows both models, the second marked as the fallback.
+      const fallbackLine = text
+        .split("\n")
+        .find((line: string) => line.includes("fallback-listing-test-agent"));
+      assert.equal(
+        fallbackLine,
+        "• fallback-listing-test-agent (project) [hyper/glm-5.1] " +
+          "(fallback: opencode-go/glm-5.3-flash) — Worker with an alternate model",
+      );
+
+      // A role without model-fallback shows no fallback text.
+      const plainLine = text
+        .split("\n")
+        .find((line: string) => line.includes("plain-model-listing-test-agent"));
+      assert.ok(plainLine, "expected the plain role in the listing");
+      assert.equal(plainLine.includes("fallback"), false);
+
+      // The TUI line marks the fallback part with the model's dim style.
+      const rendered = tool
+        .renderResult(
+          result,
+          {},
+          {
+            fg: (color: string, input: string) => `<${color}>${input}</${color}>`,
+            bold: (input: string) => input,
+          },
+        )
+        .render(400)
+        .join("\n");
+      const renderedFallbackLine = rendered
+        .split("\n")
+        .map((line: string) => line.trimEnd())
+        .find((line: string) => line.includes("fallback-listing-test-agent"));
+      assert.equal(
+        renderedFallbackLine,
+        "  <toolTitle>fallback-listing-test-agent</toolTitle>" +
+          "<accent> (project)</accent>" +
+          "<dim> [hyper/glm-5.1]</dim>" +
+          "<dim> (fallback: opencode-go/glm-5.3-flash)</dim>" +
+          "<dim> — Worker with an alternate model</dim>",
+      );
+      const renderedPlainLine = rendered
+        .split("\n")
+        .find((line: string) => line.includes("plain-model-listing-test-agent"));
+      assert.equal(renderedPlainLine.includes("fallback"), false);
     });
   });
 
