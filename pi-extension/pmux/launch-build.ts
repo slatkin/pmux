@@ -122,6 +122,9 @@ export interface LaunchRecordOverrides {
   /** The child's display name; the record field, not a role value. */
   name: string;
   model?: string;
+  /** Run the role on its `model-fallback` instead (design D1); conflicting
+   * with `model` (design D2). */
+  fallback?: boolean;
   tools?: string;
   skills?: string;
   /** Per-call cwd; a relative value resolves against the launch's anchor
@@ -210,6 +213,13 @@ export class UnknownRoleError extends Error {
  * default model. Under either flag, a blank value names nothing and fails:
  * the schema's `Type.String()` has no minLength, so an empty `agent` reaches
  * this check instead of the schema.
+ *
+ * A `fallback` launch runs the role's `model-fallback` through the record's
+ * one `model` field (design D1). Its two errors (design D2) join the ones
+ * above, all before any pane or file exists: `fallback` with `model`, and
+ * `fallback` on a role without the key. With `fallback`, the strict
+ * empty-model check applies to `model-fallback`, so a role with only
+ * `model-fallback` starts.
  */
 export function resolveLaunchRecord(params: {
   role?: string;
@@ -230,7 +240,21 @@ export function resolveLaunchRecord(params: {
   requireRole?: boolean;
 }): ResolvedLaunchRole {
   const overrides = params.overrides;
+  // The conflict is caller input, not role state: it reads before the role
+  // even loads (design D2).
+  if (overrides.fallback === true && overrides.model !== undefined) {
+    throw new Error("fallback conflicts with model: pass one");
+  }
   const definition = params.role ? loadAgentDefaults(params.role, params.anchor) : null;
+
+  const fallback = overrides.fallback === true;
+  // The model that applies (designs D1 and D2): a fallback launch runs the
+  // role's `model-fallback`; every other launch keeps the call's model over
+  // the role's. The conflict error above makes `overrides.model`
+  // unreachable in the fallback branch.
+  const effectiveModel = fallback
+    ? definition?.modelFallback
+    : (overrides.model ?? definition?.model);
 
   if (params.strict || params.requireRole) {
     // A blank value names nothing: the schema has no minLength, so the
@@ -244,7 +268,14 @@ export function resolveLaunchRecord(params: {
         `unknown role '${params.role}' (searched: ${rolePaths.join(" ")})`,
       );
     }
-    if (params.strict && !definition.model && overrides.model === undefined) {
+    // With `fallback` the applied model is the role's `model-fallback`, and
+    // its absence is the error below; a blank key reads as absent (design
+    // D3). Without it, the strict empty-model check keeps today's shape.
+    if (fallback && !definition?.modelFallback) {
+      const rolePath = rolePaths.find(isFile) ?? rolePaths[0];
+      throw new Error(`role '${params.role}' has no model-fallback (${rolePath})`);
+    }
+    if (params.strict && !fallback && !definition.model && overrides.model === undefined) {
       const rolePath = rolePaths.find(isFile) ?? rolePaths[0];
       throw new Error(`role '${params.role}' has an empty model (${rolePath})`);
     }
@@ -259,7 +290,6 @@ export function resolveLaunchRecord(params: {
     definition?.cli === "claude"
       ? (overrides.systemPrompt ?? definition.body)
       : (definition?.body ?? overrides.systemPrompt);
-  const effectiveModel = overrides.model ?? definition?.model;
   const effectiveTools = overrides.tools ?? definition?.tools;
   const effectiveSkills = overrides.skills ?? definition?.skills;
 

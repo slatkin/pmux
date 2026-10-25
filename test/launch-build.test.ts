@@ -562,6 +562,167 @@ describe("resolveLaunchRecord (design D6)", () => {
     });
   });
 
+  it("runs a fallback launch on the role's model-fallback (designs D1 and D2)", () => {
+    withTempDir((dir) => {
+      writeRoleFile(
+        join(dir, ".pi", "agents"),
+        "fb-worker",
+        ["model: hyper/glm-5.3-flash", "model-fallback: opencode-go/glm-5.3-flash"].join("\n"),
+        "Body.",
+      );
+
+      // The fallback model lands in the record's one `model` field: resume,
+      // the spec builder and the pane title read it without new code.
+      const resolved = resolveLaunchRecord({
+        role: "fb-worker",
+        anchor: dir,
+        overrides: { name: "FB", fallback: true },
+      });
+      assert.equal(resolved.record.model, "opencode-go/glm-5.3-flash");
+
+      // The conflict reads before the role even loads, so both errors sit
+      // with the ones that already throw before any pane or file exists.
+      assert.throws(
+        () =>
+          resolveLaunchRecord({
+            role: "ghost-role",
+            anchor: dir,
+            overrides: { name: "FB", fallback: true, model: "other/model" },
+          }),
+        (error: Error) => error.message === "fallback conflicts with model: pass one",
+      );
+      assert.throws(
+        () =>
+          resolveLaunchRecord({
+            role: "fb-worker",
+            anchor: dir,
+            overrides: { name: "FB", fallback: true, model: "other/model" },
+          }),
+        (error: Error) => error.message === "fallback conflicts with model: pass one",
+      );
+    });
+  });
+
+  it("fails a fallback launch of a role without the key, naming role and path", () => {
+    withTempDir((dir) => {
+      const rolePath = writeRoleFile(join(dir, ".pi", "agents"), "bare-worker", "tools: read");
+      assert.throws(
+        () =>
+          resolveLaunchRecord({
+            role: "bare-worker",
+            anchor: dir,
+            overrides: { name: "B", fallback: true },
+            // The pi parent's flag: the launch fails before any pane or
+            // record exists.
+            requireRole: true,
+          }),
+        (error: Error) =>
+          error.message === `role 'bare-worker' has no model-fallback (${rolePath})`,
+      );
+
+      // The CLI's flag raises the same error; a blank key reads as absent
+      // (design D3) and takes the same path.
+      writeRoleFile(join(dir, ".pi", "agents"), "blank-worker", "model-fallback: ");
+      const blankPath = join(dir, ".pi", "agents", "blank-worker.md");
+      assert.throws(
+        () =>
+          resolveLaunchRecord({
+            role: "blank-worker",
+            anchor: dir,
+            overrides: { name: "B", fallback: true },
+            strict: true,
+          }),
+        (error: Error) =>
+          error.message === `role 'blank-worker' has no model-fallback (${blankPath})`,
+      );
+    });
+  });
+
+  it("strict applies the empty-model check to the model that applies (design D2)", () => {
+    withTempDir((dir) => {
+      // A role with only `model-fallback` starts in strict mode.
+      writeRoleFile(
+        join(dir, ".pi", "agents"),
+        "fallback-only",
+        "model-fallback: opencode-go/glm-5.3-flash",
+      );
+      const fallbackOnly = resolveLaunchRecord({
+        role: "fallback-only",
+        anchor: dir,
+        overrides: { name: "FO", fallback: true },
+        strict: true,
+      });
+      assert.equal(fallbackOnly.record.model, "opencode-go/glm-5.3-flash");
+
+      // `fallback: false` is not a fallback launch: the role's empty `model:`
+      // still throws the empty-model error.
+      assert.throws(
+        () =>
+          resolveLaunchRecord({
+            role: "fallback-only",
+            anchor: dir,
+            overrides: { name: "FO", fallback: false },
+            strict: true,
+          }),
+        (error: Error) => /has an empty model/.test(error.message),
+      );
+
+      // Without the flag and without a call model, a role with no
+      // `model-fallback` still throws the empty-model error.
+      const noFbPath = writeRoleFile(join(dir, ".pi", "agents"), "empty-model-role", "tools: read");
+      assert.throws(
+        () =>
+          resolveLaunchRecord({
+            role: "empty-model-role",
+            anchor: dir,
+            overrides: { name: "EM" },
+            strict: true,
+          }),
+        (error: Error) =>
+          error.message === `role 'empty-model-role' has an empty model (${noFbPath})`,
+      );
+    });
+  });
+
+  it("a fallback launch keeps thinking and tools unchanged (design D7)", () => {
+    withTempDir((dir) => {
+      writeRoleFile(
+        join(dir, ".pi", "agents"),
+        "fb-thinking",
+        [
+          "model: hyper/glm-5.3-flash",
+          "model-fallback: opencode-go/glm-5.3-flash",
+          "tools: read",
+          "thinking: medium",
+          "deny-tools: claude",
+        ].join("\n"),
+        "Body.",
+      );
+
+      const fallback = resolveLaunchRecord({
+        role: "fb-thinking",
+        anchor: dir,
+        overrides: { name: "FT", fallback: true },
+      });
+      assert.equal(fallback.record.thinking, "medium");
+      assert.equal(fallback.record.tools, "read");
+      assert.deepEqual(fallback.record.denyTools, ["claude"]);
+      assert.equal(fallback.record.rolePrompt, "Body.");
+
+      const normal = resolveLaunchRecord({
+        role: "fb-thinking",
+        anchor: dir,
+        overrides: { name: "FT" },
+      });
+      // The record's tools and thinking do not depend on which model runs.
+      assert.equal(normal.record.model, "hyper/glm-5.3-flash");
+      assert.equal(normal.record.thinking, fallback.record.thinking);
+      assert.equal(normal.record.tools, fallback.record.tools);
+      assert.deepEqual(normal.record.denyTools, fallback.record.denyTools);
+      assert.equal(normal.record.rolePrompt, fallback.record.rolePrompt);
+    });
+  });
+
   it("resolves a role into the record a later resume reads", () => {
     withTempDir((dir) => {
       writeRoleFile(

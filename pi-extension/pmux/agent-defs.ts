@@ -12,6 +12,7 @@ export type SubagentSessionMode = "standalone" | "lineage-only" | "fork";
 
 export interface AgentDefaults {
   model?: string;
+  modelFallback?: string;
   tools?: string;
   skills?: string;
   thinking?: string;
@@ -87,6 +88,7 @@ export function parseAgentDefinition(
     name: getFrontmatterValue(frontmatter, "name") ?? fallbackName,
     description: getFrontmatterValue(frontmatter, "description"),
     model: getFrontmatterValue(frontmatter, "model"),
+    modelFallback: getFrontmatterValue(frontmatter, "model-fallback") || undefined,
     tools: getFrontmatterValue(frontmatter, "tools"),
     systemPromptMode:
       systemPromptMode === "replace"
