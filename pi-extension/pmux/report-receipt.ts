@@ -12,17 +12,24 @@
  * kinds. `report` registers the artifact before transport — it is what lets
  * the wrapper recover the report file — and carries `id`, `to`, `bytes` and
  * the `report` path. `notification` records that a pointer was submitted to
- * the pane and adds the visibility `token`; it means only that tmux accepted
- * the Enter. `ack` (`id` only, no `to`) is the sole read receipt. The two
+ * the pane and adds the visibility `token` and the transport `via`; it means
+ * only that the parent received the pointer — through the channel endpoint
+ * (`via:"channel"`) or through the verified pane input (`via:"tmux"`, with
+ * `channelError` naming why the channel fell back). `ack` (`id` only, no
+ * `to`) is the sole read receipt. The two
  * protocols share the one file: a kindless line with a string `to` stays a
  * valid legacy notification with no ID and no ack semantics. Readers skip
  * malformed lines and unknown kinds. Both sides read and write the file
  * through this module, so the name and the record shapes live in one place.
  */
 import { appendFileSync, readFileSync } from "node:fs";
+import type { ChannelUnavailableReason } from "./channel-endpoint.ts";
 
 /** The suffix the receipt file carries next to the session file. */
 export const REPORT_RECEIPT_SUFFIX = ".sent";
+
+/** The transport a `notification` record names (design D5). */
+export type ReportVia = "channel" | "tmux";
 
 /** One delivered report under the legacy protocol (a kindless line). */
 export interface ReportReceipt {
@@ -58,6 +65,10 @@ export interface PointerNotification {
   bytes: number;
   /** The artifact path the pointer names. */
   report: string;
+  /** The transport the pointer was submitted through. */
+  via?: ReportVia;
+  /** Why the channel was unavailable; set only after a fallback (design D5). */
+  channelError?: ChannelUnavailableReason;
 }
 
 /** A `report` record read back from the log. */
@@ -78,6 +89,14 @@ export interface LoggedNotification {
   bytes?: number;
   /** The artifact path a `notification` record names. */
   report?: string;
+  /**
+   * The transport the notification went out on. A record written before this
+   * field existed reads as `tmux` — it was, and the default keeps every old
+   * log truthful (design D5).
+   */
+  via: ReportVia;
+  /** Why the channel fell back; present only on a fallback record. */
+  channelError?: ChannelUnavailableReason;
   /** ISO time of the record, when the writer recorded it. */
   at?: string;
 }
@@ -209,6 +228,9 @@ function foldRecord(record: Record<string, unknown>, state: ReportLogState): voi
   if (to !== null) {
     state.notifications.push({
       to,
+      // A legacy delivery went out through the verified pane input; the
+      // default is the same rule the `notification` branch applies below.
+      via: "tmux",
       ...(typeof record.bytes === "number" ? { bytes: record.bytes } : {}),
       ...(at !== undefined ? { at } : {}),
     });
@@ -245,6 +267,13 @@ function foldRecord(record: Record<string, unknown>, state: ReportLogState): voi
         to: record.to,
         bytes: record.bytes,
         report: record.report,
+        // A record without `via`, or with a value this reader does not know,
+        // reads as the tmux transport (design D5): the field is additive, so
+        // an older log line was a verified-input delivery.
+        via: record.via === "channel" ? "channel" : "tmux",
+        ...(typeof record.channelError === "string"
+          ? { channelError: record.channelError as ChannelUnavailableReason }
+          : {}),
         ...(at !== undefined ? { at } : {}),
       });
     }

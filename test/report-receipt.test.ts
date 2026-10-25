@@ -82,6 +82,44 @@ describe("event log writers", () => {
     });
   });
 
+  it("writes the `via` field for both transports — channel without a fallback reason, tmux with one", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const report = `${sessionFile}.${ID_A}.report.md`;
+      // A channel delivery: the transport, no channel error.
+      assert.equal(
+        appendReportNotification(sessionFile, {
+          id: ID_A,
+          token: TOKEN,
+          to: "%12",
+          bytes: 9,
+          report,
+          via: "channel",
+        }),
+        true,
+      );
+      const channelRecord = JSON.parse(logLines(sessionFile)[0]!);
+      assert.equal(channelRecord.via, "channel");
+      assert.equal(channelRecord.channelError, undefined);
+      // A fallback delivery: the transport plus the channel's reason.
+      assert.equal(
+        appendReportNotification(sessionFile, {
+          id: ID_B,
+          token: TOKEN,
+          to: "%12",
+          bytes: 9,
+          report,
+          via: "tmux",
+          channelError: "refused",
+        }),
+        true,
+      );
+      const fallbackRecord = JSON.parse(logLines(sessionFile)[1]!);
+      assert.equal(fallbackRecord.via, "tmux");
+      assert.equal(fallbackRecord.channelError, "refused");
+    });
+  });
+
   it("writes an `ack` record naming only the report ID — never a `to`", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "s.jsonl");
@@ -201,6 +239,29 @@ describe("readReportLog", () => {
       assert.equal(state.notifications[0]!.to, "%12");
       assert.equal(state.notifications[0]!.id, undefined);
       assert.deepEqual([...state.ackedIds], [ID_A]);
+    });
+  });
+
+  it("reads a `notification` record without `via` as the tmux transport", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      // A record written before this change carries no `via` and no
+      // `channelError`; readers see it as a tmux delivery (design D5).
+      writeFileSync(
+        reportReceiptPath(sessionFile),
+        `${JSON.stringify({
+          at: "2026-10-01T00:00:00Z",
+          kind: "notification",
+          id: ID_A,
+          token: TOKEN,
+          to: "%12",
+          bytes: 9,
+          report: "/r",
+        })}\n`,
+      );
+      const [notification] = readReportLog(sessionFile).notifications;
+      assert.equal(notification!.via, "tmux");
+      assert.equal(notification!.channelError, undefined);
     });
   });
 

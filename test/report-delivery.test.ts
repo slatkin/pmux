@@ -148,12 +148,16 @@ describe("submitReportPointer", () => {
 
       const state = readReportLog(sessionFile);
       assert.equal(state.notifications.length, 1);
+      // No injected endpoint: the fallback ran, so the record names the
+      // transport and the channel's reason (design D5).
       assert.deepEqual(state.notifications[0], {
         id: ID,
         token: result.token,
         to: "%12",
         bytes: 7,
         report: reportArtifactPath(sessionFile, ID),
+        via: "tmux",
+        channelError: "no-endpoint",
         at: state.notifications[0]!.at,
       });
     });

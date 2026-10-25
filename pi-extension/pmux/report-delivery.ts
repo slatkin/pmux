@@ -10,7 +10,9 @@
  * token), offered to the parent's channel endpoint first (design D3), and —
  * when the channel is `unavailable`, whatever the reason — submitted through
  * `verifiedAgentPrompt` as the fallback. A `notification` event is recorded —
- * best effort — after a submission through either transport. `awaitReportAck`
+ * best effort — after a submission through either transport, naming the
+ * transport that ran and, after a fallback, the channel's reason (design D5).
+ * `awaitReportAck`
  * then polls the event log for the `ack`: `send` waits up to its
  * `--ack-timeout`, while the wrapper's exit re-delivery passes no timeout
  * and instead rechecks the ack immediately before each retry
@@ -23,6 +25,7 @@ import {
   appendReportNotification,
   appendReportRegistration,
   readReportLog,
+  type ReportVia,
 } from "./report-receipt.ts";
 import { verifiedAgentPrompt, type VerifiedPromptResult } from "./tmux.ts";
 import { submitChannel, type ChannelUnavailableReason } from "./channel-endpoint.ts";
@@ -54,7 +57,7 @@ export interface ReportDeliveryDeps {
 }
 
 /** The transport one pointer submission reached the parent through. */
-export type ReportVia = "channel" | "tmux";
+export type { ReportVia };
 
 /** The registered artifact a report text becomes before any pane input. */
 export interface RegisteredReportFile {
@@ -177,6 +180,7 @@ export async function submitReportPointer(
       to: args.to,
       bytes: args.bytes,
       report: args.reportPath,
+      via: "channel",
     });
     return {
       status: "submitted",
@@ -209,6 +213,8 @@ export async function submitReportPointer(
     to: args.to,
     bytes: args.bytes,
     report: args.reportPath,
+    via: "tmux",
+    ...(channel.reason !== undefined ? { channelError: channel.reason } : {}),
   });
   return {
     status: "submitted",

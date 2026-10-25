@@ -36,6 +36,7 @@ import { argValue, placementRow, useTmuxPaneFake } from "./tmux-fakes.ts";
 import { registerReport, REPORT_ACK_POLL_MS } from "../pi-extension/pmux/report-delivery.ts";
 import { reportArtifactPath } from "../pi-extension/pmux/report-artifact.ts";
 import { appendReportAck, readReportLog } from "../pi-extension/pmux/report-receipt.ts";
+import type { ChannelSubmitResult } from "../pi-extension/pmux/channel-endpoint.ts";
 import { main as shimMain } from "../skills/pmux/launch.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
@@ -2408,6 +2409,7 @@ describe("cli.ts send", () => {
     argv: string[],
     env: NodeJS.ProcessEnv,
     sleep?: (ms: number) => Promise<void>,
+    extraDeps: { submitChannel?: () => Promise<ChannelSubmitResult> } = {},
   ): Promise<{ code: number; stdout: string; stderr: string; sleeps: number[] }> {
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -2422,6 +2424,7 @@ describe("cli.ts send", () => {
           sleeps.push(ms);
         }),
       configPath: defaultConfigPath,
+      ...extraDeps,
     });
     return { code, stdout: stdout.join(""), stderr: stderr.join(""), sleeps };
   }
@@ -2480,6 +2483,59 @@ describe("cli.ts send", () => {
       assert.equal(events[0]!.id, id);
       assert.equal(events[1]!.kind, "notification");
       assert.equal(events[1]!.id, id);
+    });
+  });
+
+  it("prints the channel transport and types no keys when the endpoint emits", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      const res = await runSend(
+        ["send", "--to", "%3", "--text", "PASS abc123", "--ack-timeout", "0"],
+        protocolEnv(sessionFile),
+        undefined,
+        { submitChannel: async () => ({ status: "emitted" }) },
+      );
+      assert.equal(res.code, 0);
+      assert.equal(res.stderr, "");
+      const line = jsonLine(res.stdout);
+      assert.equal(line.sent, true);
+      assert.equal(line.notification, "submitted");
+      // The result line names the transport, and a channel delivery carries
+      // no fallback reason (spec: Report delivered by the channel).
+      assert.equal(line.via, "channel");
+      assert.equal(line.channelError, undefined);
+      // The channel delivery never touches the pane.
+      assert.deepEqual(
+        paneCalls.filter((call) => call.startsWith("send-keys")),
+        [],
+      );
+      // The notification record carries the transport too.
+      const state = readReportLog(sessionFile);
+      assert.equal(state.notifications[0]!.via, "channel");
+      assert.equal(state.notifications[0]!.channelError, undefined);
+    });
+  });
+
+  it("prints the fallback transport with the channel error and exits 0", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      // No injected endpoint: the real channel client finds no socket file
+      // and answers `unavailable` with `no-endpoint`, so the send falls back
+      // to the verified pane input (spec: Report delivered by the fallback).
+      const res = await runSend(
+        ["send", "--to", "%3", "--text", "PASS abc123", "--ack-timeout", "0"],
+        protocolEnv(sessionFile),
+      );
+      assert.equal(res.code, 0);
+      const line = jsonLine(res.stdout);
+      assert.equal(line.sent, true);
+      assert.equal(line.via, "tmux");
+      assert.equal(line.channelError, "no-endpoint");
+      // The fallback typed the pointer once, as before this change.
+      assert.equal(paneCalls.filter((call) => call.startsWith("send-keys -t %3 -l")).length, 1);
+      const state = readReportLog(sessionFile);
+      assert.equal(state.notifications[0]!.via, "tmux");
+      assert.equal(state.notifications[0]!.channelError, "no-endpoint");
     });
   });
 
@@ -2546,6 +2602,9 @@ describe("cli.ts send", () => {
       assert.equal(line.enterAttempted, false);
       assert.equal(line.acknowledged, false);
       assert.equal(line.notificationRecorded, false);
+      // A refusal only ever follows a fallback, so the line names the
+      // channel's reason (spec: Submission refused).
+      assert.equal(typeof line.channelError, "string");
       assert.match(String(line.error), /mode/);
       // The report survives the refusal: the artifact exists and is
       // registered, so the wrapper re-delivers it at exit.
