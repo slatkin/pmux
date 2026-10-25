@@ -48,11 +48,11 @@
 
 ## 3. Records and output
 
-- [ ] 3.1 In `report-receipt.ts`, write `via` and `channelError` on the
+- [x] 3.1 In `report-receipt.ts`, write `via` and `channelError` on the
   `notification` record, and read a record without `via` as `tmux` (D5).
   Verify in `test/report-receipt.test.ts`: both new shapes and an old
   record.
-- [ ] 3.2 In `cli.ts` `sendMarkedCommand`, add `via` and `channelError` to
+- [x] 3.2 In `cli.ts` `sendMarkedCommand`, add `via` and `channelError` to
   the result line, and `channelError` to the refusal line. Verify in
   `test/cli.test.ts`: the "Report delivered by the channel", "Report
   delivered by the fallback" and "Submission refused" scenarios of the
