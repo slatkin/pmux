@@ -89,6 +89,22 @@ export function channelEndpointPath(args: {
 export type ChannelUnavailableReason =
   "no-endpoint" | "refused" | "timeout" | "unarmed" | "write-failed" | "invalid" | "bad-reply";
 
+/** The reasons this module can name, for readers that narrow an unknown value. */
+const CHANNEL_REASONS: readonly ChannelUnavailableReason[] = [
+  "no-endpoint",
+  "refused",
+  "timeout",
+  "unarmed",
+  "write-failed",
+  "invalid",
+  "bad-reply",
+];
+
+/** True when `value` is one of the known `ChannelUnavailableReason` strings. */
+export function isChannelUnavailableReason(value: unknown): value is ChannelUnavailableReason {
+  return typeof value === "string" && (CHANNEL_REASONS as readonly string[]).includes(value);
+}
+
 /** The outcome of one channel attempt. `emitted` is the only positive result. */
 export interface ChannelSubmitResult {
   status: "emitted" | "unavailable";

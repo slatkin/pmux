@@ -23,7 +23,7 @@
  * through this module, so the name and the record shapes live in one place.
  */
 import { appendFileSync, readFileSync } from "node:fs";
-import type { ChannelUnavailableReason } from "./channel-endpoint.ts";
+import { isChannelUnavailableReason, type ChannelUnavailableReason } from "./channel-endpoint.ts";
 
 /** The suffix the receipt file carries next to the session file. */
 export const REPORT_RECEIPT_SUFFIX = ".sent";
@@ -66,7 +66,7 @@ export interface PointerNotification {
   /** The artifact path the pointer names. */
   report: string;
   /** The transport the pointer was submitted through. */
-  via?: ReportVia;
+  via: ReportVia;
   /** Why the channel was unavailable; set only after a fallback (design D5). */
   channelError?: ChannelUnavailableReason;
 }
@@ -271,8 +271,8 @@ function foldRecord(record: Record<string, unknown>, state: ReportLogState): voi
         // reads as the tmux transport (design D5): the field is additive, so
         // an older log line was a verified-input delivery.
         via: record.via === "channel" ? "channel" : "tmux",
-        ...(typeof record.channelError === "string"
-          ? { channelError: record.channelError as ChannelUnavailableReason }
+        ...(isChannelUnavailableReason(record.channelError)
+          ? { channelError: record.channelError }
           : {}),
         ...(at !== undefined ? { at } : {}),
       });

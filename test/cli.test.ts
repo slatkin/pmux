@@ -36,7 +36,10 @@ import { argValue, placementRow, useTmuxPaneFake } from "./tmux-fakes.ts";
 import { registerReport, REPORT_ACK_POLL_MS } from "../pi-extension/pmux/report-delivery.ts";
 import { reportArtifactPath } from "../pi-extension/pmux/report-artifact.ts";
 import { appendReportAck, readReportLog } from "../pi-extension/pmux/report-receipt.ts";
-import type { ChannelSubmitResult } from "../pi-extension/pmux/channel-endpoint.ts";
+import type {
+  ChannelSubmitArgs,
+  ChannelSubmitResult,
+} from "../pi-extension/pmux/channel-endpoint.ts";
 import { main as shimMain } from "../skills/pmux/launch.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
@@ -2409,7 +2412,9 @@ describe("cli.ts send", () => {
     argv: string[],
     env: NodeJS.ProcessEnv,
     sleep?: (ms: number) => Promise<void>,
-    extraDeps: { submitChannel?: () => Promise<ChannelSubmitResult> } = {},
+    extraDeps: {
+      submitChannel?: (args: ChannelSubmitArgs) => Promise<ChannelSubmitResult>;
+    } = {},
   ): Promise<{ code: number; stdout: string; stderr: string; sleeps: number[] }> {
     const stdout: string[] = [];
     const stderr: string[] = [];
@@ -2536,6 +2541,31 @@ describe("cli.ts send", () => {
       const state = readReportLog(sessionFile);
       assert.equal(state.notifications[0]!.via, "tmux");
       assert.equal(state.notifications[0]!.channelError, "no-endpoint");
+    });
+  });
+
+  it("routes the channel by the injected env, not the ambient one", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      // A recording channel client: its request must carry the very env the
+      // command was given, so an injected env routes the channel too and a
+      // live pane's ambient `TMUX` cannot leak in (the seam rule
+      // `PI_PMUX_SESSION` already follows).
+      const channelArgs: ChannelSubmitArgs[] = [];
+      const res = await runSend(
+        ["send", "--to", "%3", "--text", "PASS abc123", "--ack-timeout", "0"],
+        protocolEnv(sessionFile),
+        undefined,
+        {
+          submitChannel: async (args) => {
+            channelArgs.push(args);
+            return { status: "unavailable", reason: "no-endpoint" };
+          },
+        },
+      );
+      assert.equal(res.code, 0);
+      assert.equal(channelArgs.length, 1);
+      assert.deepEqual(channelArgs[0]!.env, protocolEnv(sessionFile));
     });
   });
 

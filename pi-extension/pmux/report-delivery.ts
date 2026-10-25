@@ -20,6 +20,11 @@
  */
 import { encodePaneText } from "./pane-input.ts";
 import { buildReportPointer, writeReportArtifact } from "./report-artifact.ts";
+import {
+  submitChannel,
+  type ChannelSubmitResult,
+  type ChannelUnavailableReason,
+} from "./channel-endpoint.ts";
 import { defaultSleep } from "./sleep.ts";
 import {
   appendReportNotification,
@@ -28,7 +33,6 @@ import {
   type ReportVia,
 } from "./report-receipt.ts";
 import { verifiedAgentPrompt, type VerifiedPromptResult } from "./tmux.ts";
-import { submitChannel, type ChannelUnavailableReason } from "./channel-endpoint.ts";
 
 /** The interval the ack wait polls the event log at. */
 export const REPORT_ACK_POLL_MS = 250;
@@ -49,6 +53,13 @@ export interface ReportDeliveryDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Poll and deadline clock; defaults to `Date.now`. */
   now?: () => number;
+  /**
+   * The process environment the delivery runs in; defaults to `process.env`.
+   * The channel client derives its endpoint from the same environment the
+   * mode gate reads, so an injected env routes the channel too — never the
+   * ambient one (the seam rule `PI_PMUX_SESSION` already follows).
+   */
+  env?: NodeJS.ProcessEnv;
   /**
    * The channel endpoint client; defaults to the real `submitChannel`. The
    * fallback only decides after this has answered (design D3).
@@ -127,13 +138,27 @@ export type PointerSubmitResult = Pick<
    */
   notificationRecorded: boolean;
   /** The transport the pointer reached the parent through (design D3). */
-  via?: ReportVia;
+  via: ReportVia;
   /**
    * Why the channel was `unavailable`, present only after a fallback to the
    * verified input ran (design D3, D5).
    */
   channelError?: ChannelUnavailableReason;
 };
+
+/**
+ * The transport fields a fallback result and its `notification` record
+ * share: the tmux transport plus, after a channel that ran out, the reason.
+ */
+function tmuxTransportFields(channel: ChannelSubmitResult): {
+  via: ReportVia;
+  channelError?: ChannelUnavailableReason;
+} {
+  return {
+    via: "tmux",
+    ...(channel.reason !== undefined ? { channelError: channel.reason } : {}),
+  };
+}
 
 /**
  * Build a fresh pointer for a registered report and submit it to the parent.
@@ -172,6 +197,10 @@ export async function submitReportPointer(
     text,
     bytes: args.bytes,
     token: pointer.token,
+    // The endpoint path comes from the environment; the delivery's env is
+    // the same lookup the mode gate reads, so an injected env routes the
+    // channel too and a live pane's ambient `TMUX` cannot leak in.
+    env: deps.env ?? process.env,
   });
   if (channel.status === "emitted") {
     const notificationRecorded = appendReportNotification(args.sessionFile, {
@@ -202,8 +231,7 @@ export async function submitReportPointer(
       enterAttempted: result.enterAttempted,
       token: pointer.token,
       notificationRecorded: false,
-      via: "tmux",
-      ...(channel.reason !== undefined ? { channelError: channel.reason } : {}),
+      ...tmuxTransportFields(channel),
       ...(result.error !== undefined ? { error: result.error } : {}),
     };
   }
@@ -213,8 +241,7 @@ export async function submitReportPointer(
     to: args.to,
     bytes: args.bytes,
     report: args.reportPath,
-    via: "tmux",
-    ...(channel.reason !== undefined ? { channelError: channel.reason } : {}),
+    ...tmuxTransportFields(channel),
   });
   return {
     status: "submitted",
@@ -222,8 +249,7 @@ export async function submitReportPointer(
     enterAttempted: true,
     token: pointer.token,
     notificationRecorded,
-    via: "tmux",
-    ...(channel.reason !== undefined ? { channelError: channel.reason } : {}),
+    ...tmuxTransportFields(channel),
   };
 }
 

@@ -16,6 +16,7 @@ import {
   channelEndpointPath,
   submitChannel,
   type ChannelSocket,
+  type ChannelSubmitResult,
 } from "../pi-extension/pmux/channel-endpoint.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
@@ -159,16 +160,23 @@ describe("channelEndpointPath", () => {
 });
 
 describe("submitChannel", () => {
-  it("is emitted when the endpoint replies ok", async () => {
+  it("sorts each endpoint reply shape into its result", async () => {
     await withTempDirAsync(async (dir) => {
       const socketPath = channelEndpointPath({ env: liveEndpointEnv(dir), targetPane: TARGET });
       assert.ok(socketPath);
-      const endpoint = await startEndpoint(socketPath, () => '{"ok":true,"emitted":true}');
-      try {
-        const result = await submitChannel({ ...BASE_ARGS, env: liveEndpointEnv(dir) });
-        assert.deepEqual(result, { status: "emitted" });
-      } finally {
-        await endpoint.close();
+      const cases: readonly (readonly [string, ChannelSubmitResult])[] = [
+        ['{"ok":true,"emitted":true}', { status: "emitted" }],
+        ['{"ok":false,"reason":"unarmed"}', { status: "unavailable", reason: "unarmed" }],
+        ['{"ok":false,"reason":"invalid"}', { status: "unavailable", reason: "invalid" }],
+      ];
+      for (const [reply, expected] of cases) {
+        const endpoint = await startEndpoint(socketPath, () => reply);
+        try {
+          const result = await submitChannel({ ...BASE_ARGS, env: liveEndpointEnv(dir) });
+          assert.deepEqual(result, expected, reply);
+        } finally {
+          await endpoint.close();
+        }
       }
     });
   });
@@ -223,7 +231,7 @@ describe("submitChannel", () => {
     });
   });
 
-  it("reads refused on a stale socket file", async () => {
+  it("reads refused when the socket path exists but no endpoint listens", async () => {
     await withTempDirAsync(async (dir) => {
       const socketPath = channelEndpointPath({ env: liveEndpointEnv(dir), targetPane: TARGET });
       assert.ok(socketPath);
@@ -231,34 +239,6 @@ describe("submitChannel", () => {
       writeFileSync(socketPath, "");
       const result = await submitChannel({ ...BASE_ARGS, env: liveEndpointEnv(dir) });
       assert.deepEqual(result, { status: "unavailable", reason: "refused" });
-    });
-  });
-
-  it("reads unarmed", async () => {
-    await withTempDirAsync(async (dir) => {
-      const socketPath = channelEndpointPath({ env: liveEndpointEnv(dir), targetPane: TARGET });
-      assert.ok(socketPath);
-      const endpoint = await startEndpoint(socketPath, () => '{"ok":false,"reason":"unarmed"}');
-      try {
-        const result = await submitChannel({ ...BASE_ARGS, env: liveEndpointEnv(dir) });
-        assert.deepEqual(result, { status: "unavailable", reason: "unarmed" });
-      } finally {
-        await endpoint.close();
-      }
-    });
-  });
-
-  it("reads invalid", async () => {
-    await withTempDirAsync(async (dir) => {
-      const socketPath = channelEndpointPath({ env: liveEndpointEnv(dir), targetPane: TARGET });
-      assert.ok(socketPath);
-      const endpoint = await startEndpoint(socketPath, () => '{"ok":false,"reason":"invalid"}');
-      try {
-        const result = await submitChannel({ ...BASE_ARGS, env: liveEndpointEnv(dir) });
-        assert.deepEqual(result, { status: "unavailable", reason: "invalid" });
-      } finally {
-        await endpoint.close();
-      }
     });
   });
 

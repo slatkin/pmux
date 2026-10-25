@@ -68,6 +68,7 @@ describe("event log writers", () => {
           to: "%12",
           bytes: 9,
           report,
+          via: "tmux",
         }),
         true,
       );
@@ -147,6 +148,7 @@ describe("event log writers", () => {
           to: "%12",
           bytes: 1,
           report: "/r",
+          via: "tmux",
         }),
         false,
       );
@@ -188,6 +190,7 @@ describe("readReportLog", () => {
         to: "%12",
         bytes: 3,
         report: reportA,
+        via: "tmux",
       });
       appendReportReceipt(sessionFile, { at: "2026-10-24T00:00:00Z", to: "%12", bytes: 7 });
       appendReportAck(sessionFile, ID_A);
@@ -289,6 +292,7 @@ describe("countReportsTo", () => {
         to: "%12",
         bytes: 3,
         report: "/r",
+        via: "tmux",
       });
       appendReportAck(sessionFile, ID_A);
       assert.equal(countReportsTo(sessionFile, "%12"), 0);

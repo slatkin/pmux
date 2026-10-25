@@ -107,6 +107,7 @@ async function runMarkedCase(
       enterAttempted: true,
       token: newReportId(),
       notificationRecorded: true,
+      via: "tmux",
       acknowledged: false,
     };
   };
@@ -213,6 +214,7 @@ function submittedResult(): DeliverReportResult {
     enterAttempted: true,
     token: newReportId(),
     notificationRecorded: true,
+    via: "tmux",
     acknowledged: false,
   };
 }
@@ -487,6 +489,7 @@ describe("runSpec under file-ack-v1 (design D8)", () => {
                 enterAttempted: false,
                 token: newReportId(),
                 notificationRecorded: false,
+                via: "tmux",
                 error: "the pane is in a mode",
                 acknowledged: false,
               }

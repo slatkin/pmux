@@ -283,6 +283,24 @@ describe("submitReportPointer", () => {
     });
   });
 
+  it("passes the delivery env to the channel client, not the ambient one", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const env = { TMUX: "/tmp/tmux-1000/default,1,0" };
+      const { submit } = fakeSubmit({ status: "submitted" });
+      const { submitChannel, calls: channelCalls } = fakeChannel({
+        status: "unavailable",
+        reason: "no-endpoint",
+      });
+      await submitReportPointer(submitArgs(sessionFile), { submit, submitChannel, env });
+
+      // The channel request carried the injected env — the same lookup the
+      // mode gate reads — so an injected env routes the channel too.
+      assert.equal(channelCalls.length, 1);
+      assert.equal(channelCalls[0]!.env, env);
+    });
+  });
+
   it("never falls back on a missing or late ack after `emitted`", async () => {
     await withTempDirAsync(async (dir) => {
       const sessionFile = join(dir, "s.jsonl");

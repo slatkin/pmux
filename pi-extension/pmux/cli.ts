@@ -43,12 +43,11 @@ import {
   type RegisteredReportFile,
 } from "./report-delivery.ts";
 import { appendReportAck, appendReportReceipt, reportReceiptPath } from "./report-receipt.ts";
-import type { ChannelUnavailableReason } from "./channel-endpoint.ts";
+import { submitChannel, type ChannelUnavailableReason } from "./channel-endpoint.ts";
 import { isReportId, reportArtifactPath } from "./report-artifact.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
-import { submitChannel } from "./channel-endpoint.ts";
 import {
   CHILD_STATUSES,
   isChildStatus,
@@ -632,6 +631,7 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
       {
         ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
         ...(deps.submitChannel !== undefined ? { submitChannel: deps.submitChannel } : {}),
+        ...(deps.env !== undefined ? { env: deps.env } : {}),
       },
     );
     if (delivery.submitted) {
@@ -649,9 +649,7 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
           receipt,
           notificationRecorded: delivery.notificationRecorded,
           via: delivery.via,
-          ...(delivery.via === "tmux" && delivery.channelError !== undefined
-            ? { channelError: delivery.channelError }
-            : {}),
+          ...(delivery.channelError !== undefined ? { channelError: delivery.channelError } : {}),
         }) + "\n",
       );
       return 0;
