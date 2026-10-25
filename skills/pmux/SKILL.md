@@ -1,6 +1,6 @@
 ---
 name: pmux
-description: "Delegated subagents for build, review, recon and doc work: each role runs as a pi process in its own tmux pane and reports back through its session file. For an external orchestrator such as Claude Code it starts children with `--report send`, so the report is typed into the orchestrator's pane. Use it when asked to launch, spawn, start or delegate work to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, or a review-fix loop until pass."
+description: "Delegated subagents for build, review, recon and doc work: each role runs as a pi process in its own tmux pane and reports back through its session file. For an external orchestrator such as Claude Code it starts children with `--report send`, so the report reaches the orchestrator's pane as a one-line pointer to a report file. Use it when asked to launch, spawn, start or delegate work to another agent — a review agent for a commit, a worker implementing a task, a scout mapping unfamiliar code, or a review-fix loop until pass."
 ---
 
 # pi subagents via tmux
@@ -157,8 +157,8 @@ with user consent).
      reports). The pane stays open. Read the last assistant message from
      the session file (step 4) and decide whether to relaunch, then close
      the pane once you are done with it.
-4. Read the report (default `last` mode; in `send` mode the report is typed
-   into your pane instead — see
+4. Read the report (default `last` mode; in `send` mode the report arrives as
+   pointer-named report files instead — see
    [External orchestrators (Claude Code)](#external-orchestrators-claude-code)) —
    the child's last assistant message in the session
    file from the start JSON:
@@ -174,8 +174,10 @@ The recipes above describe the default `last` mode: you can block in
 `wait`, and the report is the child's last assistant message. This section
 is for an orchestrator that cannot poll — Claude Code and any harness where
 you end a turn and are woken only by text arriving in your own pane. It
-starts the child with `--report send`, and the child types its report into
-your pane.
+starts the child with `--report send`: the child delivers its report through
+the `send` command its footer teaches, which writes the report to a durable
+`.report.md` file next to its session file and types only a one-line pointer
+into your pane.
 
 0. Your own pane id is `$TMUX_PANE` — it is always set inside a pane, and
    it is what children send their reports to. There is no parent name to
@@ -192,13 +194,20 @@ your pane.
    `.exit` sidecar lives next to it), the launch-spec path a resume needs,
    and the child's pane id, which matters only while the child is alive,
    because a `done` child closes its own pane after the close grace.
-3. End the turn. The report arrives as a new message in your prompt — that
-   is the child running the `send` command from its footer. A line break in
-   the report arrives as the two characters `\n`, so the whole report is one
-   message. The `send` command prints its own confirmation line in the
-   child's pane, so a child does not come back to ask whether its report
-   arrived. Do NOT sit in a polling loop instead of ending your turn; the
-   wake-up is the message, not the file.
+3. End the turn. A report arrives as one new prompt line — the pointer the
+   child's `send` command typed into your pane. It carries no report body,
+   only the report ID, the path of the report file, the `ack` command and a
+   visibility-token tail:
+   ```text
+   pmux report <id>. Read '<report file>', then run: node '<cli>' ack --session '<session>' --id <id>. Acknowledge only after reading. [pmux-eom-<token>]
+   ```
+   Read the named file, then run the embedded `ack` command — after reading,
+   not before, because an unacknowledged report is the one the wrapper
+   re-delivers. A repeat delivery keeps the same report ID and mints a fresh
+   token, so dedup pointers by the report ID and ignore a pointer you have
+   already handled. Never touch the report files or the `<session>.sent`
+   event log yourself. Do NOT sit in a polling loop instead of ending your
+   turn; the wake-up is the message, not the file.
 4. When you are awake again (the report arrived, or you want the child's
    final state), wait for the sidecar and read the JSON the wait prints:
    ```bash
@@ -208,9 +217,10 @@ your pane.
    success it prints one JSON line and exits 0:
    `{"reason":"done","exitCode":0,"sidecar":"/abs/path/<session>.exit"}`.
    `reason` is one of `done`, `handoff`, `ping`, `error`, `cancelled`; a
-   sidecar the
-   wrapper wrote itself carries `"source":"wrapper"`, printed in the wait
-   JSON as `"errorSource":"wrapper"`. A timeout prints
+   `handoff` prints its handoff text as `handoff.message`, a `ping` prints
+   its question as `ping.message`, and a sidecar the wrapper wrote itself
+   carries `"source":"wrapper"`, printed in the wait JSON as
+   `"errorSource":"wrapper"`. A timeout prints
    `{"sidecar":null}` and exits 2 (a child may simply still be working —
    wait again, or nudge it); a usage error exits 1 and prints nothing on
    stdout. `wait` never deletes the sidecar, and neither may you — read the
@@ -218,8 +228,9 @@ your pane.
    `sidecar` field of the printed JSON is that absolute path.
 5. Act on the reason from the wait JSON:
    - `done` → clean finish. The child closed itself; the pane has closed
-     after the close grace. Its report was typed into your pane while it
-     ran — or the wrapper woke you that it exited without sending one.
+     after the close grace. Its report arrived while it ran as report files
+     named by pointers — or the wrapper woke you that it exited without
+     sending one.
    - `handoff` → the child ended cleanly at its context alert, but the task
      is NOT complete. The handoff text a fresh agent needs is in the
      sidecar; the wait prints it as `handoff.message` in the JSON. The pane
@@ -230,7 +241,7 @@ your pane.
      the wrapper wrote the sidecar: the child crashed. Otherwise it is a
      provider failure — auto-retry exhausted. Either way the child ended
      before it could finish, so count on no report: only a wake-up already
-     typed into your pane tells you that one arrived. The pane stays open
+     delivered to your pane tells you that one arrived. The pane stays open
      showing `__SUBAGENT_DONE_<n>__`; read the last assistant message with
      `last-message --session <session>`, then retry or resume, and close
      the pane once you are done with it.
@@ -250,13 +261,17 @@ your pane.
      decide whether to relaunch, then close the pane once you are done with
      it.
 
-The wrapper also wakes you when a child exits without sending a report: it
-types `<child> <state> without sending a report. Read its last message: node
-<cli> last-message --session <session>` into your pane, where `<state>` is
-the sidecar type, or `exited` or `crashed (code <n>)` when no sidecar was
-written. A `ping` is quoted as `<child> pinged: <message>`. A `cancelled`
-child sends no wake-up: the user stopped it and is in control. A child that
-ignored its footer therefore still wakes you.
+The wrapper also contacts you at the child's exit. A run that produced no
+report wakes you: the wake text — `<child> <state> without sending a report.
+Read its last message: node <cli> last-message --session <session>`, where
+`<state>` is the sidecar type, or `exited` or `crashed (code <n>)` when no
+sidecar was written, and a `ping` reads `<child> pinged: <message>` — goes
+to its own pointer-delivered file, so you read the pointer first. A run that
+produced reports re-delivers, in registration order, every one you have not
+acknowledged, under the same report ID with a fresh token. That exit pass is
+the last attempt: when it also fails to land in your pane, nothing is
+re-sent. A `cancelled` child sends no wake-up: the user stopped it and is in
+control. A child that ignored its footer therefore still wakes you.
 
 A follow-up (a recheck, or the answer to the child's question) always runs
 in a **new** pane — the `resume` command is in

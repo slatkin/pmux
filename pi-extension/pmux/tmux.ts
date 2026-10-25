@@ -19,6 +19,7 @@ import {
   readExitSidecar,
   type PollResult,
 } from "./exit-sidecar.ts";
+import { defaultSleep } from "./sleep.ts";
 import {
   DEFAULT_SURFACE_PLACEMENT,
   type SplitDirection,
@@ -443,6 +444,132 @@ export function agentPrompt(pane: string, text: string): AgentPromptResult {
   return { submitted: true, pane };
 }
 
+/** The interval between verified-input polls: design D4's 100 ms cadence. */
+export const VERIFIED_PROMPT_POLL_MS = 100;
+/** The deadline the typed text's token must appear within. */
+const VERIFIED_PROMPT_TIMEOUT_MS = 2000;
+
+/** The outcome of `verifiedAgentPrompt`, as the report protocol names it. */
+export type VerifiedPromptStatus = "submitted" | "not-submitted" | "unknown";
+
+/** Shape of the verified prompt delivery result. */
+export interface VerifiedPromptResult {
+  pane: string;
+  /**
+   * `submitted`: the token was verified and exactly one Enter was sent.
+   * `not-submitted`: refused before the Enter — any text the typing already
+   * delivered stays in the pane untouched. `unknown`: the Enter call threw,
+   * so tmux may still have accepted it.
+   */
+  status: VerifiedPromptStatus;
+  /** True only when the Enter call returned without an exception. */
+  submitted: boolean;
+  /** True once the Enter call was attempted. */
+  enterAttempted: boolean;
+  /** Why the submission was refused or its outcome is unknown. */
+  error?: string;
+}
+
+function tmuxErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Deliver `text` to a pane as input and submit it only once its `token` was
+ * seen on the visible screen — the verified report input of `file-ack-v1`
+ * (design D4).
+ *
+ * The sequence: refuse when the pane is in a mode; capture the visible pane
+ * and refuse when the token is already on it (a stale pointer would make the
+ * new one unprovable); type the text; poll mode and the visible screen every
+ * 100 ms for up to 2 s until the token appears; recheck both once; send
+ * exactly one Enter.
+ *
+ * The pane is never edited: no Escape, Ctrl-U or other editing key is ever
+ * sent. A refusal or a token timeout returns `not-submitted` and leaves any
+ * unsubmitted text alone; a tmux exception on the Enter call returns
+ * `unknown`, because tmux may still have accepted it. No post-Enter capture
+ * can tell a dropped Enter from an accepted input still visible in a
+ * composer, so none is taken and no Enter is ever retried.
+ */
+export async function verifiedAgentPrompt(
+  pane: string,
+  text: string,
+  token: string,
+  options: {
+    /** Poll timer; defaults to a real `setTimeout`. */
+    sleep?: (ms: number) => Promise<void>;
+    /** Deadline clock; defaults to `Date.now`. */
+    now?: () => number;
+  } = {},
+): Promise<VerifiedPromptResult> {
+  const sleep = options.sleep ?? defaultSleep;
+  const now = options.now ?? Date.now;
+
+  const refuse = (error: string): VerifiedPromptResult => ({
+    pane,
+    status: "not-submitted",
+    submitted: false,
+    enterAttempted: false,
+    error,
+  });
+
+  const paneInMode = async (): Promise<boolean> =>
+    (await tmuxAsync(["display-message", "-p", "-t", pane, "#{pane_in_mode}"])).trim() === "1";
+
+  // The visible pane only: no `-S`, so scrollback never supplies the token.
+  const visibleScreen = (): Promise<string> => tmuxAsync(["capture-pane", "-p", "-t", pane]);
+
+  try {
+    if (await paneInMode()) return refuse("the pane is in a mode");
+    if ((await visibleScreen()).includes(token)) {
+      return refuse("the token is already on the visible screen");
+    }
+    await tmuxAsync(["send-keys", "-t", pane, "-l", text]);
+  } catch (error) {
+    return refuse(tmuxErrorMessage(error));
+  }
+
+  const deadline = now() + VERIFIED_PROMPT_TIMEOUT_MS;
+  for (;;) {
+    try {
+      if (await paneInMode()) return refuse("the pane entered a mode");
+      if ((await visibleScreen()).includes(token)) break;
+    } catch (error) {
+      return refuse(tmuxErrorMessage(error));
+    }
+    const remaining = deadline - now();
+    if (remaining <= 0) return refuse("the token never appeared on the visible screen");
+    await sleep(Math.min(VERIFIED_PROMPT_POLL_MS, remaining));
+  }
+
+  // The last check before the Enter: the token was seen, but the pane may
+  // have entered a mode since — and the token may have left the screen.
+  try {
+    if (await paneInMode()) return refuse("the pane entered a mode");
+    if (!(await visibleScreen()).includes(token)) {
+      return refuse("the token left the visible screen");
+    }
+  } catch (error) {
+    return refuse(tmuxErrorMessage(error));
+  }
+
+  try {
+    await tmuxAsync(["send-keys", "-t", pane, "Enter"]);
+  } catch (error) {
+    // The Enter may still have landed: the outcome cannot be told apart, so
+    // a retry would risk a duplicate. Report `unknown` and stop.
+    return {
+      pane,
+      status: "unknown",
+      submitted: false,
+      enterAttempted: true,
+      error: tmuxErrorMessage(error),
+    };
+  }
+  return { pane, status: "submitted", submitted: true, enterAttempted: true };
+}
+
 /** Whether the pane currently has focus. */
 export async function isPaneFocusedAsync(pane: string): Promise<boolean> {
   try {
@@ -552,6 +679,6 @@ export async function pollForExit(
  * really finished.
  */
 async function paneStillAlive(surface: string): Promise<boolean> {
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  await defaultSleep(150);
   return paneExists(surface);
 }
