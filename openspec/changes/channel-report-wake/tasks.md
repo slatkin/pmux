@@ -10,7 +10,7 @@
 
 ## 1. Channel endpoint client
 
-- [ ] 1.1 Add `pi-extension/pmux/channel-endpoint.ts` with the path rule
+- [x] 1.1 Add `pi-extension/pmux/channel-endpoint.ts` with the path rule
   (`report-channel`, "Channel endpoint path"; D1): the `XDG_RUNTIME_DIR`
   or `/tmp/pmux-channel-<uid>` directory, FNV-1a 64 of the tmux socket
   path, the target pane number. Verify with
@@ -18,7 +18,7 @@
   (`/tmp/tmux-1000/default,1,0` + `%12` →
   `79301cf9592f327a-12.sock`), the unset runtime dir, a different caller
   pane, and `TMUX` unset → `no-endpoint`.
-- [ ] 1.2 Add the socket client (`node:net` only): one request line, one
+- [x] 1.2 Add the socket client (`node:net` only): one request line, one
   reply line, a 2 s overall timeout (injectable through the test seam,
   so the timeout case does not wait 2 real seconds), and the result
   classes (`emitted`;
