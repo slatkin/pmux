@@ -7,8 +7,10 @@
  * any pane input (`registerReport`); both `send` and the run wrapper's
  * no-report wake-up start there. The transport is `submitReportPointer`: a
  * fresh pointer is built for the attempt (same report ID, fresh visibility
- * token), submitted through `verifiedAgentPrompt`, and a `notification`
- * event is recorded — best effort — after a submission. `awaitReportAck`
+ * token), offered to the parent's channel endpoint first (design D3), and —
+ * when the channel is `unavailable`, whatever the reason — submitted through
+ * `verifiedAgentPrompt` as the fallback. A `notification` event is recorded —
+ * best effort — after a submission through either transport. `awaitReportAck`
  * then polls the event log for the `ack`: `send` waits up to its
  * `--ack-timeout`, while the wrapper's exit re-delivery passes no timeout
  * and instead rechecks the ack immediately before each retry
@@ -23,6 +25,7 @@ import {
   readReportLog,
 } from "./report-receipt.ts";
 import { verifiedAgentPrompt, type VerifiedPromptResult } from "./tmux.ts";
+import { submitChannel, type ChannelUnavailableReason } from "./channel-endpoint.ts";
 
 /** The interval the ack wait polls the event log at. */
 export const REPORT_ACK_POLL_MS = 250;
@@ -43,7 +46,15 @@ export interface ReportDeliveryDeps {
   sleep?: (ms: number) => Promise<void>;
   /** Poll and deadline clock; defaults to `Date.now`. */
   now?: () => number;
+  /**
+   * The channel endpoint client; defaults to the real `submitChannel`. The
+   * fallback only decides after this has answered (design D3).
+   */
+  submitChannel?: typeof submitChannel;
 }
+
+/** The transport one pointer submission reached the parent through. */
+export type ReportVia = "channel" | "tmux";
 
 /** The registered artifact a report text becomes before any pane input. */
 export interface RegisteredReportFile {
@@ -112,14 +123,29 @@ export type PointerSubmitResult = Pick<
    * refusal: the record means the pointer was submitted to the pane.
    */
   notificationRecorded: boolean;
+  /** The transport the pointer reached the parent through (design D3). */
+  via?: ReportVia;
+  /**
+   * Why the channel was `unavailable`, present only after a fallback to the
+   * verified input ran (design D3, D5).
+   */
+  channelError?: ChannelUnavailableReason;
 };
 
 /**
- * Build a fresh pointer for a registered report and submit it through the
- * verified pane input. Every attempt mints a new visibility token while the
- * report ID stays stable, so a re-delivery can prove the new pointer
- * appeared even when an earlier one is still on screen. A submission appends
- * the `notification` event — best effort, never fatal (design D2).
+ * Build a fresh pointer for a registered report and submit it to the parent.
+ * Every attempt mints a new visibility token while the report ID stays
+ * stable, so a re-delivery can prove the new pointer appeared even when an
+ * earlier one is still on screen.
+ *
+ * The channel goes first (design D3): an `emitted` result ends the attempt —
+ * nothing is typed into the pane, whatever the later `ack` decides. Every
+ * `unavailable` reason falls back to the verified pane input with the SAME
+ * pointer, and the result then carries the channel's reason as
+ * `channelError`. A missing or late `ack` is never a fallback: the ack wait
+ * belongs to the caller, after one submission. A submission through either
+ * transport appends the `notification` event — best effort, never fatal
+ * (design D2).
  */
 export async function submitReportPointer(
   args: SubmitPointerArgs,
@@ -133,8 +159,35 @@ export async function submitReportPointer(
     cliPath: args.cliPath,
   });
   // The pointer is already one line; the encoding is the same rule `send`
-  // applies to any text it types, kept in one place.
-  const result = await submit(args.to, encodePaneText(pointer.text), pointer.token, {
+  // applies to any text it types, kept in one place. The channel request
+  // carries the exact text the verified input would type (design D4), so
+  // both transports hold one pointer shape.
+  const text = encodePaneText(pointer.text);
+  const channel = await (deps.submitChannel ?? submitChannel)({
+    to: args.to,
+    id: args.id,
+    text,
+    bytes: args.bytes,
+    token: pointer.token,
+  });
+  if (channel.status === "emitted") {
+    const notificationRecorded = appendReportNotification(args.sessionFile, {
+      id: args.id,
+      token: pointer.token,
+      to: args.to,
+      bytes: args.bytes,
+      report: args.reportPath,
+    });
+    return {
+      status: "submitted",
+      submitted: true,
+      enterAttempted: true,
+      token: pointer.token,
+      notificationRecorded,
+      via: "channel",
+    };
+  }
+  const result = await submit(args.to, text, pointer.token, {
     ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
     ...(deps.now !== undefined ? { now: deps.now } : {}),
   });
@@ -145,6 +198,8 @@ export async function submitReportPointer(
       enterAttempted: result.enterAttempted,
       token: pointer.token,
       notificationRecorded: false,
+      via: "tmux",
+      ...(channel.reason !== undefined ? { channelError: channel.reason } : {}),
       ...(result.error !== undefined ? { error: result.error } : {}),
     };
   }
@@ -161,6 +216,8 @@ export async function submitReportPointer(
     enterAttempted: true,
     token: pointer.token,
     notificationRecorded,
+    via: "tmux",
+    ...(channel.reason !== undefined ? { channelError: channel.reason } : {}),
   };
 }
 
