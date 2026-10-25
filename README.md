@@ -75,6 +75,36 @@ agent frontmatter. Pi resolves the name through its provider configuration.
 Override one spawn with the `model` parameter on the `pmux_spawn` tool, or
 permanently in frontmatter.
 
+A role can name an alternate model in its frontmatter with a `model-fallback:`
+key. Pmux ships no fallback value; the user defines it:
+
+```markdown
+---
+name: glm-worker
+description: Implements tasks from todos. Writes code, runs tests, makes commits.
+model: hyper/glm-5.3-flash
+model-fallback: opencode-go/glm-5.3-flash
+---
+
+# GLM Worker
+
+You implement tasks from todos, run the tests and commit the result.
+```
+
+A `pmux_spawn` call with `fallback: true` runs that role on its
+`model-fallback` instead of its `model`. Use it when the role's primary model
+hits API limits or errors, or when the user asks for the fallback or alternate
+model. The call fails at once, before any pane opens or any file is written,
+when the role sets no `model-fallback` or when the same call also sets
+`model`. Nothing switches models automatically: pmux never retries a child
+that failed on its model, so running the role again on its fallback is the
+parent's decision. `pmux_list` shows a role's fallback model next to its
+primary one, and the skill launcher's `start` command takes the same choice as
+a `--fallback` flag. The fallback covers only failures the parent can still
+act on: a partial failure, a child that errored on its model, or a user
+request. A parent whose own model is hard-limited cannot call anything at
+all, so it cannot start the child; the user starts it.
+
 ## Documentation
 
 The [guide](docs/guide.md) is the full reference: the async subagent flow and
