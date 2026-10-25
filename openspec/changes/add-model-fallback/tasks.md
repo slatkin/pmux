@@ -2,9 +2,9 @@
 
 ## 1. Role key and model resolution
 
-- [ ] 1.1 In `pi-extension/pmux/agent-defs.ts`, add `modelFallback?: string` to `AgentDefaults` and parse `model-fallback` in `parseAgentDefinition`; a blank value stores `undefined` (design D3). Verify with parser tests in `test/test.ts`: a role with both keys, a blank key, and a CRLF role file.
-- [ ] 1.2 In `pi-extension/pmux/launch-build.ts`, add `fallback?: boolean` to `LaunchRecordOverrides`. In `resolveLaunchRecord`, throw the two new errors before any write and pick `effectiveModel` from `modelFallback` when `fallback` is set; apply the `strict` empty-model check to the model that applies (design D1, D2). Verify with tests in `test/launch-build.test.ts` for: record holds the fallback model, `fallback` plus `model` throws, a role without `model-fallback` throws with the role name and path, `strict` with only `model-fallback` succeeds, `strict` without the flag and without `model` still throws the empty-model error, `thinking` and tools are unchanged.
-- [ ] 1.3 Add a test that reads every file in the bundled `agents/` directory and asserts none sets `model-fallback`. Verify `pnpm test` passes.
+- [x] 1.1 In `pi-extension/pmux/agent-defs.ts`, add `modelFallback?: string` to `AgentDefaults` and parse `model-fallback` in `parseAgentDefinition`; a blank value stores `undefined` (design D3). Verify with parser tests in `test/test.ts`: a role with both keys, a blank key, and a CRLF role file.
+- [x] 1.2 In `pi-extension/pmux/launch-build.ts`, add `fallback?: boolean` to `LaunchRecordOverrides`. In `resolveLaunchRecord`, throw the two new errors before any write and pick `effectiveModel` from `modelFallback` when `fallback` is set; apply the `strict` empty-model check to the model that applies (design D1, D2). Verify with tests in `test/launch-build.test.ts` for: record holds the fallback model, `fallback` plus `model` throws, a role without `model-fallback` throws with the role name and path, `strict` with only `model-fallback` succeeds, `strict` without the flag and without `model` still throws the empty-model error, `thinking` and tools are unchanged.
+- [x] 1.3 Add a test that reads every file in the bundled `agents/` directory and asserts none sets `model-fallback`. Verify `pnpm test` passes.
 
 ## 2. pi parent: spawn and list
 
