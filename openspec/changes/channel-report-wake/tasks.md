@@ -60,16 +60,16 @@
 
 ## 4. Documentation
 
-- [ ] 4.1 `skills/pmux/SKILL.md`: add a "Channel wake-up" section: start
+- [x] 4.1 `skills/pmux/SKILL.md`: add a "Channel wake-up" section: start
   Claude with
   `--dangerously-load-development-channels plugin:pmux-explorer@slatkin`,
   the requirements (claude.ai or Console auth, org `channelsEnabled`, an
   interactive session), the `via` field, and that `send-keys` stays the
   fallback. Verify by reading it against `report-channel`.
-- [ ] 4.2 `docs/guide.md` and `AGENTS.md` ("Completion and env contracts"):
+- [x] 4.2 `docs/guide.md` and `AGENTS.md` ("Completion and env contracts"):
   one paragraph each for the channel transport and the `via` field.
   Verify by hand (Prettier skips `*.md`).
-- [ ] 4.3 Run the four pre-commit checks: `pnpm run format:check`,
+- [x] 4.3 Run the four pre-commit checks: `pnpm run format:check`,
   `pnpm run lint`, `pnpm run typecheck`, `pnpm test`. Then run
   `openspec validate channel-report-wake --strict`.
 
