@@ -8,9 +8,9 @@
 
 ## 2. pi parent: spawn and list
 
-- [ ] 2.1 In `pi-extension/pmux/supervisor.ts`, add `fallback` to `SubagentParams` with the description from design D4, and pass `params.fallback` in the `overrides` object that `launchSubagent` builds for its `resolveLaunchRecord` call. Verify with tests in `test/supervisor.test.ts`: a spawn with `fallback: true` writes a launch record with the fallback model; the two error cases create no pane and write no record; a spawn without the parameter is unchanged.
-- [ ] 2.2 Add a test that `resume` of a session whose record came from a fallback spawn starts the child on the record's model, and that `pmux_resume` accepts no `fallback` parameter. Verify with `node --test test/supervisor.test.ts`.
-- [ ] 2.3 In `pi-extension/pmux/index.ts`, add the fallback text to the `pmux_list` text line and to the TUI line (design D5). Verify with a test that lists a role with and a role without `model-fallback` and checks both lines.
+- [x] 2.1 In `pi-extension/pmux/supervisor.ts`, add `fallback` to `SubagentParams` with the description from design D4, and pass `params.fallback` in the `overrides` object that `launchSubagent` builds for its `resolveLaunchRecord` call. Verify with tests in `test/supervisor.test.ts`: a spawn with `fallback: true` writes a launch record with the fallback model; the two error cases create no pane and write no record; a spawn without the parameter is unchanged.
+- [x] 2.2 Add a test that `resume` of a session whose record came from a fallback spawn starts the child on the record's model, and that `pmux_resume` accepts no `fallback` parameter. Verify with `node --test test/supervisor.test.ts`.
+- [x] 2.3 In `pi-extension/pmux/index.ts`, add the fallback text to the `pmux_list` text line and to the TUI line (design D5). Verify with a test that lists a role with and a role without `model-fallback` and checks both lines.
 
 ## 3. External orchestrator: CLI and skill
 
