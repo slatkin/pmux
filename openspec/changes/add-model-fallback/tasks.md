@@ -24,8 +24,8 @@
 
 ## 5. Integration
 
-- [ ] 5.1 Run the commit checks in order: `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck`, `pnpm test`. Verify all four pass, with no new lint errors (the existing `no-explicit-any` warnings are expected).
-- [ ] 5.2 Run `openspec validate add-model-fallback --strict` and verify it passes.
+- [x] 5.1 Run the commit checks in order: `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck`, `pnpm test`. Verify all four pass, with no new lint errors (the existing `no-explicit-any` warnings are expected).
+- [x] 5.2 Run `openspec validate add-model-fallback --strict` and verify it passes.
 
 ## Workflow follow-up
 
