@@ -74,6 +74,11 @@ The extension SHALL deliver a launch command to a pane as literal text followed 
 - **WHEN** the extension closes a pane whose window holds only that pane and sidebar panes
 - **THEN** the window is closed instead of the pane, so no empty tab is left behind
 
+#### Scenario: A shared session keeps its last window
+- **WHEN** the extension closes a pane whose window holds only that pane and sidebar panes
+- **AND** that window is the session's last window and more than one client is attached
+- **THEN** only the pane is closed, so the session and its clients stay
+
 ### Requirement: Named agent panes
 
 A pane SHALL be named after its subagent, and the name SHALL be the pane's title. Delivering a message to a named agent SHALL reach the pane that carries that title.

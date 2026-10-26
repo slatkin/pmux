@@ -428,37 +428,47 @@ function isSurfaceGoneError(error: unknown): boolean {
 }
 
 /**
- * True when the target pane shares its window only with sidebar panes. The
- * listing resolves the window from the pane, so it also fails for a pane that
- * is already gone.
+ * True when the target pane shares its window only with sidebar panes and
+ * closing the window is safe. The listing resolves the window from the pane,
+ * so it also fails for a pane that is already gone.
  */
-function isSidebarOnlyWindow(surface: string): boolean {
+function shouldKillWindow(surface: string): boolean {
   let listing: string;
   try {
-    listing = tmux(["list-panes", "-t", surface, "-F", "#{pane_id}|#{@pane_role}"]);
+    listing = tmux([
+      "list-panes",
+      "-t",
+      surface,
+      "-F",
+      "#{pane_id}|#{@pane_role}|#{session_windows}|#{session_attached}",
+    ]);
   } catch {
     return false;
   }
-  let sidebars = 0;
-  for (const row of listing.split("\n")) {
-    if (row.length === 0) continue;
-    const [paneId, role] = row.split("|");
-    if (paneId === surface) continue;
-    if (role !== "sidebar") return false;
-    sidebars += 1;
-  }
-  return sidebars > 0;
+  const rows = listing
+    .split("\n")
+    .filter((row) => row.length > 0)
+    .map((row) => row.split("|"));
+  const others = rows.filter(([paneId]) => paneId !== surface);
+  if (others.length === 0 || others.some(([, role]) => role !== "sidebar")) return false;
+  // Killing the session's last window ends the session. As pmux-explorer's
+  // auto-close does, allow that for one attached client only: with more, the
+  // session is shared, so keep the sidebar. A missing count keeps it too.
+  const [, , windows, attached] = rows[0];
+  if (Number(windows) > 1) return true;
+  return Number(windows) === 1 && attached !== "" && Number(attached) <= 1;
 }
 
 /**
  * Close a pane. When the pane's window would keep only sidebar panes alive,
  * close the whole window instead: `kill-pane` does not fire tmux's
- * `pane-exited` hook, so the sidebar would leave an empty tab behind. A pane
- * that is already gone is not an error, and a failed listing falls back to
- * killing the pane alone.
+ * `pane-exited` hook, so the sidebar would leave an empty tab behind. The
+ * session's last window closes only when at most one client is attached. A
+ * pane that is already gone is not an error, and a failed listing falls back
+ * to killing the pane alone.
  */
 export function closeSurface(surface: string): void {
-  const command = isSidebarOnlyWindow(surface) ? "kill-window" : "kill-pane";
+  const command = shouldKillWindow(surface) ? "kill-window" : "kill-pane";
   try {
     tmux([command, "-t", surface]);
   } catch (error) {

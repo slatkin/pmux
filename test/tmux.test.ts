@@ -364,7 +364,7 @@ describe("tmux backend", () => {
 
   it("closes a pane and tolerates one that is already gone", () => {
     const calls = stub((args) => {
-      if (args[0] === "list-panes") return "%9|\n";
+      if (args[0] === "list-panes") return "%9||2|1\n";
       return "";
     });
     closeSurface("%9");
@@ -379,8 +379,14 @@ describe("tmux backend", () => {
   it("closes the window when only sidebar panes remain", () => {
     const calls = stub((args) => {
       if (args[0] === "list-panes") {
-        assert.deepEqual(args, ["list-panes", "-t", "%9", "-F", "#{pane_id}|#{@pane_role}"]);
-        return "%9|\n%11|sidebar\n%13|sidebar\n";
+        assert.deepEqual(args, [
+          "list-panes",
+          "-t",
+          "%9",
+          "-F",
+          "#{pane_id}|#{@pane_role}|#{session_windows}|#{session_attached}",
+        ]);
+        return "%9||2|2\n%11|sidebar|2|2\n%13|sidebar|2|2\n";
       }
       return "";
     });
@@ -394,7 +400,7 @@ describe("tmux backend", () => {
 
   it("closes only the pane when another non-sidebar pane remains", () => {
     const calls = stub((args) => {
-      if (args[0] === "list-panes") return "%9|\n%11|sidebar\n%13|\n";
+      if (args[0] === "list-panes") return "%9||2|1\n%11|sidebar|2|1\n%13||2|1\n";
       return "";
     });
     closeSurface("%9");
@@ -405,9 +411,18 @@ describe("tmux backend", () => {
     );
   });
 
-  it("closes only the pane when it is the window's sole pane", () => {
+  it("closes the session's last window when one client is attached", () => {
     const calls = stub((args) => {
-      if (args[0] === "list-panes") return "%9|\n";
+      if (args[0] === "list-panes") return "%9||1|1\n%11|sidebar|1|1\n";
+      return "";
+    });
+    closeSurface("%9");
+    assert.deepEqual(calls[1], ["kill-window", "-t", "%9"]);
+  });
+
+  it("keeps a shared session's last window and closes only the pane", () => {
+    const calls = stub((args) => {
+      if (args[0] === "list-panes") return "%9||1|2\n%11|sidebar|1|2\n";
       return "";
     });
     closeSurface("%9");
