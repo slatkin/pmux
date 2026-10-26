@@ -1,12 +1,12 @@
 ---
 name: sidebar-tasks
-description: Record, update and track a per-pane todo list in pmux-explorer's Tasks tab through `pmux-explorer task-set <subject>` and `task-update <id> <status>`. Use it when asked to keep a task or todo list for the pane, when the pane's Tasks tab should reflect the work, or when a record-first or update-before-finish reminder told you to use task-set or task-update.
+description: Record, update and track a per-pane todo list in pmux-explorer's Tasks tab through `pmux-explorer task-describe <text>`, `task-set <subject>` and `task-update <id> <status>`. Use it when asked to keep a task or todo list for the pane, when the pane's Tasks tab should reflect the work, or when a record-first or update-before-finish reminder told you to use task-set, task-update or task-describe.
 ---
 
 # The Tasks tab (pmux-explorer)
 
 pmux-explorer shows a todo list for the focused tmux pane in its
-Tasks tab. The pane's agent writes that list through two shell commands;
+Tasks tab. The pane's agent writes that list through three shell commands;
 this skill is the full instruction set for them. Every agent harness that
 runs a shell can use them — no registration, no hook wiring.
 
@@ -18,6 +18,24 @@ Outside tmux the commands record nothing and exit 0.
 The list is one file per pane, `/tmp/pmux-explorer-tasks<PANE>.json`. A new
 session starts with an empty list: the sidebar clears the pane's store at
 session start.
+
+## Describe the work
+
+```sh
+pmux-explorer task-describe <text>
+```
+
+Sets the pane-wide description — one or two lines naming the work the
+list covers, shown pinned above the items in the Tasks tab. Describe the
+work before recording the first item; the command is expected as part of
+registration. Later calls replace the description (a blank one clears
+it), so the description stays the current goal even as the plan shifts.
+Every argument after `task-describe` joins into the text, the same join
+`task-set` uses, so quoting is optional:
+
+```sh
+pmux-explorer task-describe Fix the login crash end to end
+```
 
 ## Record a task
 
@@ -33,8 +51,9 @@ joins into the subject, so quoting is optional and unnecessary:
 pmux-explorer task-set Fix the login crash on empty email
 ```
 
-Subjects print in a narrow tab column. Keep them short enough to read at a
-glance; put detail in the work, not the subject.
+Subjects wrap to the tab's width instead of truncating, but the tab is
+still a glanceable list: keep subjects short enough to read at a glance
+and put detail in the work, not the subject.
 
 ## Read the list
 
@@ -46,9 +65,10 @@ pane_file=/tmp/pmux-explorer-tasks"$(printf %s "$TMUX_PANE" | tr '%' '_')".json
 cat "$pane_file"
 ```
 
-Optionally, when `jq` exists, one line per item:
+Optionally, when `jq` exists, the description and one line per item:
 
 ```sh
+jq -r '.description' "$pane_file"
 jq -r '.tasks[] | "\(.id)\t\(.status)\t\(.subject)"' "$pane_file"
 ```
 
@@ -83,7 +103,7 @@ The pane's agent may receive the task reminders, quoted verbatim from the
 sidebar's `src/task_reminders.rs`:
 
 - A turn that starts while the pane's todo list is empty may receive:
-  `No tasks recorded yet: before starting work, record your todo list with task-set <subject>.`
+  `No tasks recorded yet: describe the work with task-describe <text>, then record tasks with task-set <subject>.`
 - A turn that ends while items are still open receives:
   `Reminder: make sure the task board is up to date.`
 
