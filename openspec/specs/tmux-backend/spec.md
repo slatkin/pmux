@@ -70,6 +70,10 @@ The extension SHALL deliver a launch command to a pane as literal text followed 
 - **WHEN** the extension closes a pane that no longer exists
 - **THEN** the close succeeds without raising an error
 
+#### Scenario: Only the sidebar would keep the window
+- **WHEN** the extension closes a pane whose window holds only that pane and sidebar panes
+- **THEN** the window is closed instead of the pane, so no empty tab is left behind
+
 ### Requirement: Named agent panes
 
 A pane SHALL be named after its subagent, and the name SHALL be the pane's title. Delivering a message to a named agent SHALL reach the pane that carries that title.

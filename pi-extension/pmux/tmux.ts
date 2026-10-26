@@ -421,13 +421,48 @@ export function sendEscape(surface: string): void {
   tmux(["send-keys", "-t", surface, "Escape"]);
 }
 
-/** Close a pane. A pane that is already gone is not an error. */
-export function closeSurface(surface: string): void {
+/** True when the tmux call failed because its pane or window is already gone. */
+function isSurfaceGoneError(error: unknown): boolean {
+  const message = String((error as { message?: unknown })?.message ?? error);
+  return /can't find (pane|window)|no such (pane|window)|not found/i.test(message);
+}
+
+/**
+ * True when the target pane shares its window only with sidebar panes. The
+ * listing resolves the window from the pane, so it also fails for a pane that
+ * is already gone.
+ */
+function isSidebarOnlyWindow(surface: string): boolean {
+  let listing: string;
   try {
-    tmux(["kill-pane", "-t", surface]);
+    listing = tmux(["list-panes", "-t", surface, "-F", "#{pane_id}|#{@pane_role}"]);
+  } catch {
+    return false;
+  }
+  let sidebars = 0;
+  for (const row of listing.split("\n")) {
+    if (row.length === 0) continue;
+    const [paneId, role] = row.split("|");
+    if (paneId === surface) continue;
+    if (role !== "sidebar") return false;
+    sidebars += 1;
+  }
+  return sidebars > 0;
+}
+
+/**
+ * Close a pane. When the pane's window would keep only sidebar panes alive,
+ * close the whole window instead: `kill-pane` does not fire tmux's
+ * `pane-exited` hook, so the sidebar would leave an empty tab behind. A pane
+ * that is already gone is not an error, and a failed listing falls back to
+ * killing the pane alone.
+ */
+export function closeSurface(surface: string): void {
+  const command = isSidebarOnlyWindow(surface) ? "kill-window" : "kill-pane";
+  try {
+    tmux([command, "-t", surface]);
   } catch (error) {
-    const message = String((error as { message?: unknown })?.message ?? error);
-    if (!/can't find pane|no such pane|not found/i.test(message)) throw error;
+    if (!isSurfaceGoneError(error)) throw error;
   }
 }
 

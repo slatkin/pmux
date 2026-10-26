@@ -363,14 +363,72 @@ describe("tmux backend", () => {
   });
 
   it("closes a pane and tolerates one that is already gone", () => {
-    const calls = stub(() => "");
+    const calls = stub((args) => {
+      if (args[0] === "list-panes") return "%9|\n";
+      return "";
+    });
     closeSurface("%9");
-    assert.deepEqual(calls[0], ["kill-pane", "-t", "%9"]);
+    assert.deepEqual(calls[1], ["kill-pane", "-t", "%9"]);
 
     __setTmuxExecForTests__(() => {
       throw new Error("can't find pane: %9");
     });
     assert.doesNotThrow(() => closeSurface("%9"));
+  });
+
+  it("closes the window when only sidebar panes remain", () => {
+    const calls = stub((args) => {
+      if (args[0] === "list-panes") {
+        assert.deepEqual(args, ["list-panes", "-t", "%9", "-F", "#{pane_id}|#{@pane_role}"]);
+        return "%9|\n%11|sidebar\n%13|sidebar\n";
+      }
+      return "";
+    });
+    closeSurface("%9");
+    assert.deepEqual(calls[1], ["kill-window", "-t", "%9"]);
+    assert.equal(
+      calls.some((args) => args[0] === "kill-pane"),
+      false,
+    );
+  });
+
+  it("closes only the pane when another non-sidebar pane remains", () => {
+    const calls = stub((args) => {
+      if (args[0] === "list-panes") return "%9|\n%11|sidebar\n%13|\n";
+      return "";
+    });
+    closeSurface("%9");
+    assert.deepEqual(calls[1], ["kill-pane", "-t", "%9"]);
+    assert.equal(
+      calls.some((args) => args[0] === "kill-window"),
+      false,
+    );
+  });
+
+  it("closes only the pane when it is the window's sole pane", () => {
+    const calls = stub((args) => {
+      if (args[0] === "list-panes") return "%9|\n";
+      return "";
+    });
+    closeSurface("%9");
+    assert.deepEqual(calls[1], ["kill-pane", "-t", "%9"]);
+    assert.equal(
+      calls.some((args) => args[0] === "kill-window"),
+      false,
+    );
+  });
+
+  it("falls back to killing the pane when the window listing fails", () => {
+    const calls = stub((args) => {
+      if (args[0] === "list-panes") throw new Error("tmux refused");
+      return "";
+    });
+    closeSurface("%9");
+    assert.deepEqual(calls[1], ["kill-pane", "-t", "%9"]);
+    assert.equal(
+      calls.some((args) => args[0] === "kill-window"),
+      false,
+    );
   });
 
   it("reads a pane option with show -pv", () => {
