@@ -33,15 +33,16 @@ export interface ThinkingFeedDeps {
    * `PMUX_EXPLORER`) and the feed directory's `XDG_RUNTIME_DIR`.
    */
   env: NodeJS.ProcessEnv;
-  /** Feed file creation; `ensureThinkingFeed` by default. */
-  ensure?: (filePath: string) => void;
   /** Record append; `appendThinkingFeedRecord` by default. */
   append?: (filePath: string, record: ThinkingFeedRecord) => void;
 }
 
 export function createThinkingFeed(deps: ThinkingFeedDeps): { register(pi: ExtensionAPI): void } {
-  const ensure = deps.ensure ?? ensureThinkingFeed;
-  const append = deps.append ?? appendThinkingFeedRecord;
+  const append =
+    deps.append ??
+    ((filePath: string, record: ThinkingFeedRecord): void => {
+      appendThinkingFeedRecord({ filePath, record });
+    });
 
   /** The live session's producer; none before the first `session_start` or when the guards fail. */
   let producer: ThinkingFeedProducer | null = null;
@@ -65,11 +66,9 @@ export function createThinkingFeed(deps: ThinkingFeedDeps): { register(pi: Exten
           // A session id pi cannot give is a feed that cannot be named.
         }
         if (filePath === null) return;
-        try {
-          ensure(filePath);
-        } catch {
-          // A feed that cannot be created disturbs nothing.
-        }
+        // The ensure swallows its own failures: a feed that cannot be
+        // created disturbs nothing.
+        ensureThinkingFeed({ filePath });
         producer = createThinkingFeedProducer({
           append: (record) => {
             try {

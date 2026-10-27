@@ -24,6 +24,7 @@ import {
   thinkingFeedPath,
 } from "../pi-extension/pmux/thinking-feed-file.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
+import { feedShape } from "./thinking-feed-shape.ts";
 
 const { withTempDir } = tempDirHelpers("pmux-thinking-");
 
@@ -43,12 +44,12 @@ function fakeProducer() {
 
 /** A timer whose armed callback the test fires by hand. */
 function fakeTimer() {
-  const state = { armed: 0, cancelled: 0 };
+  const state = { armed: 0, cancelled: 0, lastMs: 0 };
   let callback: (() => void) | null = null;
   const timer: ThinkingFeedTimer = {
     set: (next, ms) => {
-      assert.equal(ms, THINKING_FLUSH_MS);
       state.armed++;
+      state.lastMs = ms;
       callback = next;
       const handle: ThinkingFeedTimerHandle = {
         cancel: () => {
@@ -71,12 +72,8 @@ function fakeTimer() {
   };
 }
 
-/** The kinds and texts of the records, for compact assertions. */
-function shape(records: ThinkingFeedRecord[]): string[] {
-  return records.map((record) =>
-    record.text === undefined ? record.kind : `${record.kind}:${record.text}`,
-  );
-}
+/** The fake clock's reading at `second` seconds past 12:00:00 UTC. */
+const at = (second: number): string => new Date(Date.UTC(2026, 0, 1, 12, 0, second)).toISOString();
 
 describe("the thinking feed path", () => {
   test("the runtime directory vector both repositories pin", () => {
@@ -116,7 +113,7 @@ describe("the thinking feed file", () => {
       // A fresh feed directory: created private.
       const fresh = thinkingFeedPath({ env, sessionId: "fresh" });
       assert.ok(fresh);
-      ensureThinkingFeed(fresh);
+      ensureThinkingFeed({ filePath: fresh });
       assert.equal(fs.statSync(path.dirname(fresh)).mode & 0o777, 0o700);
       assert.equal(fs.statSync(fresh).mode & 0o777, 0o600);
 
@@ -127,7 +124,7 @@ describe("the thinking feed file", () => {
       fs.mkdirSync(path.dirname(existing), { recursive: true, mode: 0o755 });
       fs.chmodSync(path.dirname(existing), 0o755);
       assert.equal(fs.statSync(path.dirname(existing)).mode & 0o777, 0o755);
-      ensureThinkingFeed(existing);
+      ensureThinkingFeed({ filePath: existing });
       assert.equal(fs.statSync(path.dirname(existing)).mode & 0o777, 0o700);
       assert.equal(fs.statSync(existing).mode & 0o777, 0o600);
 
@@ -137,7 +134,7 @@ describe("the thinking feed file", () => {
       fs.mkdirSync(path.dirname(wider), { recursive: true });
       fs.writeFileSync(wider, "", { mode: 0o644 });
       fs.chmodSync(wider, 0o644);
-      ensureThinkingFeed(wider);
+      ensureThinkingFeed({ filePath: wider });
       assert.equal(fs.statSync(wider).mode & 0o777, 0o600);
     });
   });
@@ -151,14 +148,14 @@ describe("the thinking feed file", () => {
       const foreignUid = ownedUid + 1;
       const file = thinkingFeedPath({ env, sessionId: "foreign" });
       assert.ok(file);
-      ensureThinkingFeed(file, foreignUid);
+      ensureThinkingFeed({ filePath: file, uid: foreignUid });
       // The directory exists, so the check ran against a real directory,
       // and the refused feed holds neither a created nor an appended file.
       assert.equal(fs.existsSync(path.dirname(file)), true);
       assert.equal(fs.existsSync(file), false);
 
       // The owned directory still gets its feed.
-      ensureThinkingFeed(file, ownedUid);
+      ensureThinkingFeed({ filePath: file, uid: ownedUid });
       assert.equal(fs.existsSync(file), true);
       assert.equal(fs.statSync(file).mode & 0o777, 0o600);
 
@@ -167,11 +164,19 @@ describe("the thinking feed file", () => {
       // process can write in it.
       fs.writeFileSync(file, "");
       fs.chmodSync(file, 0o666);
-      appendThinkingFeedRecord(file, { kind: "start", ts: "t", producer: "p" }, foreignUid);
+      appendThinkingFeedRecord({
+        filePath: file,
+        record: { kind: "start", ts: "t", producer: "p" },
+        uid: foreignUid,
+      });
       assert.equal(fs.readFileSync(file, "utf8"), "");
 
       // The owned directory gets the record.
-      appendThinkingFeedRecord(file, { kind: "start", ts: "t", producer: "p" }, ownedUid);
+      appendThinkingFeedRecord({
+        filePath: file,
+        record: { kind: "start", ts: "t", producer: "p" },
+        uid: ownedUid,
+      });
       assert.deepEqual(
         fs
           .readFileSync(file, "utf8")
@@ -188,9 +193,15 @@ describe("the thinking feed file", () => {
       const env = { XDG_RUNTIME_DIR: runtime };
       const file = thinkingFeedPath({ env, sessionId: "s" });
       assert.ok(file);
-      ensureThinkingFeed(file);
-      appendThinkingFeedRecord(file, { kind: "start", ts: "t", producer: "p" });
-      appendThinkingFeedRecord(file, { kind: "end", ts: "t", producer: "p", text: "done" });
+      ensureThinkingFeed({ filePath: file });
+      appendThinkingFeedRecord({
+        filePath: file,
+        record: { kind: "start", ts: "t", producer: "p" },
+      });
+      appendThinkingFeedRecord({
+        filePath: file,
+        record: { kind: "end", ts: "t", producer: "p", text: "done" },
+      });
       const lines = fs.readFileSync(file, "utf8").trim().split("\n");
       assert.deepEqual(
         lines.map((line) => JSON.parse(line).kind),
@@ -201,53 +212,84 @@ describe("the thinking feed file", () => {
 });
 
 describe("the thinking feed producer", () => {
-  test("start and end are synchronous, deltas coalesce, and a pending buffer is flushed first", () => {
-    const { records, producer, fire, state } = fakeProducer();
+  test("a burst of deltas coalesces into one record stamped with the first delta", () => {
+    const { records, producer, fire, isArmed } = fakeProducer();
 
-    // A burst of deltas: one pending buffer, stamped with the first delta.
     producer.delta("A");
     producer.delta("B");
     assert.deepEqual(records, []);
+    assert.equal(isArmed(), true);
     fire();
-    assert.deepEqual(shape(records), ["delta:AB"]);
-    assert.equal(records[0]!.ts, new Date(Date.UTC(2026, 0, 1, 12, 0, 0)).toISOString());
+    assert.deepEqual(feedShape(records), ["delta:AB"]);
+    assert.equal(records[0]!.ts, at(0));
+    assert.equal(isArmed(), false);
+  });
 
-    // The start and the end are written without waiting for the timer.
+  test("the coalesced flush is armed at THINKING_FLUSH_MS", () => {
+    const { producer, state } = fakeProducer();
+
+    producer.delta("x");
+    assert.equal(state.armed, 1);
+    assert.equal(state.lastMs, THINKING_FLUSH_MS);
+  });
+
+  test("start and end are written at once, and an empty end carries no text", () => {
+    const { records, producer, isArmed } = fakeProducer();
+
     producer.started();
+    assert.deepEqual(feedShape(records), ["start"]);
     producer.delta("C");
     producer.ended("");
-    assert.deepEqual(shape(records), ["delta:AB", "start", "delta:C", "end"]);
-    // An empty end is written without text, so it cannot wipe the block.
-    assert.equal(records[3]!.text, undefined);
+    // The pending delta flushes into its own block before the end; the
+    // empty end carries no text, so it cannot wipe the block.
+    assert.deepEqual(feedShape(records), ["start", "delta:C", "end"]);
+    assert.equal(records[2]!.text, undefined);
+    assert.equal(isArmed(), false);
+  });
 
-    // An aborted run's pending deltas stay in that run: the new start
-    // follows its own delta record.
+  test("an aborted run's pending deltas stay in that run", () => {
+    const { records, producer, state } = fakeProducer();
+
     producer.started();
     producer.delta("D");
     producer.delta("E");
     producer.started();
-    assert.deepEqual(shape(records).slice(4), ["start", "delta:DE", "start"]);
+    // The new start follows the flushed delta of the run it aborts.
+    assert.deepEqual(feedShape(records), ["start", "delta:DE", "start"]);
+    assert.equal(state.armed, 1);
+    assert.equal(state.cancelled, 1);
+  });
 
-    // An end with content carries its text.
+  test("an end with content carries its text", () => {
+    const { records, producer } = fakeProducer();
+
     producer.delta("F");
     producer.ended("FINAL");
-    assert.deepEqual(shape(records).slice(7), ["delta:F", "end:FINAL"]);
+    assert.deepEqual(feedShape(records), ["delta:F", "end:FINAL"]);
+  });
 
-    // The pending delta was stamped with its arrival, not with the flush.
-    const at = (second: number) => new Date(Date.UTC(2026, 0, 1, 12, 0, second)).toISOString();
-    assert.equal(records[5]!.ts, at(5));
-    assert.equal(records[6]!.ts, at(6));
-    assert.equal(records[7]!.ts, at(7));
-    assert.equal(records[8]!.ts, at(8));
+  test("a pending delta is stamped with its arrival, not with the flush", () => {
+    const { records, producer, fire } = fakeProducer();
 
-    // The producer token is drawn once and on every record.
+    producer.delta("A");
+    producer.started();
+    producer.delta("B");
+    fire();
+    assert.deepEqual(
+      records.map((record) => record.ts),
+      [at(0), at(1), at(2)],
+    );
+  });
+
+  test("the producer token is drawn once and on every record", () => {
+    const { records, producer } = fakeProducer();
+
+    producer.started();
+    producer.delta("x");
+    producer.ended("x");
     const producerTokens = new Set(records.map((record) => record.producer));
     assert.equal(producerTokens.size, 1);
     assert.ok([...producerTokens][0]);
-    // The timer was armed for each burst; every flush but the fired one
-    // cancelled its timer.
-    assert.equal(state.armed, 4);
-    assert.equal(state.cancelled, 3);
   });
 
   test("an empty delta writes nothing and arms no timer", () => {
@@ -264,14 +306,14 @@ describe("the thinking feed producer", () => {
     producer.delta("last words");
     assert.equal(isArmed(), true);
     producer.close();
-    assert.deepEqual(shape(records), ["delta:last words"]);
+    assert.deepEqual(feedShape(records), ["delta:last words"]);
     assert.equal(state.cancelled, 1);
     assert.equal(isArmed(), false);
 
     // A closed producer has nothing left to flush, and no timer to fire.
     producer.close();
     fire();
-    assert.deepEqual(shape(records), ["delta:last words"]);
+    assert.deepEqual(feedShape(records), ["delta:last words"]);
     assert.equal(state.armed, 1);
   });
 });

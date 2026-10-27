@@ -16,6 +16,7 @@ import {
 } from "../pi-extension/pmux/thinking-feed-events.ts";
 import type { ThinkingFeedRecord } from "../pi-extension/pmux/thinking-feed.ts";
 import { thinkingFeedPath } from "../pi-extension/pmux/thinking-feed-file.ts";
+import { feedShape } from "./thinking-feed-shape.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
 const { withTempDir } = tempDirHelpers("pmux-thinking-events-");
@@ -68,14 +69,15 @@ function harness(runtime: string, deps: Partial<ThinkingFeedDeps> = {}) {
   return { env, fire, feedFile, records };
 }
 
-/** The kinds and texts of the records, for compact assertions. */
-const shape = (records: ThinkingFeedRecord[]): string[] =>
-  records.map((record) => `${record.kind}:${record.text ?? ""}`);
-
 describe("the thinking feed wiring", () => {
   test("a session in a tmux pane writes start, delta and end records", () => {
     withTempDir((runtime) => {
-      const { fire, records, feedFile } = harness(runtime);
+      // The wiring never looks the sidebar binary up: the feed is written
+      // whether or not pmux-explorer is installed, so an absent binary and
+      // a PATH that holds no sidebar change nothing.
+      const { fire, records, feedFile } = harness(runtime, {
+        env: { PMUX_EXPLORER_BIN: "/nonexistent/pmux-explorer", PATH: "/nonexistent" },
+      });
       fire("session_start", undefined, ctxFor("s1"));
       assert.equal(fs.statSync(path.dirname(feedFile("s1"))).mode & 0o777, 0o700);
       assert.equal(fs.statSync(feedFile("s1")).mode & 0o777, 0o600);
@@ -105,7 +107,7 @@ describe("the thinking feed wiring", () => {
       fire("message_update", thinking("thinking_delta", { delta: "old" }));
       fire("session_start", undefined, ctxFor("def"));
       // The switch flushed the pending delta into the old file.
-      assert.deepEqual(shape(records("abc")), ["start:", "delta:old"]);
+      assert.deepEqual(feedShape(records("abc")), ["start", "delta:old"]);
       fire("message_update", thinking("thinking_start"));
       fire("message_update", thinking("thinking_delta", { delta: "new" }));
       fire("message_update", thinking("thinking_end", { content: "new" }));
@@ -124,7 +126,7 @@ describe("the thinking feed wiring", () => {
       fire("message_update", thinking("thinking_delta", { delta: "pending" }));
       // The 50 ms flush has not fired; shutdown must write the buffer.
       fire("session_shutdown");
-      assert.deepEqual(shape(records("s1")), ["delta:pending"]);
+      assert.deepEqual(feedShape(records("s1")), ["delta:pending"]);
     });
   });
 
@@ -155,24 +157,6 @@ describe("the thinking feed wiring", () => {
       fire("message_update", thinking("thinking_start"));
       fire("session_shutdown");
       assert.equal(fs.existsSync(path.join(runtime, "pmux-thinking")), false);
-    });
-  });
-
-  test("the feed is written when no pmux-explorer binary is found", () => {
-    // The wiring never looks the binary up: an environment with no
-    // PMUX_EXPLORER_BIN and no sidebar on PATH writes the same.
-    withTempDir((runtime) => {
-      const { fire, records } = harness(runtime, {
-        env: { PMUX_EXPLORER_BIN: "/nonexistent/pmux-explorer", PATH: "/nonexistent" },
-      });
-      fire("session_start", undefined, ctxFor("s1"));
-      fire("message_update", thinking("thinking_start"));
-      fire("message_update", thinking("thinking_end", { content: "done" }));
-      fire("session_shutdown");
-      assert.deepEqual(
-        records("s1").map((record) => record.kind),
-        ["start", "end"],
-      );
     });
   });
 });

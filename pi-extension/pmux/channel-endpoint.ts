@@ -72,11 +72,7 @@ export function channelEndpointPath(args: {
   if (!tmux) return null;
   const socketPath = tmux.split(",")[0];
   if (!socketPath) return null;
-  const dir = runtimeDirPath({
-    env,
-    name: CHANNEL_DIR_NAME,
-    ...(args.uid !== undefined ? { uid: args.uid } : {}),
-  });
+  const dir = runtimeDirPath({ env, name: CHANNEL_DIR_NAME, uid: args.uid });
   const pane = args.targetPane.replace(/^%/, "");
   return join(dir, `${fnv1a64Hex(socketPath)}-${pane}.sock`);
 }
@@ -222,11 +218,7 @@ function connectRejectionReason(error: unknown): ChannelUnavailableReason {
  * is `unavailable`, so the caller falls back to the verified input.
  */
 export function submitChannel(args: ChannelSubmitArgs): Promise<ChannelSubmitResult> {
-  const path = channelEndpointPath({
-    ...(args.env !== undefined ? { env: args.env } : {}),
-    targetPane: args.to,
-    ...(args.uid !== undefined ? { uid: args.uid } : {}),
-  });
+  const path = channelEndpointPath({ env: args.env, targetPane: args.to, uid: args.uid });
   if (!path || !existsSync(path)) {
     return Promise.resolve({ status: "unavailable", reason: "no-endpoint" });
   }

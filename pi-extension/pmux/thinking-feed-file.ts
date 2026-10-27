@@ -55,11 +55,7 @@ export function thinkingFeedPath(args: {
   const env = args.env ?? process.env;
   const id = args.sessionId;
   if (id === "" || id === "." || id === ".." || id.includes("/")) return null;
-  const dir = runtimeDirPath({
-    env,
-    name: THINKING_DIR_NAME,
-    ...(args.uid !== undefined ? { uid: args.uid } : {}),
-  });
+  const dir = runtimeDirPath({ env, name: THINKING_DIR_NAME, uid: args.uid });
   return path.join(dir, `${id}.jsonl`);
 }
 
@@ -79,8 +75,9 @@ export function thinkingFeedPath(args: {
  * `uid` is the uid the directory must belong to; it defaults to this
  * process's, the same uid the `/tmp` fallback names (design D2).
  */
-export function ensureThinkingFeed(filePath: string, uid?: number): void {
+export function ensureThinkingFeed(args: { filePath: string; uid?: number }): void {
   try {
+    const filePath = args.filePath;
     const dir = path.dirname(filePath);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     // The directory may have been created first with the default mode, so
@@ -95,7 +92,7 @@ export function ensureThinkingFeed(filePath: string, uid?: number): void {
     // (its `chmod` fails and is swallowed), and nothing may be written in
     // it. The check comes after both steps, so the directory exists to be
     // read.
-    if (!ownedBy(dir, uid ?? defaultUid())) return;
+    if (!ownedBy(dir, args.uid ?? defaultUid())) return;
     // Open for append: creates the file when it does not exist, leaves it
     // alone when it does.
     fs.closeSync(fs.openSync(filePath, "a", 0o600));
@@ -122,14 +119,14 @@ export function ensureThinkingFeed(filePath: string, uid?: number): void {
  * when its mode lets this process write (design D4). `uid` is the uid the
  * directory must belong to; it defaults to this process's.
  */
-export function appendThinkingFeedRecord(
-  filePath: string,
-  record: ThinkingFeedRecord,
-  uid?: number,
-): void {
+export function appendThinkingFeedRecord(args: {
+  filePath: string;
+  record: ThinkingFeedRecord;
+  uid?: number;
+}): void {
   try {
-    if (!ownedBy(path.dirname(filePath), uid ?? defaultUid())) return;
-    fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`);
+    if (!ownedBy(path.dirname(args.filePath), args.uid ?? defaultUid())) return;
+    fs.appendFileSync(args.filePath, `${JSON.stringify(args.record)}\n`);
   } catch {
     // A record that cannot be written is a record the reader does not
     // show; the session itself is never disturbed by it.

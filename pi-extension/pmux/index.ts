@@ -532,7 +532,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     readWorktree: () => readSidebarWorktree(process.env.TMUX_PANE),
   }).register(pi);
 
-  // ── Thinking feed (openspec/changes/thinking-feed) ──
+  // ── Thinking feed (openspec/changes/archive/2026-10-27-thinking-feed) ──
   //
   // The session's reasoning, one JSONL record per thinking phase, in a
   // private per-user runtime directory for the sidebar's Thought tab. The
