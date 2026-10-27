@@ -54,7 +54,7 @@ Guards reuse `sidebarSwitchEnabled` and a `TMUX_PANE` check from `sidebar.ts`, w
 
 - [Model reasoning on disk] → 0700 directory and 0600 file, re-chmod on every ensure, and D4's ownership check before any write; the guards keep it off when the sidebar is off.
 - [Feed files are never removed; the `/tmp` fallback keeps them until reboot] → Accepted for now, as in johnny-cant-read. `XDG_RUNTIME_DIR` is cleared at logout.
-- [Who removes the `/tmp` fallback's files] → pmux-explorer's `reasoning-tab` design assigns cleanup to pmux ("pmux owns cleanup") while this change makes deletion a non-goal, so nobody removes them until one side changes; settle that ownership before the two changes archive.
+- [Who removes the `/tmp` fallback's files] → Settled 2026-10-27: pmux-explorer owns deletion, and its `reasoning-tab` change implements it. This change's non-goal on removal therefore stands as it is, and the two no longer contradict each other.
 - [Both extensions write thinking at once] → No overlap remains: johnny-cant-read's `remove-stream-panes` change merged to its `main` as `91d4e48` (2026-10-27), before pmux ships, and removed the producer and its wiring.
 - [pi changes the `message_update` event shape] → The wiring test drives the three types through a fake `pi`, so a rename shows up as a failing test.
 
