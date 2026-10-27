@@ -20,7 +20,7 @@
 
 ## 5. Feed directory ownership
 
-- [ ] 5.1 Make `ensureThinkingFeed` refuse the feed when the feed directory's owner is not this process's uid (design D4): stat the directory after the mkdir and the chmod, return silently on a mismatch, and verify with a test that injects a foreign `uid` (for example `uid: 1234`) and asserts that no file is created or appended while the owned case still writes; keep `pnpm test`, `pnpm run typecheck` and `pnpm run lint` green
+- [x] 5.1 Make `ensureThinkingFeed` refuse the feed when the feed directory's owner is not this process's uid (design D4): stat the directory after the mkdir and the chmod, return silently on a mismatch, and verify with a test that injects a foreign `uid` (for example `uid: 1234`) and asserts that no file is created or appended while the owned case still writes; keep `pnpm test`, `pnpm run typecheck` and `pnpm run lint` green
 
 ## Workflow follow-up
 
