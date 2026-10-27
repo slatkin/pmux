@@ -4,10 +4,10 @@
  *
  * The feed is a JSONL file in a per-user runtime directory, one file per
  * session id (design D2). One line is one record: one phase of a thinking
- * block. The directory rule is the same one `channelEndpointPath` uses —
- * `$XDG_RUNTIME_DIR/<name>`, or `/tmp/<name>-<uid>` when `XDG_RUNTIME_DIR`
- * is unset or empty — under the name `pmux-thinking`, so pmux and
- * pmux-explorer derive the same path with no registry.
+ * block. The directory rule is the one `channelEndpointPath` shares, from
+ * `runtime-dir.ts` — `$XDG_RUNTIME_DIR/<name>`, or `/tmp/<name>-<uid>` when
+ * `XDG_RUNTIME_DIR` is unset or empty — under the name `pmux-thinking`, so
+ * pmux and pmux-explorer derive the same path with no registry.
  *
  * Thinking text is the most sensitive stream, so the feed directory is
  * made private here: another component may have created it first, with
@@ -16,14 +16,11 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { defaultUid, runtimeDirPath } from "./runtime-dir.ts";
 import type { ThinkingFeedRecord } from "./thinking-feed.ts";
 
 /** The directory name every session's feed file lives under. */
 const THINKING_DIR_NAME = "pmux-thinking";
-
-function defaultUid(): number {
-  return typeof process.getuid === "function" ? process.getuid() : 0;
-}
 
 /**
  * Whether a directory that exists belongs to `uid`. A directory another
@@ -58,9 +55,11 @@ export function thinkingFeedPath(args: {
   const env = args.env ?? process.env;
   const id = args.sessionId;
   if (id === "" || id === "." || id === ".." || id.includes("/")) return null;
-  const dir = env.XDG_RUNTIME_DIR
-    ? path.join(env.XDG_RUNTIME_DIR, THINKING_DIR_NAME)
-    : path.join("/tmp", `${THINKING_DIR_NAME}-${args.uid ?? defaultUid()}`);
+  const dir = runtimeDirPath({
+    env,
+    name: THINKING_DIR_NAME,
+    ...(args.uid !== undefined ? { uid: args.uid } : {}),
+  });
   return path.join(dir, `${id}.jsonl`);
 }
 

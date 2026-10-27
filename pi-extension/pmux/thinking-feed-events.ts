@@ -33,8 +33,6 @@ export interface ThinkingFeedDeps {
    * `PMUX_EXPLORER`) and the feed directory's `XDG_RUNTIME_DIR`.
    */
   env: NodeJS.ProcessEnv;
-  /** The uid the `/tmp` fallback directory names; defaults to this process's. */
-  uid?: number;
   /** Feed file creation; `ensureThinkingFeed` by default. */
   ensure?: (filePath: string) => void;
   /** Record append; `appendThinkingFeedRecord` by default. */
@@ -62,7 +60,6 @@ export function createThinkingFeed(deps: ThinkingFeedDeps): { register(pi: Exten
           filePath = thinkingFeedPath({
             env: deps.env,
             sessionId: ctx.sessionManager.getSessionId(),
-            ...(deps.uid !== undefined ? { uid: deps.uid } : {}),
           });
         } catch {
           // A session id pi cannot give is a feed that cannot be named.

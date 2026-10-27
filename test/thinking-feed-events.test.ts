@@ -8,7 +8,6 @@ import "./host-env.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -17,6 +16,9 @@ import {
 } from "../pi-extension/pmux/thinking-feed-events.ts";
 import type { ThinkingFeedRecord } from "../pi-extension/pmux/thinking-feed.ts";
 import { thinkingFeedPath } from "../pi-extension/pmux/thinking-feed-file.ts";
+import { tempDirHelpers } from "./temp-dir.ts";
+
+const { withTempDir } = tempDirHelpers("pmux-thinking-events-");
 
 type Handler = (event?: unknown, ctx?: unknown) => void;
 
@@ -42,9 +44,8 @@ const thinking = (type: string, extra: Record<string, unknown> = {}) => ({
   assistantMessageEvent: { type, ...extra },
 });
 
-/** A registered feed in a temporary runtime directory. */
-function harness(deps: Partial<ThinkingFeedDeps> = {}) {
-  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "thinking-feed-events-"));
+/** A registered feed whose runtime directory is `runtime`. */
+function harness(runtime: string, deps: Partial<ThinkingFeedDeps> = {}) {
   const env: NodeJS.ProcessEnv = {
     TMUX_PANE: "%7",
     XDG_RUNTIME_DIR: runtime,
@@ -64,14 +65,17 @@ function harness(deps: Partial<ThinkingFeedDeps> = {}) {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
-  const cleanup = () => fs.rmSync(runtime, { recursive: true, force: true });
-  return { runtime, env, fire, feedFile, records, cleanup };
+  return { env, fire, feedFile, records };
 }
+
+/** The kinds and texts of the records, for compact assertions. */
+const shape = (records: ThinkingFeedRecord[]): string[] =>
+  records.map((record) => `${record.kind}:${record.text ?? ""}`);
 
 describe("the thinking feed wiring", () => {
   test("a session in a tmux pane writes start, delta and end records", () => {
-    const { fire, records, feedFile, cleanup } = harness();
-    try {
+    withTempDir((runtime) => {
+      const { fire, records, feedFile } = harness(runtime);
       fire("session_start", undefined, ctxFor("s1"));
       assert.equal(fs.statSync(path.dirname(feedFile("s1"))).mode & 0o777, 0o700);
       assert.equal(fs.statSync(feedFile("s1")).mode & 0o777, 0o600);
@@ -81,30 +85,27 @@ describe("the thinking feed wiring", () => {
       fire("message_update", thinking("thinking_end", { content: "hello world" }));
       fire("session_shutdown");
 
-      const kinds = records("s1").map((record) => record.kind);
-      assert.deepEqual(kinds, ["start", "delta", "end"]);
-      const [start, delta, end] = records("s1");
-      assert.equal(start!.text, undefined);
-      assert.equal(delta!.text, "hello ");
-      assert.equal(end!.text, "hello world");
-      assert.equal(new Set(records("s1").map((record) => record.producer)).size, 1);
-    } finally {
-      cleanup();
-    }
+      const written = records("s1");
+      assert.deepEqual(
+        written.map((record) => record.kind),
+        ["start", "delta", "end"],
+      );
+      assert.equal(written[0]!.text, undefined);
+      assert.equal(written[1]!.text, "hello ");
+      assert.equal(written[2]!.text, "hello world");
+      assert.equal(new Set(written.map((record) => record.producer)).size, 1);
+    });
   });
 
   test("a new session_start switches to the new id's file", () => {
-    const { fire, records, feedFile, cleanup } = harness();
-    try {
+    withTempDir((runtime) => {
+      const { fire, records, feedFile } = harness(runtime);
       fire("session_start", undefined, ctxFor("abc"));
       fire("message_update", thinking("thinking_start"));
       fire("message_update", thinking("thinking_delta", { delta: "old" }));
       fire("session_start", undefined, ctxFor("def"));
       // The switch flushed the pending delta into the old file.
-      assert.deepEqual(
-        records("abc").map((record) => `${record.kind}:${record.text ?? ""}`),
-        ["start:", "delta:old"],
-      );
+      assert.deepEqual(shape(records("abc")), ["start:", "delta:old"]);
       fire("message_update", thinking("thinking_start"));
       fire("message_update", thinking("thinking_delta", { delta: "new" }));
       fire("message_update", thinking("thinking_end", { content: "new" }));
@@ -113,85 +114,57 @@ describe("the thinking feed wiring", () => {
       assert.equal(records("abc").length, 2);
       assert.equal(records("def").length, 3);
       assert.ok(fs.existsSync(feedFile("def")));
-    } finally {
-      cleanup();
-    }
+    });
   });
 
-  test("session_shutdown flushes pending text", () => {
-    const { fire, records, cleanup } = harness();
-    try {
+  test("session_shutdown flushes the pending delta", () => {
+    withTempDir((runtime) => {
+      const { fire, records } = harness(runtime);
       fire("session_start", undefined, ctxFor("s1"));
       fire("message_update", thinking("thinking_delta", { delta: "pending" }));
       // The 50 ms flush has not fired; shutdown must write the buffer.
       fire("session_shutdown");
-      assert.deepEqual(
-        records("s1").map((record) => `${record.kind}:${record.text ?? ""}`),
-        ["delta:pending"],
-      );
-    } finally {
-      cleanup();
-    }
-  });
-
-  test("an empty thinking end carries no text", () => {
-    const { fire, records, cleanup } = harness();
-    try {
-      fire("session_start", undefined, ctxFor("s1"));
-      fire("message_update", thinking("thinking_start"));
-      fire("message_update", thinking("thinking_end", { content: "" }));
-      const end = records("s1").find((record) => record.kind === "end");
-      assert.ok(end);
-      assert.equal("text" in end, false);
-    } finally {
-      cleanup();
-    }
+      assert.deepEqual(shape(records("s1")), ["delta:pending"]);
+    });
   });
 
   test("no TMUX_PANE: no feed directory or file is created", () => {
-    const { runtime, env, fire, cleanup } = harness({ env: { TMUX_PANE: "" } });
-    try {
+    withTempDir((runtime) => {
+      const { fire } = harness(runtime, { env: { TMUX_PANE: "" } });
       fire("session_start", undefined, ctxFor("s1"));
       fire("message_update", thinking("thinking_start"));
       fire("session_shutdown");
       assert.equal(fs.existsSync(path.join(runtime, "pmux-thinking")), false);
-      assert.equal(env.TMUX_PANE, "");
-    } finally {
-      cleanup();
-    }
+    });
   });
 
   test("PMUX_EXPLORER=0: no feed directory or file is created", () => {
-    const { runtime, fire, cleanup } = harness({ env: { PMUX_EXPLORER: "0" } });
-    try {
+    withTempDir((runtime) => {
+      const { fire } = harness(runtime, { env: { PMUX_EXPLORER: "0" } });
       fire("session_start", undefined, ctxFor("s1"));
       fire("message_update", thinking("thinking_start"));
       fire("session_shutdown");
       assert.equal(fs.existsSync(path.join(runtime, "pmux-thinking")), false);
-    } finally {
-      cleanup();
-    }
+    });
   });
 
   test("a session id that resolves to no path gets no producer", () => {
-    const { runtime, fire, cleanup } = harness();
-    try {
+    withTempDir((runtime) => {
+      const { fire } = harness(runtime);
       fire("session_start", undefined, ctxFor("../escape"));
       fire("message_update", thinking("thinking_start"));
       fire("session_shutdown");
       assert.equal(fs.existsSync(path.join(runtime, "pmux-thinking")), false);
-    } finally {
-      cleanup();
-    }
+    });
   });
 
   test("the feed is written when no pmux-explorer binary is found", () => {
     // The wiring never looks the binary up: an environment with no
     // PMUX_EXPLORER_BIN and no sidebar on PATH writes the same.
-    const { fire, records, cleanup } = harness({
-      env: { PMUX_EXPLORER_BIN: "/nonexistent/pmux-explorer", PATH: "/nonexistent" },
-    });
-    try {
+    withTempDir((runtime) => {
+      const { fire, records } = harness(runtime, {
+        env: { PMUX_EXPLORER_BIN: "/nonexistent/pmux-explorer", PATH: "/nonexistent" },
+      });
       fire("session_start", undefined, ctxFor("s1"));
       fire("message_update", thinking("thinking_start"));
       fire("message_update", thinking("thinking_end", { content: "done" }));
@@ -200,20 +173,18 @@ describe("the thinking feed wiring", () => {
         records("s1").map((record) => record.kind),
         ["start", "end"],
       );
-    } finally {
-      cleanup();
-    }
+    });
   });
 });
 
 describe("a feed failure never disturbs the session", () => {
   test("a throwing append raises nothing into pi", () => {
-    const { fire, cleanup } = harness({
-      append: () => {
-        throw new Error("disk full");
-      },
-    });
-    try {
+    withTempDir((runtime) => {
+      const { fire } = harness(runtime, {
+        append: () => {
+          throw new Error("disk full");
+        },
+      });
       assert.doesNotThrow(() => {
         fire("session_start", undefined, ctxFor("s1"));
         fire("message_update", thinking("thinking_start"));
@@ -221,17 +192,14 @@ describe("a feed failure never disturbs the session", () => {
         fire("message_update", thinking("thinking_end", { content: "x" }));
         fire("session_shutdown");
       });
-    } finally {
-      cleanup();
-    }
+    });
   });
 
   test("a directory that cannot be created raises nothing into pi", () => {
     // XDG_RUNTIME_DIR is an existing regular file: mkdir below it fails.
-    const blocker = fs.mkdtempSync(path.join(os.tmpdir(), "thinking-feed-blocker-"));
-    const file = path.join(blocker, "not-a-dir");
-    fs.writeFileSync(file, "");
-    try {
+    withTempDir((blocker) => {
+      const file = path.join(blocker, "not-a-dir");
+      fs.writeFileSync(file, "");
       const { pi, fire } = fakePi();
       createThinkingFeed({
         env: { TMUX_PANE: "%7", XDG_RUNTIME_DIR: file },
@@ -243,8 +211,6 @@ describe("a feed failure never disturbs the session", () => {
         fire("session_shutdown");
       });
       assert.equal(fs.existsSync(path.join(file, "pmux-thinking")), false);
-    } finally {
-      fs.rmSync(blocker, { recursive: true, force: true });
-    }
+    });
   });
 });

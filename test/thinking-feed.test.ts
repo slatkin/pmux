@@ -9,7 +9,6 @@ import "./host-env.ts";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -24,6 +23,9 @@ import {
   ensureThinkingFeed,
   thinkingFeedPath,
 } from "../pi-extension/pmux/thinking-feed-file.ts";
+import { tempDirHelpers } from "./temp-dir.ts";
+
+const { withTempDir } = tempDirHelpers("pmux-thinking-");
 
 /** A feed that keeps its records in memory, and a clock that moves per read. */
 function fakeProducer() {
@@ -109,9 +111,8 @@ describe("the thinking feed path", () => {
 
 describe("the thinking feed file", () => {
   test("ensure leaves a 0600 file in a 0700 directory", () => {
-    const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "thinking-feed-"));
-    const env = { XDG_RUNTIME_DIR: runtime };
-    try {
+    withTempDir((runtime) => {
+      const env = { XDG_RUNTIME_DIR: runtime };
       // A fresh feed directory: created private.
       const fresh = thinkingFeedPath({ env, sessionId: "fresh" });
       assert.ok(fresh);
@@ -138,19 +139,16 @@ describe("the thinking feed file", () => {
       fs.chmodSync(wider, 0o644);
       ensureThinkingFeed(wider);
       assert.equal(fs.statSync(wider).mode & 0o777, 0o600);
-    } finally {
-      fs.rmSync(runtime, { recursive: true, force: true });
-    }
+    });
   });
 
   test("ensure and append refuse a feed directory another uid owns", () => {
-    const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "thinking-feed-"));
-    const env = { XDG_RUNTIME_DIR: runtime };
-    const ownedUid = typeof process.getuid === "function" ? process.getuid() : 0;
-    // A uid other than this process's stands for another account that
-    // created the directory first: its entries are not ours to write.
-    const foreignUid = ownedUid + 1;
-    try {
+    withTempDir((runtime) => {
+      const env = { XDG_RUNTIME_DIR: runtime };
+      const ownedUid = typeof process.getuid === "function" ? process.getuid() : 0;
+      // A uid other than this process's stands for another account that
+      // created the directory first: its entries are not ours to write.
+      const foreignUid = ownedUid + 1;
       const file = thinkingFeedPath({ env, sessionId: "foreign" });
       assert.ok(file);
       ensureThinkingFeed(file, foreignUid);
@@ -182,15 +180,12 @@ describe("the thinking feed file", () => {
           .map((line) => JSON.parse(line).kind),
         ["start"],
       );
-    } finally {
-      fs.rmSync(runtime, { recursive: true, force: true });
-    }
+    });
   });
 
   test("append writes one JSON line per record", () => {
-    const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "thinking-feed-"));
-    const env = { XDG_RUNTIME_DIR: runtime };
-    try {
+    withTempDir((runtime) => {
+      const env = { XDG_RUNTIME_DIR: runtime };
       const file = thinkingFeedPath({ env, sessionId: "s" });
       assert.ok(file);
       ensureThinkingFeed(file);
@@ -201,9 +196,7 @@ describe("the thinking feed file", () => {
         lines.map((line) => JSON.parse(line).kind),
         ["start", "end"],
       );
-    } finally {
-      fs.rmSync(runtime, { recursive: true, force: true });
-    }
+    });
   });
 });
 

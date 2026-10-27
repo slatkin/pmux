@@ -22,6 +22,7 @@ import { connect as netConnect } from "node:net";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { type ChannelUnavailableReason } from "./channel-reason.ts";
+import { runtimeDirPath } from "./runtime-dir.ts";
 
 /** The hard budget for the connect, the write and the reply together. */
 export const CHANNEL_TIMEOUT_MS = 2000;
@@ -48,10 +49,6 @@ function fnv1a64Hex(text: string): string {
   return hash.toString(16).padStart(16, "0");
 }
 
-function defaultUid(): number {
-  return typeof process.getuid === "function" ? process.getuid() : 0;
-}
-
 /**
  * The endpoint socket path for a report to a parent pane, or `null` when no
  * endpoint can exist because `TMUX` is unset or empty.
@@ -75,9 +72,11 @@ export function channelEndpointPath(args: {
   if (!tmux) return null;
   const socketPath = tmux.split(",")[0];
   if (!socketPath) return null;
-  const dir = env.XDG_RUNTIME_DIR
-    ? join(env.XDG_RUNTIME_DIR, CHANNEL_DIR_NAME)
-    : join("/tmp", `${CHANNEL_DIR_NAME}-${args.uid ?? defaultUid()}`);
+  const dir = runtimeDirPath({
+    env,
+    name: CHANNEL_DIR_NAME,
+    ...(args.uid !== undefined ? { uid: args.uid } : {}),
+  });
   const pane = args.targetPane.replace(/^%/, "");
   return join(dir, `${fnv1a64Hex(socketPath)}-${pane}.sock`);
 }
