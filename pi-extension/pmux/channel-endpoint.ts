@@ -13,9 +13,10 @@
  * adds no reach beyond what `send-keys` already has.
  *
  * The client sends one JSON request line and reads one JSON reply line. The
- * endpoint replies `unarmed` until Claude has proved the channel path by
- * answering the arm probe, so "the socket accepted the request" alone
- * proves nothing (design D2). `emitted` — the only positive result — still
+ * endpoint replies `unarmed` until an `arm` request has armed it — a
+ * `pmux-explorer channel-ready` run the user's orchestration prompt asks
+ * Claude for — so "the socket accepted the request" alone proves nothing
+ * (design D2). `emitted` — the only positive result — still
  * is not a read receipt: the parent's `ack` stays the only one (design D4).
  */
 import { connect as netConnect } from "node:net";

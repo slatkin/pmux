@@ -304,10 +304,14 @@ pmux-explorer then runs a channel endpoint beside that pane: an MCP
 server the Claude session itself spawns, with a Unix socket that pmux
 delivers marked reports to. Claude Code needs claude.ai or Console
 auth, an org policy with `channelsEnabled`, and an interactive session
-for a channel to work. When the session starts, the endpoint emits an
-arm probe — a short turn that asks Claude to prove the channel is
-registered — and until that proof lands it answers every report with
-`unarmed`. The probe costs one turn per flagged session, nothing more.
+for a channel to work. The endpoint starts unarmed and never prompts
+the model itself — arming is the prompt's job: a session that should
+receive reports on the channel runs `pmux-explorer channel-ready` once
+in its own pane (it resolves the endpoint from its own `TMUX` and
+`TMUX_PANE`). Until that arm lands the endpoint answers every report
+with `unarmed`, and the sender falls back to `send-keys` exactly as
+without the channel — so a session that was never told to arm simply
+behaves as before.
 
 A marked (`file-ack-v1`) report goes to that endpoint first. On
 `emitted`, no `send-keys` runs: the pointer arrives as a channel event
