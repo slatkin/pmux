@@ -224,6 +224,17 @@ export function sidebarSwitchEnabled(env: NodeJS.ProcessEnv): boolean {
   return env.PMUX_EXPLORER !== "0";
 }
 
+/**
+ * The sidebar's two guards: the session runs in a tmux pane and the sidebar
+ * switch is on. The publisher adds its binary lookup on top; the thinking
+ * feed follows these guards exactly, without the lookup.
+ */
+export function sidebarGuardsEnabled(env: NodeJS.ProcessEnv): boolean {
+  // The pane comes from the session's own environment; a session outside
+  // tmux has no pane to describe.
+  return sidebarSwitchEnabled(env) && Boolean(env.TMUX_PANE);
+}
+
 export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): SidebarPublisher {
   // The lookup is done once per session and kept, so its cost is not paid
   // per event (design D3). A cached `null` counts as kept: a session that
@@ -235,12 +246,7 @@ export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): Sideba
 
   // The guards are cheap and synchronous; the expensive part (stringify the
   // payload, spawn, write) runs off the event handler's path.
-  const guardsPass = (): boolean => {
-    if (!sidebarSwitchEnabled(deps.env)) return false;
-    // The pane comes from the publisher's own environment; a session
-    // outside tmux has no pane to describe.
-    return Boolean(deps.env.TMUX_PANE);
-  };
+  const guardsPass = (): boolean => sidebarGuardsEnabled(deps.env);
 
   const emit = (event: SidebarEvent, payload: Record<string, unknown>): void => {
     try {

@@ -71,6 +71,7 @@ import {
   SIDEBAR_WORKTREE_OPTION,
   type SidebarWorktree,
 } from "./sidebar.ts";
+import { createThinkingFeed } from "./thinking-feed-events.ts";
 import {
   createTaskReminders,
   readSidebarTaskStore,
@@ -530,6 +531,15 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     publisher: sidebar,
     readWorktree: () => readSidebarWorktree(process.env.TMUX_PANE),
   }).register(pi);
+
+  // ── Thinking feed (openspec/changes/thinking-feed) ──
+  //
+  // The session's reasoning, one JSONL record per thinking phase, in a
+  // private per-user runtime directory for the sidebar's Thought tab. The
+  // feed follows the sidebar's two guards — a tmux pane, the switch on —
+  // but not its binary lookup: it is written whether or not pmux-explorer
+  // is installed, and every feed failure is swallowed.
+  createThinkingFeed({ env: process.env }).register(pi);
 
   // ── Sidebar task reminders (openspec/changes/2026-10-22-sidebar-task-reminders) ──
   //
