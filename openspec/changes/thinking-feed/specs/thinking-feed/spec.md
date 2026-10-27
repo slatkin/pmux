@@ -30,6 +30,18 @@ The extension SHALL create the feed directory with mode 0700 and the feed file w
 - **WHEN** the session starts and the feed directory does not exist
 - **THEN** the directory exists with mode 0700 and the empty feed file exists with mode 0600
 
+### Requirement: the feed is written only in a directory this uid owns
+
+The extension SHALL check that the feed directory is owned by this process's uid before it creates or appends to the feed, and SHALL NOT write when the owner differs. The refusal SHALL be silent, like every other feed failure.
+
+#### Scenario: a directory another account created
+- **WHEN** the feed directory exists but is owned by another uid
+- **THEN** no feed file is created or appended and the session runs as normal
+
+#### Scenario: the directory is ours
+- **WHEN** the feed directory is owned by this process's uid
+- **THEN** the feed is written as usual
+
 ### Requirement: one record per thinking phase
 
 Each line SHALL be one JSON object `{kind, ts, producer, text?}`. `kind` SHALL be `start` when a thinking block begins, `delta` for streamed text, and `end` when the block completes. `ts` SHALL be the ISO 8601 time the phase was seen. `producer` SHALL be one random token per producer. A `start` SHALL carry no `text`. An `end` SHALL carry the final content as `text` only when that content is not empty.

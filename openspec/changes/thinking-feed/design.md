@@ -4,7 +4,7 @@
 
 See proposal.md for the motivation and `specs/thinking-feed` for the requirements.
 
-- johnny-cant-read's producer is two small modules in its git history — its `feat/remove-stream-panes` branch deletes them, so take them from `git -C ~/Dev/johnny-cant-read show main:src/stream/thinking-feed.ts` and `main:src/stream/thinking-feed-file.ts`: `thinking-feed.ts` (the coalescing producer, injected `append`/`timer`/`now`, 142 lines) and `thinking-feed-file.ts` (path, `ensureThinkingFeed`, `appendThinkingFeedRecord`, 68 lines). It was wired in johnny's `index.ts` (also on `main`) from `session_start` (build), `message_update` (`assistantMessageEvent.type` = `thinking_start` / `thinking_delta` / `thinking_end`) and `session_shutdown` (close).
+- johnny-cant-read's producer is two small modules in its git history: `thinking-feed.ts` (the coalescing producer, injected `append`/`timer`/`now`, 142 lines) and `thinking-feed-file.ts` (path, `ensureThinkingFeed`, `appendThinkingFeedRecord`, 68 lines). johnny's `main` carried both from `31591ed` (2026-10-26) until `91d4e48` (2026-10-27) removed them, so read them from that commit: `git -C ~/Dev/johnny-cant-read show 31591ed:src/stream/thinking-feed.ts` and `31591ed:src/stream/thinking-feed-file.ts`. The wiring is in `31591ed:src/index.ts`: `session_start` (build), `message_update` (`assistantMessageEvent.type` = `thinking_start` / `thinking_delta` / `thinking_end`) and `session_shutdown` (close).
 - pmux's sidebar publisher (`pi-extension/pmux/sidebar.ts`) already holds the guards this feed needs: `sidebarSwitchEnabled(env)` and a `TMUX_PANE` check.
 - `pi-extension/pmux/channel-endpoint.ts` holds the runtime-dir rule (`$XDG_RUNTIME_DIR/<name>`, else `/tmp/<name>-<uid>`) that pmux-explorer mirrors.
 - The reader is pmux-explorer's `Thought` tab (its change `reasoning-tab`). It reads only the newest block, so the record shape must stay exactly johnny's.
@@ -42,11 +42,18 @@ A `createThinkingFeed(deps).register(pi)` module, in the shape of `createSidebar
 
 Guards reuse `sidebarSwitchEnabled` and a `TMUX_PANE` check from `sidebar.ts`, with the env injected, so tests need neither tmux nor pi. The publisher's `canPublish` and its binary lookup are not reused: a missing pmux-explorer binary must not silence the feed.
 
+### D4. Write only in a directory this uid owns
+
+`ensureThinkingFeed` stats the feed directory after the mkdir and the chmod, and refuses to write when the owner is not this process's uid — a silent refusal, like every other feed failure. The check closes the `/tmp` fallback's pre-creation hole: a directory another account created first still passes the mode steps (the `chmod` fails and is swallowed), and its owner could then swap the session's file for a readable one, or plant a symlink, because the entries of a directory belong to the directory's owner. One ownership check closes both, and only the owner or root can change a directory's owner. The uid is the one the path rule already names (D2).
+
+*Alternative:* verify the modes instead of the owner. Rejected: the owner of a directory chooses its mode, so a foreign 0700 directory passes a mode check.
+
 ## Risks / Trade-offs
 
-- [Model reasoning on disk] → 0700 directory and 0600 file, re-chmod on every ensure; the guards keep it off when the sidebar is off.
+- [Model reasoning on disk] → 0700 directory and 0600 file, re-chmod on every ensure, and D4's ownership check before any write; the guards keep it off when the sidebar is off.
 - [Feed files are never removed; the `/tmp` fallback keeps them until reboot] → Accepted for now, as in johnny-cant-read. `XDG_RUNTIME_DIR` is cleared at logout.
-- [On johnny's `main`, both johnny-cant-read and pmux write thinking] → They write to different paths, so neither breaks; the cost doubles only for users on `main` until johnny's `remove-stream-panes` change (already implemented there) merges.
+- [Who removes the `/tmp` fallback's files] → pmux-explorer's `reasoning-tab` design assigns cleanup to pmux ("pmux owns cleanup") while this change makes deletion a non-goal, so nobody removes them until one side changes; settle that ownership before the two changes archive.
+- [Both extensions write thinking at once] → No overlap remains: johnny-cant-read's `remove-stream-panes` change merged to its `main` as `91d4e48` (2026-10-27), before pmux ships, and removed the producer and its wiring.
 - [pi changes the `message_update` event shape] → The wiring test drives the three types through a fake `pi`, so a rename shows up as a failing test.
 
 ## Migration Plan

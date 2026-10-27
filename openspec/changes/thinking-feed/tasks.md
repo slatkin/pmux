@@ -2,8 +2,8 @@
 
 ## 1. Lift the producer
 
-- [x] 1.1 Copy `src/stream/thinking-feed.ts` from johnny-cant-read's `main` (`git -C ~/Dev/johnny-cant-read show main:src/stream/thinking-feed.ts`; the `feat/remove-stream-panes` checkout has deleted it) to `pi-extension/pmux/thinking-feed.ts` with no logic change, in pmux style; port its tests from `main:test/stream-thinking-feed.test.ts` to `test/thinking-feed.test.ts` and verify they pass with `pnpm test` (coalescing within 50 ms, flush before `start` and `end`, empty-end without `text`, `close()` flush, empty delta writes nothing)
-- [x] 1.2 Copy `src/stream/thinking-feed-file.ts` from `main:src/stream/thinking-feed-file.ts` to `pi-extension/pmux/thinking-feed-file.ts`, replacing its path function with `thinkingFeedPath({ env, sessionId, uid })` (design D2); verify with tests for the `XDG_RUNTIME_DIR` vector, the `/tmp/pmux-thinking-<uid>` fallback, a rejected session id (`../x` as in the spec, and one representative of the rest, e.g. empty), and the 0700/0600 modes on a fresh and on a pre-existing directory
+- [x] 1.1 Copy `src/stream/thinking-feed.ts` from johnny-cant-read's history (`git -C ~/Dev/johnny-cant-read show 31591ed:src/stream/thinking-feed.ts`; johnny's `main` carried it only from `31591ed` (2026-10-26) until `91d4e48` (2026-10-27) removed it) to `pi-extension/pmux/thinking-feed.ts` with no logic change, in pmux style; port its tests from `31591ed:test/stream-thinking-feed.test.ts` to `test/thinking-feed.test.ts` and verify they pass with `pnpm test` (coalescing within 50 ms, flush before `start` and `end`, empty-end without `text`, `close()` flush, empty delta writes nothing)
+- [x] 1.2 Copy `src/stream/thinking-feed-file.ts` from `31591ed:src/stream/thinking-feed-file.ts` to `pi-extension/pmux/thinking-feed-file.ts`, replacing its path function with `thinkingFeedPath({ env, sessionId, uid })` (design D2); verify with tests for the `XDG_RUNTIME_DIR` vector, the `/tmp/pmux-thinking-<uid>` fallback, a rejected session id (`../x` as in the spec, and one representative of the rest, e.g. empty), and the 0700/0600 modes on a fresh and on a pre-existing directory
 
 ## 2. Wire it into the extension
 
@@ -18,6 +18,10 @@
 
 - [x] 4.1 Run `pnpm test`, `pnpm typecheck` and `pnpm lint`; verify all pass, then run pi in a tmux pane with a thinking model and verify `$XDG_RUNTIME_DIR/pmux-thinking/<session id>.jsonl` gets `start`, `delta` and `end` records with modes 0700/0600
 
+## 5. Feed directory ownership
+
+- [ ] 5.1 Make `ensureThinkingFeed` refuse the feed when the feed directory's owner is not this process's uid (design D4): stat the directory after the mkdir and the chmod, return silently on a mismatch, and verify with a test that injects a foreign `uid` (for example `uid: 1234`) and asserts that no file is created or appended while the owned case still writes; keep `pnpm test`, `pnpm run typecheck` and `pnpm run lint` green
+
 ## Workflow follow-up
 
-- johnny-cant-read's `remove-stream-panes` change removes the thinking producer (implemented on its branch); nothing to do in that repository from here.
+- Done outside this repository: johnny-cant-read's `remove-stream-panes` change merged to its `main` as `91d4e48` (2026-10-27) and removed the thinking producer with its wiring; nothing to do in that repository from here.
