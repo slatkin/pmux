@@ -49,7 +49,11 @@ Plain text printed in your own pane is never seen. Your last assistant message i
 
 Before you stop, do ALL of this:
 1. Finish the task.
-2. Make your last assistant message the report: the verdict, the commit SHA, the files changed, the verification, the deviations, the open questions. Verdict first.
+2. Make your last assistant message the report.
+   At most 15 lines: the verdict first, then the commit SHA; one line per verification check, PASS or FAIL, no command output; one line per deviation and per open question.
+   Do not list the files changed: the parent reads them from the commit SHA.
+   Put longer details in a file and name its path in the report.
+   A report format in your brief overrides this shape and limit.
 3. Then call the pmux_done tool to close your session.
 
 If you are blocked, make your last assistant message the question and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.
@@ -63,7 +67,11 @@ Plain text printed in your own pane is never seen. The only way to reach it is b
 
 If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of this before you stop:
 1. Finish the task.
-2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
+2. Send your final report: node ${cliPath} send --to ${parent} --text '<report>'
+   At most 15 lines: the verdict first, then the commit SHA; one line per verification check, PASS or FAIL, no command output; one line per deviation and per open question.
+   Do not list the files changed: the parent reads them from the commit SHA.
+   Put longer details in a file and name its path in the report.
+   A report format in your brief overrides this shape and limit.
    The text may be long, contain quotes or span lines: read it into the argument from a file if you like. A line break arrives as the two characters \\n, so the orchestrator still reads one message.
    Send writes the report to a durable file and types only a one-line pointer naming it into the parent's pane. It prints one result line: sent:true means the pointer was submitted to the parent's pane, acknowledged:true means the orchestrator read the report file, and the line is not a delivery receipt.
    On sent:false, call the pmux_done tool without improvising retries.
@@ -432,6 +440,37 @@ describe("reportFooter dispatch", () => {
     assert.match(footer, /do not resend the report and do not send anything else to check/);
     assert.match(footer, /the run wrapper re-delivers an unacknowledged report at exit/);
     assert.match(footer, /On sent:false, call the pmux_done tool without improvising retries/);
+  });
+
+  // The report shape is one shared rule set (design D6): each rule appears
+  // exactly once in each footer, and the byte pins above carry the current
+  // wording. A later wording change that drops a rule, or states one twice,
+  // fails here even when the byte pins were updated in the same edit.
+  it("the footer states each report-shape rule once", () => {
+    const footers: Array<[string, string]> = [
+      ["last", parentFooter("orch", "%12")],
+      ["send", sendFooter("%12", "/pkg/cli.ts")],
+    ];
+    const rules: Array<[string, RegExp]> = [
+      ["the 15-line limit", /At most 15 lines/],
+      ["verdict before commit SHA", /the verdict first, then the commit SHA/],
+      ["PASS or FAIL per check", /PASS or FAIL/],
+      ["the commit-SHA sentence", /the parent reads them from the commit SHA/],
+      ["the details-file sentence", /Put longer details in a file and name its path in the report/],
+      [
+        "the brief-override sentence",
+        /A report format in your brief overrides this shape and limit/,
+      ],
+    ];
+    for (const [mode, footer] of footers) {
+      for (const [name, pattern] of rules) {
+        const hits = footer.match(new RegExp(pattern.source, "g")) ?? [];
+        assert.equal(hits.length, 1, `${mode} footer: ${name} appears ${hits.length} times`);
+      }
+      // The footer never asks for the files changed: the commit SHA carries
+      // them, so the old field list stays out of both footers.
+      assert.doesNotMatch(footer, /, the files changed,/);
+    }
   });
 });
 

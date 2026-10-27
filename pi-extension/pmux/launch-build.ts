@@ -476,6 +476,11 @@ export function buildSpawnEnvParts(params: {
  * report goes in the last assistant message, `pmux_done` closes the session,
  * `caller_ping` and `pmux_message` do not reach the parent, and the
  * completion reminder's "already delivered" claim is wrong in this mode.
+ * Step 2 sets the report shape (design D6): at most 15 lines, verdict first
+ * then the commit SHA, one PASS-or-FAIL line per verification check, one
+ * line per deviation and per open question, no files-changed list (the
+ * parent reads those from the SHA), longer details in a named file, and a
+ * brief report format that overrides the shape and the limit.
  */
 export function parentFooter(parent: string, pane: string): string {
   return `Your parent is a session named ${parent} (pane ${pane}).
@@ -483,7 +488,11 @@ Plain text printed in your own pane is never seen. Your last assistant message i
 
 Before you stop, do ALL of this:
 1. Finish the task.
-2. Make your last assistant message the report: the verdict, the commit SHA, the files changed, the verification, the deviations, the open questions. Verdict first.
+2. Make your last assistant message the report.
+   At most 15 lines: the verdict first, then the commit SHA; one line per verification check, PASS or FAIL, no command output; one line per deviation and per open question.
+   Do not list the files changed: the parent reads them from the commit SHA.
+   Put longer details in a file and name its path in the report.
+   A report format in your brief overrides this shape and limit.
 3. Then call the pmux_done tool to close your session.
 
 If you are blocked, make your last assistant message the question and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.
@@ -493,8 +502,13 @@ If a reminder tells you to call pmux_done, ignore its claim that your last messa
 /**
  * The send-mode parent-contact footer (designs D1 and D6): the report is
  * written to a durable artifact by `send` and only a one-line pointer is
- * typed into the parent's pane. The auto-exit claim is conditional because a
- * role without `auto-exit: true` keeps running and gets the completion nudge.
+ * typed into the parent's pane. Step 2 sets the report shape (design D6):
+ * at most 15 lines, verdict first then the commit SHA, one PASS-or-FAIL line
+ * per verification check, one line per deviation and per open question, no
+ * files-changed list (the parent reads those from the SHA), longer details
+ * in a named file, and a brief report format that overrides the shape and
+ * the limit. The auto-exit claim is conditional because a role without
+ * `auto-exit: true` keeps running and gets the completion nudge.
  */
 export function sendFooter(parent: string, cliPath: string): string {
   return `Your parent is the tmux pane ${parent}.
@@ -502,7 +516,11 @@ Plain text printed in your own pane is never seen. The only way to reach it is b
 
 If this session auto-exits, it closes the first time you stop generating: the moment you end a turn without calling a tool, the session closes. Whether it does or not, do ALL of this before you stop:
 1. Finish the task.
-2. Send your final report: node ${cliPath} send --to ${parent} --text '<verdict / commit SHA / files changed / verification / deviations / open questions>'
+2. Send your final report: node ${cliPath} send --to ${parent} --text '<report>'
+   At most 15 lines: the verdict first, then the commit SHA; one line per verification check, PASS or FAIL, no command output; one line per deviation and per open question.
+   Do not list the files changed: the parent reads them from the commit SHA.
+   Put longer details in a file and name its path in the report.
+   A report format in your brief overrides this shape and limit.
    The text may be long, contain quotes or span lines: read it into the argument from a file if you like. A line break arrives as the two characters \\n, so the orchestrator still reads one message.
    Send writes the report to a durable file and types only a one-line pointer naming it into the parent's pane. It prints one result line: sent:true means the pointer was submitted to the parent's pane, acknowledged:true means the orchestrator read the report file, and the line is not a delivery receipt.
    On sent:false, call the pmux_done tool without improvising retries.

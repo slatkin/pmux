@@ -1132,11 +1132,10 @@ describe("cli.ts start", () => {
     // The spec holds no report field: a last-mode spec stays byte for byte
     // what it was before the --report flag existed.
     assert.equal(res.spec.report, undefined);
-    // The last-mode footer golden: the external-orchestration spec requires
-    // these bytes to stay exactly what they were before --report existed, so
-    // the whole block is asserted verbatim here (this test owns the
-    // byte-stability contract; the resume test separately checks that a
-    // resumed prompt still carries the last footer).
+    // The last-mode footer golden: this test pins the current `last` footer
+    // bytes, so the whole block is asserted verbatim here (this test owns
+    // the byte pin; the resume test separately checks that a resumed prompt
+    // still carries the last footer).
     const promptText = readFileSync(res.promptPath, "utf8");
     assert.ok(
       promptText.endsWith(
@@ -1145,7 +1144,11 @@ describe("cli.ts start", () => {
           `\n` +
           `Before you stop, do ALL of this:\n` +
           `1. Finish the task.\n` +
-          `2. Make your last assistant message the report: the verdict, the commit SHA, the files changed, the verification, the deviations, the open questions. Verdict first.\n` +
+          `2. Make your last assistant message the report.\n` +
+          `   At most 15 lines: the verdict first, then the commit SHA; one line per verification check, PASS or FAIL, no command output; one line per deviation and per open question.\n` +
+          `   Do not list the files changed: the parent reads them from the commit SHA.\n` +
+          `   Put longer details in a file and name its path in the report.\n` +
+          `   A report format in your brief overrides this shape and limit.\n` +
           `3. Then call the pmux_done tool to close your session.\n` +
           `\n` +
           `If you are blocked, make your last assistant message the question and stop. The session closes; the parent resumes it with the answer. Do not use caller_ping or pmux_message to reach the parent.\n` +
@@ -1205,7 +1208,7 @@ describe("cli.ts start", () => {
     // missing report leaves the parent unaware of the exit.
     assert.doesNotMatch(promptText, /only learns that you exited/);
     // The report step and the wake-up hint name this checkout's CLI.
-    assert.ok(promptText.includes(`node ${CLI} send --to %12 --text '<verdict`));
+    assert.ok(promptText.includes(`node ${CLI} send --to %12 --text '<report>'`));
   });
 
   it("exits 2 on an unknown --report value before writing anything", async () => {
