@@ -368,12 +368,12 @@ When the variable is absent or holds a value other than `file-ack-v1`, `send` SH
 
 When the variable holds `file-ack-v1`, `PI_PMUX_SESSION` SHALL be required: a marked invocation without it is a configuration error, not a legacy fallback. `send` SHALL then, in order:
 
-1. Mint a fresh report ID of 32 lowercase hex characters, write the received text unchanged to `<session>.<id>.report.md` through an atomic temporary-file-and-rename write, and append the `report` registration record to `<session>.sent`. A failure here refuses the send before any pane input.
-2. Build the one-line pointer `pmux report <id>. Read <shell-quoted-report-path>, then run: node <shell-quoted-cli> ack --session <shell-quoted-session> --id <id>. Acknowledge only after reading. [pmux-eom-<token>]` with a fresh 32-hex visibility token, and submit it through the tmux backend's verified report-input primitive. A refusal or a failed submission SHALL exit 2 with the structured failure line.
-3. On submission, append the `notification` record (best effort) and poll the event log every 250 ms for an `ack` of the same ID, for `--ack-timeout` seconds (default 15; `0` checks once without waiting; the flag is invalid in legacy mode).
-4. Print the result line and exit 0: `{"sent":true,"notification":"submitted","acknowledged":<bool>,"id":<id>,"to":<pane>,"bytes":<n>,"report":<abs path>,"receipt":<abs path or null>,"notificationRecorded":<bool>}`. `acknowledged:false` after the timeout is not a failure and MUST NOT be presented as one.
+1. Mint a fresh report ID of 32 lowercase hex characters, write the received text unchanged to `<session>.<id>.report.md` through an atomic temporary-file-and-rename write, and append the `report` registration record to `<session>.sent`. A failure here refuses the send before any pane input and before any channel request.
+2. Build the one-line pointer `pmux report <id>. Read <shell-quoted-report-path>, then run: node <shell-quoted-cli> ack --session <shell-quoted-session> --id <id>. Acknowledge only after reading. [pmux-eom-<token>]` with a fresh 32-hex visibility token, and submit it through the report transport (`report-channel`): the parent's channel endpoint first, then, when the channel is unavailable, the tmux backend's verified report-input primitive. A refusal or a failed submission on the fallback SHALL exit 2 with the structured failure line.
+3. On submission by either transport, append the `notification` record (best effort) and poll the event log every 250 ms for an `ack` of the same ID, for `--ack-timeout` seconds (default 15; `0` checks once without waiting; the flag is invalid in legacy mode).
+4. Print the result line and exit 0: `{"sent":true,"notification":"submitted","via":"channel"|"tmux","acknowledged":<bool>,"id":<id>,"to":<pane>,"bytes":<n>,"report":<abs path>,"receipt":<abs path or null>,"notificationRecorded":<bool>}`, plus `"channelError":<reason>` when `via` is `tmux`. `acknowledged:false` after the timeout is not a failure and MUST NOT be presented as one.
 
-A pane refusal or verification failure SHALL exit 2, print an operational error on stderr, and print the structured line `{"sent":false,"notification":"not-submitted"|"unknown","acknowledged":false,"id":<id>,"to":<pane>,"bytes":<n>,"report":<abs path>,"receipt":<abs path or null>,"notificationRecorded":false,"error":<reason>,"enterAttempted":<bool>}` on stdout. A missing `--to` or `--text` MUST be a usage error: a message on stderr naming the flag, nothing on stdout, exit 1, and nothing is sent and no file is written.
+A pane refusal or verification failure on the fallback SHALL exit 2, print an operational error on stderr, and print the structured line `{"sent":false,"notification":"not-submitted"|"unknown","acknowledged":false,"id":<id>,"to":<pane>,"bytes":<n>,"report":<abs path>,"receipt":<abs path or null>,"notificationRecorded":false,"error":<reason>,"enterAttempted":<bool>,"channelError":<reason>}` on stdout. A missing `--to` or `--text` MUST be a usage error: a message on stderr naming the flag, nothing on stdout, exit 1, and nothing is sent and no file is written.
 
 In both modes the typed text SHALL be encoded so that it holds no line terminator and no tab, by the same encoding rules as before.
 
@@ -382,8 +382,20 @@ In both modes the typed text SHALL be encoded so that it holds no line terminato
 - **THEN** tmux receives `send-keys -t %12 -l 'PASS abc123'` and then `send-keys -t %12 Enter`, and stdout is the legacy line
 
 #### Scenario: Artifact before pane input
-- **WHEN** a marked child runs `send --to %12 --text 'PASS abc123'`
+- **WHEN** a marked child runs `send --to %12 --text 'PASS abc123'` and `%12` has no channel endpoint
 - **THEN** `<session>.<id>.report.md` holding `PASS abc123` and its `report` record exist before any tmux call, and the typed input is the pointer line ending in `pmux-eom-<token>`
+
+#### Scenario: Artifact before the channel request
+- **WHEN** a marked child runs `send` and `%12` has an armed channel endpoint
+- **THEN** the report file and its `report` record exist before the endpoint receives the request
+
+#### Scenario: Report delivered by the channel
+- **WHEN** a marked child runs `send --to %12` and the endpoint of `%12` replies `emitted`
+- **THEN** tmux receives no `send-keys` call, and the result line has `sent:true`, `notification:"submitted"` and `via:"channel"`, and no `channelError`
+
+#### Scenario: Report delivered by the fallback
+- **WHEN** a marked child runs `send --to %12`, the endpoint replies `unarmed`, and the verified input submits the pointer
+- **THEN** the result line has `via:"tmux"` and `channelError:"unarmed"`, and the exit code is 0
 
 #### Scenario: Acknowledged report
 - **WHEN** a marked child runs `send` and `ack` runs for its ID within the timeout
@@ -398,20 +410,20 @@ In both modes the typed text SHALL be encoded so that it holds no line terminato
 - **THEN** it checks the log once, does not sleep, and exits 0 with `acknowledged:false`
 
 #### Scenario: Submission refused
-- **WHEN** the parent pane is in a mode when a marked child runs `send`
-- **THEN** no keys are typed, the exit code is 2, and the stdout line has `sent:false`, `notification:"not-submitted"`, `enterAttempted:false` and a `report` path that exists
+- **WHEN** the channel is unavailable and the parent pane refuses the verified input when a marked child runs `send`
+- **THEN** no keys are typed, the exit code is 2, and the stdout line has `sent:false`, `notification:"not-submitted"`, `enterAttempted:false`, a `channelError`, and a `report` path that exists
 
 #### Scenario: Enter failed
-- **WHEN** the Enter call throws after the token was verified
+- **WHEN** the channel is unavailable and the Enter call throws after the token was verified
 - **THEN** the exit code is 2 and the stdout line has `notification:"unknown"` and `enterAttempted:true`
 
 #### Scenario: Marked without a session
 - **WHEN** `send` runs with `PI_PMUX_REPORT_PROTOCOL=file-ack-v1` and no `PI_PMUX_SESSION`
-- **THEN** it exits 1 with a message on stderr naming `PI_PMUX_SESSION`, sends nothing and writes no `.report.md` file
+- **THEN** it exits 1 with a message on stderr naming `PI_PMUX_SESSION`, sends nothing, makes no channel request and writes no `.report.md` file
 
 #### Scenario: Multiline report
 - **WHEN** the text holds several lines
-- **THEN** the report file holds them unchanged, and the typed pointer remains one line
+- **THEN** the report file holds them unchanged, and the pointer, typed or sent to the channel, remains one line
 
 #### Scenario: Control characters
 - **WHEN** an unmarked `send` text holds a tab or another control character
@@ -427,7 +439,7 @@ In both modes the typed text SHALL be encoded so that it holds no line terminato
 
 #### Scenario: The command answers
 - **WHEN** `send --to %12 --text 'PASS abc123'` delivers under `file-ack-v1`
-- **THEN** stdout holds one JSON line whose `sent` is `true`, whose `to`, `bytes`, `id`, `report` and `receipt` are set
+- **THEN** stdout holds one JSON line whose `sent` is `true`, whose `to`, `bytes`, `id`, `via`, `report` and `receipt` are set
 
 #### Scenario: The confirmation names the receipt
 - **WHEN** an unmarked `send --to %12 --text hi` runs with `PI_PMUX_SESSION=/s/w.jsonl` and the receipt is written
@@ -438,7 +450,7 @@ In both modes the typed text SHALL be encoded so that it holds no line terminato
 - **THEN** the printed line's `receipt` is null, and the command still exits 0
 
 ### Requirement: Report receipts
-When `send` runs under `file-ack-v1`, `<PI_PMUX_SESSION>.sent` SHALL be an append-only JSON-lines event log. `send` SHALL append a `report` record `{"at":<ISO>,"kind":"report","id":<32hex>,"to":<pane>,"bytes":<n>,"report":<path>}` before transport — a failed registration refuses the send — and a `notification` record `{"at":<ISO>,"kind":"notification","id":<32hex>,"token":<32hex>,"to":<pane>,"bytes":<n>,"report":<path>}` after a submission — a failed notification write MUST NOT fail the send. `ack` SHALL append `{"at":<ISO>,"kind":"ack","id":<32hex>}`; a failed append MUST NOT produce a success result. Readers SHALL skip malformed lines and unknown kinds, SHALL treat a kindless line with a string `to` as a legacy notification with no ID and no ack semantics, and an `ack` record carries no `to`. `<bytes>` is the UTF-8 length of the text `send` received. When `send` runs unmarked it SHALL keep appending the kindless receipt line `{"at":<ISO>,"to":<to>,"bytes":<n>}`. `prune` SHALL treat `.sent` and `.report.md` files as launcher files, so it deletes them past the retention and keeps them within it; an abandoned atomic temporary file also ends in `.report.md` and is reclaimed by the same rule.
+When `send` runs under `file-ack-v1`, `<PI_PMUX_SESSION>.sent` SHALL be an append-only JSON-lines event log. `send` SHALL append a `report` record `{"at":<ISO>,"kind":"report","id":<32hex>,"to":<pane>,"bytes":<n>,"report":<path>}` before transport — a failed registration refuses the send — and a `notification` record `{"at":<ISO>,"kind":"notification","id":<32hex>,"token":<32hex>,"to":<pane>,"bytes":<n>,"report":<path>,"via":"channel"|"tmux"}` after a submission, plus `"channelError":<reason>` when `via` is `tmux` — a failed notification write MUST NOT fail the send. `ack` SHALL append `{"at":<ISO>,"kind":"ack","id":<32hex>}`; a failed append MUST NOT produce a success result. Readers SHALL skip malformed lines and unknown kinds, SHALL treat a `notification` record without `via` as `via:"tmux"`, SHALL treat a kindless line with a string `to` as a legacy notification with no ID and no ack semantics, and an `ack` record carries no `to`. `<bytes>` is the UTF-8 length of the text `send` received. When `send` runs unmarked it SHALL keep appending the kindless receipt line `{"at":<ISO>,"to":<to>,"bytes":<n>}`. `prune` SHALL treat `.sent` and `.report.md` files as launcher files, so it deletes them past the retention and keeps them within it; an abandoned atomic temporary file also ends in `.report.md` and is reclaimed by the same rule.
 
 #### Scenario: Receipt inside a child
 - **WHEN** an unmarked `send --to %12 --text hi` runs with `PI_PMUX_SESSION=/s/w.jsonl`
@@ -446,7 +458,19 @@ When `send` runs under `file-ack-v1`, `<PI_PMUX_SESSION>.sent` SHALL be an appen
 
 #### Scenario: Registration before notification
 - **WHEN** a marked child runs `send` with `PI_PMUX_SESSION=/s/w.jsonl`
-- **THEN** `/s/w.jsonl.sent` gains a `report` line for the ID before the pointer is typed, and a `notification` line with a `token` after submission
+- **THEN** `/s/w.jsonl.sent` gains a `report` line for the ID before the pointer is submitted, and a `notification` line with a `token` and a `via` after submission
+
+#### Scenario: Channel notification record
+- **WHEN** the channel emits the pointer
+- **THEN** the `notification` line has `via:"channel"` and no `channelError`
+
+#### Scenario: Fallback notification record
+- **WHEN** the channel result is `unavailable` with reason `refused` and the verified input submits the pointer
+- **THEN** the `notification` line has `via:"tmux"` and `channelError:"refused"`
+
+#### Scenario: Old notification record
+- **WHEN** the event log holds a `notification` record written before this change, with no `via`
+- **THEN** readers see it as a notification with `via:"tmux"`
 
 #### Scenario: Ack record
 - **WHEN** `ack --session /s/w.jsonl --id <id>` runs for a registered report
@@ -466,7 +490,7 @@ When `send` runs under `file-ack-v1`, `<PI_PMUX_SESSION>.sent` SHALL be an appen
 
 #### Scenario: Registration failure refuses the send
 - **WHEN** the `report` record cannot be appended under `file-ack-v1`
-- **THEN** `send` exits without typing into the pane
+- **THEN** `send` exits without a channel request and without typing into the pane
 
 #### Scenario: Receipt write fails
 - **WHEN** `<session>.sent` cannot be appended under the legacy protocol
@@ -504,7 +528,7 @@ For a send-mode spec with a `parent`, the wrapper SHALL contact the parent after
 
 For a `file-ack-v1` spec:
 
-- Every current-run report addressed to `parent` that has no `ack` record SHALL be re-delivered in registration order through the verified report-input primitive: the same report file and ID, a fresh visibility token, and no ack wait. The wrapper SHALL recheck the ack immediately before each retry.
+- Every current-run report addressed to `parent` that has no `ack` record SHALL be re-delivered in registration order through the report transport (`report-channel`: the channel endpoint first, then the verified report-input primitive): the same report file and ID, a fresh visibility token, and no ack wait. The wrapper SHALL recheck the ack immediately before each retry.
 - When there is no current-run parent report at all, the wrapper SHALL write the wake text to its own durable report file, register it with a `report` record as `send` does, and deliver its pointer the same way: the `<name> <state> without sending a report…` text above for a finished or crashed child, and `<name> pinged: <message>` for a `ping` sidecar, with the original multiline text unchanged.
 - A `cancelled` sidecar produces no re-delivery and no wake-up.
 - A failed re-delivery or wake-up SHALL go to stderr only and MUST NOT change the child's exit code.
@@ -514,7 +538,7 @@ For a `file-ack-v1` spec:
 - **THEN** `%12` receives one message naming the child, the state `done` and the `last-message --session <session>` command
 
 #### Scenario: Failed wake-up
-- **WHEN** a re-delivery or wake-up cannot be submitted to the parent's pane
+- **WHEN** a re-delivery or wake-up can be submitted neither to the channel nor to the parent's pane
 - **THEN** the wrapper writes an error naming the parent to stderr, and its exit code is the child's code
 
 #### Scenario: Ping is quoted
@@ -584,6 +608,10 @@ For a `file-ack-v1` spec:
 #### Scenario: Last mode stays silent
 - **WHEN** a last-mode child exits without a report
 - **THEN** no text is typed into any pane but the child's own
+
+#### Scenario: Re-delivery by the channel
+- **WHEN** a marked send-mode child with parent `%12` exits with one unacknowledged report and the endpoint of `%12` replies `emitted`
+- **THEN** the pointer reaches the endpoint with the same report ID and a fresh token, and tmux receives no `send-keys` call for it
 
 ### Requirement: Wait on the exit sidecar
 `wait` SHALL accept `--signal status|sidecar`, with `status` as the default. With `status`, `wait` SHALL behave as before. With `sidecar`, `wait` SHALL poll `<session>.exit` every 500 ms and MUST NOT delete, move or write it. When the file exists, `wait` SHALL print one JSON line, the sidecar decoded by `interpretExitSidecar` plus `sidecar` set to the sidecar's absolute path, and exit 0.
