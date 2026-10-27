@@ -143,6 +143,31 @@ describe("the thinking feed file", () => {
     }
   });
 
+  test("ensure refuses a feed directory another uid owns", () => {
+    const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "thinking-feed-"));
+    const env = { XDG_RUNTIME_DIR: runtime };
+    const ownedUid = typeof process.getuid === "function" ? process.getuid() : 0;
+    // A uid other than this process's stands for another account that
+    // created the directory first: its entries are not ours to write.
+    const foreignUid = ownedUid + 1;
+    try {
+      const file = thinkingFeedPath({ env, sessionId: "foreign" });
+      assert.ok(file);
+      ensureThinkingFeed(file, foreignUid);
+      // The directory exists, so the check ran against a real directory,
+      // and the refused feed holds neither a created nor an appended file.
+      assert.equal(fs.existsSync(path.dirname(file)), true);
+      assert.equal(fs.existsSync(file), false);
+
+      // The owned directory still gets its feed.
+      ensureThinkingFeed(file, ownedUid);
+      assert.equal(fs.existsSync(file), true);
+      assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    } finally {
+      fs.rmSync(runtime, { recursive: true, force: true });
+    }
+  });
+
   test("append writes one JSON line per record", () => {
     const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "thinking-feed-"));
     const env = { XDG_RUNTIME_DIR: runtime };
