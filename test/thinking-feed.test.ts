@@ -143,7 +143,7 @@ describe("the thinking feed file", () => {
     }
   });
 
-  test("ensure refuses a feed directory another uid owns", () => {
+  test("ensure and append refuse a feed directory another uid owns", () => {
     const runtime = fs.mkdtempSync(path.join(os.tmpdir(), "thinking-feed-"));
     const env = { XDG_RUNTIME_DIR: runtime };
     const ownedUid = typeof process.getuid === "function" ? process.getuid() : 0;
@@ -163,6 +163,25 @@ describe("the thinking feed file", () => {
       ensureThinkingFeed(file, ownedUid);
       assert.equal(fs.existsSync(file), true);
       assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+
+      // The append entry refuses the same directory, so a directory made
+      // writable by another account receives no record even though this
+      // process can write in it.
+      fs.writeFileSync(file, "");
+      fs.chmodSync(file, 0o666);
+      appendThinkingFeedRecord(file, { kind: "start", ts: "t", producer: "p" }, foreignUid);
+      assert.equal(fs.readFileSync(file, "utf8"), "");
+
+      // The owned directory gets the record.
+      appendThinkingFeedRecord(file, { kind: "start", ts: "t", producer: "p" }, ownedUid);
+      assert.deepEqual(
+        fs
+          .readFileSync(file, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line).kind),
+        ["start"],
+      );
     } finally {
       fs.rmSync(runtime, { recursive: true, force: true });
     }

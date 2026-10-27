@@ -46,6 +46,8 @@ Guards reuse `sidebarSwitchEnabled` and a `TMUX_PANE` check from `sidebar.ts`, w
 
 `ensureThinkingFeed` stats the feed directory after the mkdir and the chmod, and refuses to write when the owner is not this process's uid — a silent refusal, like every other feed failure. The check closes the `/tmp` fallback's pre-creation hole: a directory another account created first still passes the mode steps (the `chmod` fails and is swallowed), and its owner could then swap the session's file for a readable one, or plant a symlink, because the entries of a directory belong to the directory's owner. One ownership check closes both, and only the owner or root can change a directory's owner. The uid is the one the path rule already names (D2).
 
+`appendThinkingFeedRecord` runs the same check before it writes. The ensure happens once, at the session's start, but the directory outlives it, and a foreign directory can be writable (0777), so a mode that lets the write stand proves nothing: a planted file or symlink for the session's feed would receive records through the append entry alone.
+
 *Alternative:* verify the modes instead of the owner. Rejected: the owner of a directory chooses its mode, so a foreign 0700 directory passes a mode check.
 
 ## Risks / Trade-offs

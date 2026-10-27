@@ -26,6 +26,20 @@ function defaultUid(): number {
 }
 
 /**
+ * Whether a directory that exists belongs to `uid`. A directory another
+ * account owns is never written in, whatever its mode (design D4): its
+ * entries are its owner's to plant and to swap. A directory that cannot be
+ * read is not ours either.
+ */
+function ownedBy(dir: string, uid: number): boolean {
+  try {
+    return fs.statSync(dir).uid === uid;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The feed file of one session: `<dir>/<session id>.jsonl`, where `<dir>`
  * is `$XDG_RUNTIME_DIR/pmux-thinking`, or `/tmp/pmux-thinking-<uid>` when
  * `XDG_RUNTIME_DIR` is unset or empty (design D2).
@@ -82,7 +96,7 @@ export function ensureThinkingFeed(filePath: string, uid?: number): void {
     // (its `chmod` fails and is swallowed), and nothing may be written in
     // it. The check comes after both steps, so the directory exists to be
     // read.
-    if (fs.statSync(dir).uid !== (uid ?? defaultUid())) return;
+    if (!ownedBy(dir, uid ?? defaultUid())) return;
     // Open for append: creates the file when it does not exist, leaves it
     // alone when it does.
     fs.closeSync(fs.openSync(filePath, "a", 0o600));
@@ -102,9 +116,20 @@ export function ensureThinkingFeed(filePath: string, uid?: number): void {
  * `ensureThinkingFeed`'s job, done once at the session's start; a record
  * that cannot be written is a record the reader does not show, and the
  * session itself is never disturbed by it.
+ *
+ * The ownership check runs again here, and not only in the ensure: the
+ * directory outlives the ensure, so a directory another account owns — or
+ * one whose entry for the session was planted — receives no record even
+ * when its mode lets this process write (design D4). `uid` is the uid the
+ * directory must belong to; it defaults to this process's.
  */
-export function appendThinkingFeedRecord(filePath: string, record: ThinkingFeedRecord): void {
+export function appendThinkingFeedRecord(
+  filePath: string,
+  record: ThinkingFeedRecord,
+  uid?: number,
+): void {
   try {
+    if (!ownedBy(path.dirname(filePath), uid ?? defaultUid())) return;
     fs.appendFileSync(filePath, `${JSON.stringify(record)}\n`);
   } catch {
     // A record that cannot be written is a record the reader does not
