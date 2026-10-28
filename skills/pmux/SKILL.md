@@ -191,7 +191,9 @@ into your pane.
 
 0. Your own pane id is `$TMUX_PANE` — it is always set inside a pane, and
    it is what children send their reports to. There is no parent name to
-   pick: every child gets `--parent "$TMUX_PANE"`.
+   pick: every child gets `--parent "$TMUX_PANE"`. If no inbox monitor runs
+   in this session, start it now, before the first child (see
+   [Inbox monitor](#inbox-monitor)).
 1. Write the brief to a file — the task, nothing else. The launcher appends
    the send-mode parent-contact footer (your pane id and the send procedure)
    itself.
@@ -320,7 +322,9 @@ apply as before.
 This build has no `persistent` option, and a monitor stops at its
 `timeout_ms`, which is 30 minutes at most. Start it again when the `Monitor`
 reports that it expired, at the start of each new session, after
-`claude --resume`, and after `/clear`. A second `inbox --follow` on the same
+`claude --resume`, and after `/clear` — but only while a send-mode child still
+runs or you plan to launch one. With no child running, let it stay stopped; the
+next launch starts it. A second `inbox --follow` on the same
 pane exits 1, because one is already running. Never edit the inbox entries,
 the report files or the `<session>.sent` log yourself.
 
