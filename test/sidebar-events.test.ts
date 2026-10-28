@@ -216,19 +216,16 @@ describe("the pi-event mapping", () => {
     assert.equal(calls[0].args[2], "user-prompt-submit");
   });
 
-  it("tool activity keeps the arguments from the start event for the end entry", async () => {
+  it("tool activity publishes once, on start, and the end publishes nothing", async () => {
     const { calls, fire } = makeHarness();
     fire("tool_execution_start", { toolCallId: "t1", toolName: "bash", args: { command: "ls" } });
     fire("tool_execution_end", { toolCallId: "t1", toolName: "bash", result: { content: "ok" } });
     await flushSidebarQueue();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].args[2], "activity-log");
     assert.deepEqual(JSON.parse(calls[0].stdin), {
       tool_name: "bash",
       tool_input: { command: "ls" },
-    });
-    assert.deepEqual(JSON.parse(calls[1].stdin), {
-      tool_name: "bash",
-      tool_input: { command: "ls" },
-      tool_response: { content: "ok" },
     });
   });
 

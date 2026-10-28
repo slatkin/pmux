@@ -2,9 +2,9 @@
  * The mapping from pi's events to the sidebar's protocol events.
  *
  * `index.ts` only wires what this module registers. The module holds the
- * run-scoped captures (the last assistant message, the settled outcome, the
- * running tool arguments) in the factory's closure: per registration, no
- * timers, no global state, so `/reload` safety is unchanged.
+ * run-scoped captures (the last assistant message and the settled outcome)
+ * in the factory's closure: per registration, no timers, no global state,
+ * so `/reload` safety is unchanged.
  *
  * The publisher and the worktree reader are injected, so a test can drive
  * the handlers without pi, without tmux and without a sidebar.
@@ -45,11 +45,9 @@ function blockedActive(data: unknown): boolean | undefined {
 export function createSidebarEvents(deps: SidebarEventsDeps): { register(pi: ExtensionAPI): void } {
   // Run-scoped captures: `agent_settled` carries neither the messages nor
   // the outcome, so the last assistant message is kept from `agent_end` and
-  // the outcome from `agent_before_settle` until the run settles. Tool args
-  // are kept per call id, because `tool_execution_end` does not repeat them.
+  // the outcome from `agent_before_settle` until the run settles.
   let lastAssistant: LastAssistant | null = null;
   let settledOutcome: "completed" | "aborted" | "error" | undefined;
-  const runningToolArgs = new Map<string, unknown>();
 
   // The wait for a human, counted across both sources: pi's ui_prompt_*
   // events and the herdr:blocked bus alias can report the same prompt. Only
@@ -104,24 +102,15 @@ export function createSidebarEvents(deps: SidebarEventsDeps): { register(pi: Ext
         );
       });
 
+      // One activity entry per tool call, published at its start so a slow
+      // or hanging tool still shows in the stream. `tool_execution_end`
+      // deliberately publishes nothing: the sidebar's labels never read
+      // `tool_response` for a pi tool, so a second publish could only
+      // duplicate the line the start already wrote.
       pi.on("tool_execution_start", (event) => {
-        runningToolArgs.set(event.toolCallId, event.args);
         deps.publisher.publish(
           "activity-log",
           buildActivityLog({ toolName: event.toolName, toolInput: event.args }),
-        );
-      });
-
-      pi.on("tool_execution_end", (event) => {
-        const toolInput = runningToolArgs.get(event.toolCallId) ?? {};
-        runningToolArgs.delete(event.toolCallId);
-        deps.publisher.publish(
-          "activity-log",
-          buildActivityLog({
-            toolName: event.toolName,
-            toolInput,
-            toolResponse: event.result,
-          }),
         );
       });
 

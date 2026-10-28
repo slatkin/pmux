@@ -19,11 +19,7 @@ payload on stdin, for every event of the protocol that pi can answer.
 
 #### Scenario: A tool starts
 - **WHEN** pi starts a tool
-- **THEN** the extension publishes `activity-log` with the tool name and its arguments
-
-#### Scenario: A tool ends
-- **WHEN** a tool ends
-- **THEN** the extension publishes `activity-log` with the tool name, its arguments and its result
+- **THEN** the extension publishes `activity-log` once, with the tool name and its arguments, and the end of that tool publishes nothing further
 
 #### Scenario: The turn ends
 - **WHEN** a run settles with the outcome `completed` or `aborted`
