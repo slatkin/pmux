@@ -26,6 +26,6 @@
 
 ## 3. Gates
 
-- [ ] 3.1 Run `pnpm run format:check`, `pnpm run lint`,
+- [x] 3.1 Run `pnpm run format:check`, `pnpm run lint`,
   `pnpm run typecheck` and `pnpm test`; all four must pass. Then commit
   with a conventional scoped message.
