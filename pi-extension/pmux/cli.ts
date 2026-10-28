@@ -435,7 +435,8 @@ function resumeCommand(values: CliValues, deps: CliDeps): number {
     removeChildStatus(spec.sessionFile);
     removeExitSidecar(spec.sessionFile);
 
-    // `--name` renames the pane only; the rebuilt spec keeps the record's name.
+    // `--name` renames the pane and, for a tab, its window; the rebuilt spec
+    // keeps the record's name.
     const pane = createSurface(values.name ?? rebuilt.name, placement, callerPane);
     runInPane(pane, paneCommandLine(CLI_PATH, launchPath));
 

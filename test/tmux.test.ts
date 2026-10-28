@@ -326,7 +326,17 @@ describe("tmux backend", () => {
     const pane = createSurface("Scout", "tab", "%3");
     assert.equal(pane, "%9");
     assert.deepEqual(calls[0], ["display-message", "-p", "-t", "%3", "#{session_id}"]);
-    assert.deepEqual(calls[1], ["new-window", "-d", "-t", "$7", "-P", "-F", "#{pane_id}"]);
+    assert.deepEqual(calls[1], [
+      "new-window",
+      "-d",
+      "-t",
+      "$7",
+      "-n",
+      "Scout",
+      "-P",
+      "-F",
+      "#{pane_id}",
+    ]);
     assert.deepEqual(calls[2], ["display-message", "-p", "-t", "%3", "#{window_id}"]);
     assert.deepEqual(calls[3], ["select-window", "-t", "@4"]);
   });
