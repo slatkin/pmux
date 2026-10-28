@@ -35,6 +35,13 @@ export interface SidebarEventsDeps {
   readWorktree(): SidebarWorktree | undefined;
 }
 
+/** The `active` flag of a herdr:blocked payload, or `undefined` when malformed. */
+function blockedActive(data: unknown): boolean | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const active = (data as { active?: unknown }).active;
+  return typeof active === "boolean" ? active : undefined;
+}
+
 export function createSidebarEvents(deps: SidebarEventsDeps): { register(pi: ExtensionAPI): void } {
   // Run-scoped captures: `agent_settled` carries neither the messages nor
   // the outcome, so the last assistant message is kept from `agent_end` and
@@ -44,10 +51,35 @@ export function createSidebarEvents(deps: SidebarEventsDeps): { register(pi: Ext
   let settledOutcome: "completed" | "aborted" | "error" | undefined;
   const runningToolArgs = new Map<string, unknown>();
 
+  // The wait for a human, counted across both sources: pi's ui_prompt_*
+  // events and the herdr:blocked bus alias can report the same prompt. Only
+  // the first start (0 -> 1) and the last end (1 -> 0) publish.
+  let waitDepth = 0;
+  // The session the last ctx-carrying handler saw, kept as plain data. The
+  // bus alias has no ctx, and a kept ctx would go stale with its session.
+  let lastSession: SidebarSession | undefined;
+
   const sessionOf = (ctx: {
     cwd: string;
     sessionManager: { getSessionId(): string };
   }): SidebarSession => ({ cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId() });
+
+  const rememberSession = (ctx: Parameters<typeof sessionOf>[0]): SidebarSession => {
+    lastSession = sessionOf(ctx);
+    return lastSession;
+  };
+
+  const waitStarted = (): boolean => {
+    waitDepth += 1;
+    return waitDepth === 1;
+  };
+
+  const waitEnded = (): boolean => {
+    // An end with no open wait is ignored, so the count never goes negative.
+    if (waitDepth === 0) return false;
+    waitDepth -= 1;
+    return waitDepth === 0;
+  };
 
   return {
     register(pi: ExtensionAPI): void {
@@ -59,7 +91,7 @@ export function createSidebarEvents(deps: SidebarEventsDeps): { register(pi: Ext
           "session-start",
           buildSessionStart({
             source: event?.reason ?? "",
-            session: sessionOf(ctx),
+            session: rememberSession(ctx),
             worktree,
           }),
         );
@@ -68,7 +100,7 @@ export function createSidebarEvents(deps: SidebarEventsDeps): { register(pi: Ext
       pi.on("input", (event, ctx) => {
         deps.publisher.publish(
           "user-prompt-submit",
-          buildUserPromptSubmit({ prompt: event.text, session: sessionOf(ctx) }),
+          buildUserPromptSubmit({ prompt: event.text, session: rememberSession(ctx) }),
         );
       });
 
@@ -127,15 +159,44 @@ export function createSidebarEvents(deps: SidebarEventsDeps): { register(pi: Ext
       // A blocking extension prompt (a permission dialog, for example) is a
       // wait for a human; the end of the wait returns the pane to running
       // without touching the prompt text it already shows.
-      pi.on("ui_prompt_start", (event) => {
-        deps.publisher.publish("notification", buildNotification({ waitReason: event.kind }));
+      pi.on("ui_prompt_start", (event, ctx) => {
+        rememberSession(ctx);
+        if (waitStarted()) {
+          deps.publisher.publish("notification", buildNotification({ waitReason: event.kind }));
+        }
       });
 
       pi.on("ui_prompt_end", (_event, ctx) => {
-        deps.publisher.publish(
-          "user-prompt-submit",
-          buildUserPromptSubmit({ prompt: "", session: sessionOf(ctx) }),
-        );
+        const session = rememberSession(ctx);
+        if (waitEnded()) {
+          deps.publisher.publish(
+            "user-prompt-submit",
+            buildUserPromptSubmit({ prompt: "", session }),
+          );
+        }
+      });
+
+      // pi-ask-user reports its `ask_user` question on pi's event bus, with
+      // the same wait as a ui prompt. It is a second source for the one count
+      // above, so a question also reaches the sidebar when pi's ui_prompt
+      // events do not. A payload without a boolean `active` is ignored.
+      pi.events.on("herdr:blocked", (data) => {
+        const active = blockedActive(data);
+        if (active === undefined) return;
+        if (active) {
+          if (waitStarted()) {
+            deps.publisher.publish("notification", buildNotification({ waitReason: "question" }));
+          }
+          return;
+        }
+        // No session seen yet means no identity to resume under, so the end
+        // publishes nothing. A session is seen by session_start before a run.
+        if (waitEnded() && lastSession) {
+          deps.publisher.publish(
+            "user-prompt-submit",
+            buildUserPromptSubmit({ prompt: "", session: lastSession }),
+          );
+        }
       });
 
       // The session is going away; publish synchronously so the end is not

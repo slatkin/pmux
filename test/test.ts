@@ -118,6 +118,7 @@ function createMockExtensionApi() {
     sentMessages,
     api: {
       on() {},
+      events: { on() {} },
       registerTool(tool: any) {
         registeredTools.push(tool);
       },
@@ -3699,6 +3700,7 @@ describe("subagent child status ownership", () => {
         on(event: string, fn: (data?: unknown, ctx?: unknown) => void) {
           handlers.set(event, [...(handlers.get(event) ?? []), fn]);
         },
+        events: { on() {} },
         registerTool(tool: any) {
           registeredTools.push(tool);
         },
@@ -3841,6 +3843,7 @@ describe("pmux_spawn role resolution (required-role spec)", () => {
         on(event: string, fn: (data?: unknown, ctx?: unknown) => void) {
           handlers.set(event, [...(handlers.get(event) ?? []), fn]);
         },
+        events: { on() {} },
         registerTool(tool: any) {
           registeredTools.push(tool);
         },

@@ -488,6 +488,7 @@ describe("the index.ts registration (D7)", () => {
         on: (event: string, fn: (event?: unknown) => void) => {
           handlers.set(event, [...(handlers.get(event) ?? []), fn]);
         },
+        events: { on() {} },
         registerTool() {},
         registerCommand() {},
         registerMessageRenderer() {},

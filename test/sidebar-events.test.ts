@@ -30,28 +30,118 @@ function makeHarness(options: { env?: NodeJS.ProcessEnv; worktree?: SidebarWorkt
     },
   });
   const handlers = new Map<string, Array<(event?: unknown, ctx?: unknown) => void>>();
+  const busHandlers = new Map<string, Array<(data?: unknown) => void>>();
   events.register({
     on: (event: string, fn: (event?: unknown, ctx?: unknown) => void) => {
       handlers.set(event, [...(handlers.get(event) ?? []), fn]);
+    },
+    events: {
+      on: (channel: string, fn: (data?: unknown) => void) => {
+        busHandlers.set(channel, [...(busHandlers.get(channel) ?? []), fn]);
+      },
     },
   } as never);
   const fire = (event: string, data: unknown, ctx: unknown = CTX) => {
     for (const fn of handlers.get(event) ?? []) fn(data, ctx);
   };
-  return { calls, worktreeReads, fire };
+  const fireBus = (channel: string, data: unknown) => {
+    for (const fn of busHandlers.get(channel) ?? []) fn(data);
+  };
+  return { calls, worktreeReads, fire, fireBus };
 }
 
 describe("the pi-event mapping", () => {
   it("the end of the wait publishes user-prompt-submit with an empty prompt and nothing else", async () => {
     const { calls, fire } = makeHarness();
+    fire("ui_prompt_start", { kind: "confirm" });
     fire("ui_prompt_end", { reason: "confirmed" });
     await flushSidebarQueue();
-    assert.deepEqual(JSON.parse(calls[0].stdin), {
+    assert.equal(calls.length, 2);
+    assert.deepEqual(JSON.parse(calls[1].stdin), {
       prompt: "",
       cwd: "/work/app",
       session_id: "s1",
     });
-    assert.equal(calls[0].args[2], "user-prompt-submit");
+    assert.equal(calls[1].args[2], "user-prompt-submit");
+  });
+
+  it("an end with no open wait publishes nothing, and a later start still notifies", async () => {
+    const { calls, fire, fireBus } = makeHarness();
+    fire("ui_prompt_end", { reason: "confirmed" });
+    fireBus("herdr:blocked", { active: false });
+    await flushSidebarQueue();
+    assert.deepEqual(calls, []);
+    fire("ui_prompt_start", { kind: "confirm" });
+    await flushSidebarQueue();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].args[2], "notification");
+  });
+
+  it("a bus question publishes one notification with the question wait reason", async () => {
+    const { calls, fireBus } = makeHarness();
+    fireBus("herdr:blocked", { active: true, label: "Waiting for user response" });
+    await flushSidebarQueue();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].args[2], "notification");
+    assert.deepEqual(JSON.parse(calls[0].stdin), { notification_type: "question" });
+  });
+
+  it("the bus end publishes one empty user-prompt-submit under the last seen session", async () => {
+    const { calls, fire, fireBus } = makeHarness();
+    fire("input", { text: "ask me" });
+    fireBus("herdr:blocked", { active: true });
+    fireBus("herdr:blocked", { active: false });
+    await flushSidebarQueue();
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].args[2], "user-prompt-submit");
+    assert.deepEqual(JSON.parse(calls[2].stdin), {
+      prompt: "",
+      cwd: "/work/app",
+      session_id: "s1",
+    });
+  });
+
+  it("a bus question and a ui prompt for one prompt publish one notification and one resume (bus first)", async () => {
+    const { calls, fire, fireBus } = makeHarness();
+    fireBus("herdr:blocked", { active: true });
+    fire("ui_prompt_start", { kind: "input" });
+    fireBus("herdr:blocked", { active: false });
+    fire("ui_prompt_end", { reason: "confirmed" });
+    await flushSidebarQueue();
+    assert.deepEqual(
+      calls.map((call) => call.args[2]),
+      ["notification", "user-prompt-submit"],
+    );
+    assert.deepEqual(JSON.parse(calls[0].stdin), { notification_type: "question" });
+  });
+
+  it("a bus question and a ui prompt for one prompt publish one notification and one resume (ui first)", async () => {
+    const { calls, fire, fireBus } = makeHarness();
+    fire("ui_prompt_start", { kind: "input" });
+    fireBus("herdr:blocked", { active: true });
+    fire("ui_prompt_end", { reason: "confirmed" });
+    fireBus("herdr:blocked", { active: false });
+    await flushSidebarQueue();
+    assert.deepEqual(
+      calls.map((call) => call.args[2]),
+      ["notification", "user-prompt-submit"],
+    );
+    assert.deepEqual(JSON.parse(calls[0].stdin), { notification_type: "input" });
+  });
+
+  it("malformed bus payloads publish nothing and leave the wait count alone", async () => {
+    const { calls, fire, fireBus } = makeHarness();
+    fire("input", { text: "go" });
+    for (const data of [undefined, null, "active", 1, {}, { active: "yes" }, { active: 1 }]) {
+      assert.doesNotThrow(() => fireBus("herdr:blocked", data));
+    }
+    fireBus("herdr:blocked", { active: true });
+    fireBus("herdr:blocked", { active: false });
+    await flushSidebarQueue();
+    assert.deepEqual(
+      calls.map((call) => call.args[2]),
+      ["user-prompt-submit", "notification", "user-prompt-submit"],
+    );
   });
 
   it("the wait start publishes notification with the kind of prompt", async () => {

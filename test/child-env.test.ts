@@ -129,6 +129,7 @@ function makeMockPi() {
     registeredTools,
     api: {
       on() {},
+      events: { on() {} },
       registerTool(tool: any) {
         registeredTools.push(tool);
       },
