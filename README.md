@@ -1,28 +1,11 @@
 # pmux
 
-pi integration for [tmux](https://github.com/tmux/tmux).
+pi integration for [tmux](https://github.com/tmux/tmux) in order to allow for pi 
+orchestration of interactive subagents in tmux panes and tabs in other pi instances
+as well as Claude orchestration of pi workers in the same manner. 
 
-pmux runs pi subagents as child pi processes in tmux panes beside their
-parent, in the caller's own window, where you can watch them work. Each child
-reports back through files next to its session: a status file with live state
-(`working`, `idle`, `done`, `blocked`), a final report, and an exit sidecar the
-parent polls. The parent supervises the whole life of a child — spawn, message,
-interrupt, resume — and a watchdog finishes a stuck child instead of waiting
-forever. A pane outlives its child, so nothing is lost to inspection.
-
-Children get roles: the package bundles a scout, a worker, a reviewer, a
-visual tester and a self-driving Claude Code session. A role is just a
-frontmatter file, so a project or the user can add or override any of them,
-including where its pane opens: a split, a tab, or a floating pane. An
-external orchestrator that is not a pi session — Claude Code, for example —
-drives the same children through a packaged skill.
-
-pmux adopts the subagent system from
-[HazAT/pi-interactive-subagents](https://github.com/HazAT/pi-interactive-subagents)
-— with the completion nudge from [maplezzk's port](https://github.com/maplezzk) —
-and implements it for tmux panes, with pane placement, live pane titles,
-messages between running agents, context handoff to a fresh agent, spawn-time
-role records, and the parent-side watchdog on top.
+pmux allows for tmux pane placement, live pane titles,messages between running agents, 
+context handoff to a fresh agent, spawn-time role records, and the parent-side watchdog on top.
 
 ## Install
 
