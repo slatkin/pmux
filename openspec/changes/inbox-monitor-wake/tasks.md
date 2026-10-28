@@ -39,7 +39,7 @@ skill text in group 5.
 ## 6. Gates
 
 - [x] 6.1 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`; all four pass, and the full suite runs with no live tmux or Claude.
-- [ ] 6.2 Live rehearsal with the user: one Claude orchestrator running the monitor, one send-mode child, and a report sent while the orchestrator is idle at its prompt. Record the outcome in `spike.md`; the orchestrator is woken, reads the report, and its `ack` removes the entry.
+- [x] 6.2 Live rehearsal with the user: one Claude orchestrator running the monitor, one send-mode child, and a report sent while the orchestrator is idle at its prompt. Record the outcome in `spike.md`; the orchestrator is woken, reads the report, and its `ack` removes the entry.
 
 ## Workflow follow-up
 

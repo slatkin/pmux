@@ -53,3 +53,20 @@ Result: the orchestrator must run `inbox --follow` again:
 Use `timeout_ms` 1800000, the most this build allows. The build has no `persistent` parameter, so group 5 must not write `persistent: true`.
 
 `/clear` was not tested. Keep the `/clear` re-arm rule from the design until a test shows it is not needed.
+
+## 6.2 Live rehearsal
+
+Result: pass.
+
+Setup: the orchestrator was Claude Code 2.1.311 in pane `%227` (`TMUX_PANE`). It armed `Monitor` on `node skills/pmux/launch.ts inbox --follow` with `timeout_ms` 1800000 (task `b27bymvog`). It then started one send-mode child, `rehearsal-scout` (role `scout`, `--report send --parent %227`), in pane `%247`. The orchestrator ended its turn after the launch, so it was idle at its prompt when the report arrived.
+
+Evidence:
+
+- The monitor printed one pointer for report `cbfcdd60fa6985856124f47a0dac2b02`, delivery 1. The pointer woke the idle orchestrator with nobody typing.
+- The report file held one line: `rehearsal ok: branch main, 203 commits`.
+- The `.sent` log has three records for this report, in order: `report` (10:20:12.506Z), `notification` with `via:"inbox"` (10:20:12.506Z), and `ack` (10:20:18.080Z).
+- `cli.ts ack` exited 0 and printed `acked:true`.
+- After the ack, the inbox directory `/run/user/1000/pmux-inbox/79301cf9592f327a-227` held only `.monitor`. The entry was removed.
+- No typed pointer reached pane `%227`. No channel was armed or used.
+
+Scope: one sample, with the orchestrator idle at its prompt. Quit, `/compact`, and `--resume` were not retested in this rehearsal; section 1.4 covers them.
