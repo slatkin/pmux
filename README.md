@@ -29,8 +29,11 @@ npx skills add /path/to/pmux -g -a claude-code
 The skill waits for a child to finish and reads back its report — the
 default `last` mode, where the report is the child's last assistant message;
 a child started with `--report send` instead writes its report to a durable
-file and types a one-line pointer into the orchestrator's pane, which the
-orchestrator acknowledges with an `ack` command after reading the file. The
+file and gives the orchestrator a one-line pointer. The orchestrator starts
+`inbox --follow` as a `Monitor`, so the pointer arrives as a printed line and
+no terminal input is typed; it acknowledges the report with an `ack` command
+after reading the file. Without a monitor, the pointer is typed into the
+orchestrator's pane instead. The
 [guide](docs/guide.md#external-orchestrators-claude-code) covers the launcher
 commands, the completion signal and close-on-done behavior.
 

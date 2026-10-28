@@ -41,7 +41,7 @@ const FNV_MASK = 0xffffffffffffffffn;
  * (`/tmp/tmux-1000/default` → `79301cf9592f327a`), so the two
  * implementations cannot drift.
  */
-function fnv1a64Hex(text: string): string {
+export function fnv1a64Hex(text: string): string {
   let hash = FNV_OFFSET_BASIS;
   for (const byte of Buffer.from(text, "utf8")) {
     hash ^= BigInt(byte);

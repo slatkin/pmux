@@ -13,9 +13,10 @@
  * the wrapper recover the report file — and carries `id`, `to`, `bytes` and
  * the `report` path. `notification` records that a pointer was submitted to
  * the pane and adds the visibility `token` and the transport `via`; it means
- * only that the parent received the pointer — through the channel endpoint
- * (`via:"channel"`) or through the verified pane input (`via:"tmux"`, with
- * `channelError` naming why the channel fell back). `ack` (`id` only, no
+ * only that the parent received the pointer — through the parent's inbox
+ * (`via:"inbox"`, with `inboxError` on the records that did not use it), the
+ * channel endpoint (`via:"channel"`) or the verified pane input (`via:"tmux"`,
+ * with `channelError` naming why the channel fell back). `ack` (`id` only, no
  * `to`) is the sole read receipt. The two
  * protocols share the one file: a kindless line with a string `to` stays a
  * valid legacy notification with no ID and no ack semantics. Readers skip
@@ -24,12 +25,13 @@
  */
 import { appendFileSync, readFileSync } from "node:fs";
 import { type ChannelUnavailableReason, isChannelUnavailableReason } from "./channel-reason.ts";
+import { type InboxUnavailableReason, isInboxUnavailableReason } from "./inbox-reason.ts";
 
 /** The suffix the receipt file carries next to the session file. */
 export const REPORT_RECEIPT_SUFFIX = ".sent";
 
-/** The transport a `notification` record names (design D5). */
-export type ReportVia = "channel" | "tmux";
+/** The transport a `notification` record names (design D5; report-inbox D4). */
+export type ReportVia = "channel" | "tmux" | "inbox";
 
 /** One delivered report under the legacy protocol (a kindless line). */
 export interface ReportReceipt {
@@ -69,6 +71,8 @@ export interface PointerNotification {
   via: ReportVia;
   /** Why the channel was unavailable; set only after a fallback (design D5). */
   channelError?: ChannelUnavailableReason;
+  /** Why the inbox was unavailable; set on every record that did not use it. */
+  inboxError?: InboxUnavailableReason;
 }
 
 /** A `report` record read back from the log. */
@@ -97,6 +101,8 @@ export interface LoggedNotification {
   via: ReportVia;
   /** Why the channel fell back; present only on a fallback record. */
   channelError?: ChannelUnavailableReason;
+  /** Why the inbox was unavailable; present only on a record that did not use it. */
+  inboxError?: InboxUnavailableReason;
   /** ISO time of the record, when the writer recorded it. */
   at?: string;
 }
@@ -218,6 +224,16 @@ function legacyReceiptTarget(record: Record<string, unknown>): string | null {
   return typeof record.to === "string" ? record.to : null;
 }
 
+/**
+ * The transport a `notification` record names. A record without `via`, or
+ * with a value this reader does not know, reads as the tmux transport (design
+ * D5): the field is additive, so an older log line was a verified-input
+ * delivery.
+ */
+function readVia(value: unknown): ReportVia {
+  return value === "channel" || value === "inbox" ? value : "tmux";
+}
+
 /** Fold one parsed record into the session's log state. */
 function foldRecord(record: Record<string, unknown>, state: ReportLogState): void {
   const at = typeof record.at === "string" ? record.at : undefined;
@@ -270,10 +286,11 @@ function foldRecord(record: Record<string, unknown>, state: ReportLogState): voi
         // A record without `via`, or with a value this reader does not know,
         // reads as the tmux transport (design D5): the field is additive, so
         // an older log line was a verified-input delivery.
-        via: record.via === "channel" ? "channel" : "tmux",
+        via: readVia(record.via),
         ...(isChannelUnavailableReason(record.channelError)
           ? { channelError: record.channelError }
           : {}),
+        ...(isInboxUnavailableReason(record.inboxError) ? { inboxError: record.inboxError } : {}),
         ...(at !== undefined ? { at } : {}),
       });
     }

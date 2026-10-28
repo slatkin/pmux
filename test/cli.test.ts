@@ -13,6 +13,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +34,12 @@ import { getLaunchRecordFile, readLaunchRecord } from "../pi-extension/pmux/laun
 import { main } from "../pi-extension/pmux/cli.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 import { argValue, placementRow, useTmuxPaneFake } from "./tmux-fakes.ts";
+import {
+  INBOX_MARKER,
+  inboxDirPath,
+  writeInboxEntry,
+  writeMonitorMarker,
+} from "../pi-extension/pmux/report-inbox.ts";
 import { registerReport, REPORT_ACK_POLL_MS } from "../pi-extension/pmux/report-delivery.ts";
 import { reportArtifactPath } from "../pi-extension/pmux/report-artifact.ts";
 import { appendReportAck, readReportLog } from "../pi-extension/pmux/report-receipt.ts";
@@ -2897,6 +2904,216 @@ describe("cli.ts ack", () => {
       assert.equal(res.code, 2);
       assert.match(res.stderr, /could not append the ack record/);
       assert.equal(res.stdout, "");
+    });
+  });
+});
+
+describe("cli.ts inbox", () => {
+  /** The test's tmux env with a runtime dir inside `dir`, so inboxes stay in the temp dir. */
+  function inboxEnv(dir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+    return tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "run"), ...extra });
+  }
+
+  /** A pending entry for `id`, written into `inbox`. */
+  function pendingEntry(inbox: string, dir: string, id: string): void {
+    const session = join(dir, "w.jsonl");
+    writeInboxEntry(inbox, {
+      v: 1,
+      id,
+      from: "worker-a",
+      session,
+      report: reportArtifactPath(session, id),
+      cli: CLI,
+      at: "2026-10-28T10:00:00.000Z",
+      delivery: 1,
+    });
+  }
+
+  it("needs exactly one of --follow and --once", async () => {
+    const neither = await runCli(["inbox"], tmuxEnv());
+    assert.equal(neither.code, 1);
+    assert.match(neither.stderr, /--follow/);
+    assert.match(neither.stderr, /--once/);
+    assert.equal(neither.stdout, "");
+
+    const both = await runCli(["inbox", "--follow", "--once"], tmuxEnv());
+    assert.equal(both.code, 1);
+    assert.match(both.stderr, /--follow/);
+    assert.match(both.stderr, /--once/);
+    assert.equal(both.stdout, "");
+  });
+
+  it("names --parent when there is no pane to follow", async () => {
+    const res = await runCli(["inbox", "--once"], {
+      PATH: process.env.PATH,
+      TMUX: "/tmp/tmux-0/default",
+    });
+    assert.equal(res.code, 1);
+    assert.match(res.stderr, /--parent/);
+    assert.equal(res.stdout, "");
+  });
+
+  it("--once prints the pending entries and writes no marker", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = inboxEnv(dir);
+      const inbox = inboxDirPath({ env, targetPane: "%21" })!;
+      const id = "aa".repeat(16);
+      pendingEntry(inbox, dir, id);
+      const res = await runCli(["inbox", "--once"], env);
+      assert.equal(res.code, 0);
+      const lines = res.stdout.trimEnd().split("\n");
+      assert.equal(lines.length, 1);
+      assert.ok(lines[0]!.startsWith(`pmux report ${id} from worker-a (delivery 1).`));
+      assert.equal(existsSync(join(inbox, INBOX_MARKER)), false);
+    });
+  });
+
+  it("--follow prints the backlog, refuses a second follower and stops on SIGTERM", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = inboxEnv(dir);
+      const inbox = inboxDirPath({ env, targetPane: "%21" })!;
+      pendingEntry(inbox, dir, "aa".repeat(16));
+      const stdout: string[] = [];
+      const first = main(["inbox", "--follow"], {
+        env,
+        stdout: (text) => stdout.push(text),
+        stderr: () => {},
+        sleep: async () => {},
+      });
+      try {
+        await waitForFile(join(inbox, INBOX_MARKER));
+        const marker = JSON.parse(readFileSync(join(inbox, INBOX_MARKER), "utf8")) as {
+          pid: number;
+        };
+        assert.equal(marker.pid, process.pid);
+
+        const second = await runCli(["inbox", "--follow"], env);
+        assert.equal(second.code, 1);
+        assert.match(second.stderr, new RegExp(`pid ${process.pid}`));
+      } finally {
+        // Stop the follower even when an assertion failed, so the run ends.
+        process.emit("SIGTERM");
+      }
+      assert.equal(await first, 0);
+      assert.equal(existsSync(join(inbox, INBOX_MARKER)), false);
+      assert.equal(stdout.join("").trimEnd().split("\n").length, 1);
+    });
+  });
+});
+
+describe("cli.ts ack retires the inbox entry", () => {
+  it("removes the entry the report's registration names", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "run") });
+      const sessionFile = join(dir, "s.jsonl");
+      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      const inbox = inboxDirPath({ env, targetPane: "%3" })!;
+      writeInboxEntry(inbox, {
+        v: 1,
+        id: report.id,
+        from: "worker-a",
+        session: sessionFile,
+        report: report.reportPath,
+        cli: CLI,
+        at: "2026-10-28T10:00:00.000Z",
+        delivery: 1,
+      });
+      const res = await runCli(["ack", "--session", sessionFile, "--id", report.id], env);
+      assert.equal(res.code, 0);
+      assert.equal(existsSync(join(inbox, `${report.id}.json`)), false);
+    });
+  });
+
+  it("exits 0 when there is no entry to remove", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "run") });
+      const sessionFile = join(dir, "s.jsonl");
+      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      const res = await runCli(["ack", "--session", sessionFile, "--id", report.id], env);
+      assert.equal(res.code, 0);
+    });
+  });
+
+  it("exits 0 when the entry cannot be removed", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "run") });
+      const sessionFile = join(dir, "s.jsonl");
+      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      // A non-empty directory where the entry file should be cannot be unlinked.
+      const blocked = join(inboxDirPath({ env, targetPane: "%3" })!, `${report.id}.json`);
+      mkdirSync(blocked, { recursive: true });
+      writeFileSync(join(blocked, "held"), "");
+      const res = await runCli(["ack", "--session", sessionFile, "--id", report.id], env);
+      assert.equal(res.code, 0);
+      assert.equal(JSON.parse(res.stdout).acked, true);
+    });
+  });
+});
+
+describe("cli.ts send through the parent's inbox", () => {
+  it("is carried by a live monitor and types nothing into the pane", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = tmuxEnv({
+        XDG_RUNTIME_DIR: join(dir, "run"),
+        PI_PMUX_SESSION: join(dir, "w.jsonl"),
+        PI_PMUX_REPORT_PROTOCOL: "file-ack-v1",
+        PI_PMUX_NAME: "worker-a",
+      });
+      const inbox = inboxDirPath({ env, targetPane: "%3" })!;
+      writeMonitorMarker(inbox, process.pid);
+      const res = await runCli(
+        ["send", "--to", "%3", "--text", "worker done", "--ack-timeout", "0"],
+        env,
+      );
+      assert.equal(res.code, 0);
+      const line = JSON.parse(res.stdout);
+      assert.equal(line.via, "inbox");
+      assert.equal(line.notification, "submitted");
+      assert.equal(line.acknowledged, false);
+      assert.equal(line.inboxError, undefined);
+      assert.equal(
+        paneCalls.some((call) => call.includes("send-keys")),
+        false,
+      );
+      const entry = JSON.parse(readFileSync(join(inbox, `${line.id}.json`), "utf8"));
+      assert.equal(entry.from, "worker-a");
+    });
+  });
+});
+
+describe("cli.ts prune sweeps the inboxes", () => {
+  it("reports the inbox counts and removes a stale entry and its emptied inbox", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = tmuxEnv({
+        XDG_RUNTIME_DIR: join(dir, "run"),
+        PI_PMUX_SENTINEL_DIR: join(dir, "sentinels"),
+      });
+      mkdirSync(join(dir, "sentinels"));
+      const scratch = join(dir, "scratch");
+      mkdirSync(scratch);
+      const inbox = inboxDirPath({ env, targetPane: "%3" })!;
+      const id = "aa".repeat(16);
+      const session = join(dir, "w.jsonl");
+      writeInboxEntry(inbox, {
+        v: 1,
+        id,
+        from: "worker-a",
+        session,
+        report: reportArtifactPath(session, id),
+        cli: CLI,
+        at: "2026-10-28T10:00:00.000Z",
+        delivery: 1,
+      });
+      const old = new Date(Date.now() - 3 * 86_400_000);
+      utimesSync(join(inbox, `${id}.json`), old, old);
+
+      const res = await runCli(["prune", "--scratch", scratch, "--max-age-days", "1"], env);
+      assert.equal(res.code, 0);
+      const counts = JSON.parse(res.stdout);
+      assert.equal(counts.inboxScanned, 1);
+      assert.equal(counts.inboxEntriesDeleted, 1);
+      assert.equal(counts.inboxDirsDeleted, 1);
+      assert.equal(existsSync(inbox), false);
     });
   });
 });

@@ -7,7 +7,9 @@
  * any pane input (`registerReport`); both `send` and the run wrapper's
  * no-report wake-up start there. The transport is `submitReportPointer`: a
  * fresh pointer is built for the attempt (same report ID, fresh visibility
- * token), offered to the parent's channel endpoint first (design D3), and —
+ * token). A live parent inbox takes it first (report-inbox D4) and nothing
+ * else runs; otherwise it is offered to the parent's channel endpoint (design
+ * D3), and —
  * when the channel is `unavailable`, whatever the reason — submitted through
  * `verifiedAgentPrompt` as the fallback. A `notification` event is recorded —
  * best effort — after a submission through either transport, naming the
@@ -22,6 +24,8 @@ import { encodePaneText } from "./pane-input.ts";
 import { buildReportPointer, writeReportArtifact } from "./report-artifact.ts";
 import { submitChannel, type ChannelSubmitResult } from "./channel-endpoint.ts";
 import { type ChannelUnavailableReason } from "./channel-reason.ts";
+import { type InboxUnavailableReason } from "./inbox-reason.ts";
+import { submitInboxEntry } from "./report-inbox.ts";
 import { defaultSleep } from "./sleep.ts";
 import {
   appendReportNotification,
@@ -113,6 +117,8 @@ export interface SubmitPointerArgs {
   bytes: number;
   /** The package's `cli.ts` path, for the pointer's `ack` command. */
   cliPath: string;
+  /** The sending child's launch name; the inbox entry names it. */
+  from: string;
 }
 
 /**
@@ -138,21 +144,34 @@ export type PointerSubmitResult = Pick<
    * verified input ran (design D3, D5).
    */
   channelError?: ChannelUnavailableReason;
+  /**
+   * Why the inbox was unavailable. Present on every result that did not go
+   * through the inbox (report-inbox D4), as `channelError` is on the channel
+   * fallbacks.
+   */
+  inboxError?: InboxUnavailableReason;
 };
 
 /**
  * The transport fields a result and its `notification` record share, read
  * from the channel outcome: the channel transport on `emitted`, otherwise
- * the verified input plus the channel's reason (design D3, D5).
+ * the verified input plus the channel's reason (design D3, D5). The inbox's
+ * reason rides along whenever the inbox did not carry the pointer.
  */
-function transportFields(channel: ChannelSubmitResult): {
+function transportFields(
+  channel: ChannelSubmitResult,
+  inboxError: InboxUnavailableReason | undefined,
+): {
   via: ReportVia;
   channelError?: ChannelUnavailableReason;
+  inboxError?: InboxUnavailableReason;
 } {
-  if (channel.status === "emitted") return { via: "channel" };
+  const inbox = inboxError !== undefined ? { inboxError } : {};
+  if (channel.status === "emitted") return { via: "channel", ...inbox };
   return {
     via: "tmux",
     ...(channel.reason !== undefined ? { channelError: channel.reason } : {}),
+    ...inbox,
   };
 }
 
@@ -182,6 +201,40 @@ export async function submitReportPointer(
     sessionFile: args.sessionFile,
     cliPath: args.cliPath,
   });
+  // The inbox goes first (report-inbox D4). A live monitor takes the entry
+  // and nothing else runs: no channel request and no pane input. Otherwise
+  // the reason is kept for the fields below and the channel-first chain runs.
+  const inbox = submitInboxEntry({
+    env: deps.env ?? process.env,
+    to: args.to,
+    fields: {
+      id: args.id,
+      from: args.from,
+      session: args.sessionFile,
+      report: args.reportPath,
+      cli: args.cliPath,
+    },
+  });
+  if (inbox.status === "delivered") {
+    const notificationRecorded = appendReportNotification(args.sessionFile, {
+      id: args.id,
+      token: pointer.token,
+      to: args.to,
+      bytes: args.bytes,
+      report: args.reportPath,
+      via: "inbox",
+    });
+    return {
+      status: "submitted",
+      submitted: true,
+      // The entry is the submission: no Enter keypress was attempted.
+      enterAttempted: false,
+      token: pointer.token,
+      notificationRecorded,
+      via: "inbox",
+    };
+  }
+  const inboxError = inbox.reason;
   // The pointer is already one line; the encoding is the same rule `send`
   // applies to any text it types, kept in one place. The channel request
   // carries the exact text the verified input would type (design D4), so
@@ -199,7 +252,7 @@ export async function submitReportPointer(
     env: deps.env ?? process.env,
   });
   if (channel.status === "emitted") {
-    const transport = transportFields(channel);
+    const transport = transportFields(channel, inboxError);
     const notificationRecorded = appendReportNotification(args.sessionFile, {
       id: args.id,
       token: pointer.token,
@@ -229,7 +282,7 @@ export async function submitReportPointer(
       enterAttempted: result.enterAttempted,
       token: pointer.token,
       notificationRecorded: false,
-      ...transportFields(channel),
+      ...transportFields(channel, inboxError),
       ...(result.error !== undefined ? { error: result.error } : {}),
     };
   }
@@ -239,7 +292,7 @@ export async function submitReportPointer(
     to: args.to,
     bytes: args.bytes,
     report: args.reportPath,
-    ...transportFields(channel),
+    ...transportFields(channel, inboxError),
   });
   return {
     status: "submitted",
@@ -247,7 +300,7 @@ export async function submitReportPointer(
     enterAttempted: true,
     token: pointer.token,
     notificationRecorded,
-    ...transportFields(channel),
+    ...transportFields(channel, inboxError),
   };
 }
 

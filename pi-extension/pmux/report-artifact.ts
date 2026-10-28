@@ -79,7 +79,7 @@ export function writeReportArtifact(sessionFile: string, body: string): ReportAr
 }
 
 /** Quote one path for the shell command embedded in a pointer. */
-function shellQuote(value: string): string {
+export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 

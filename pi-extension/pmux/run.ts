@@ -272,6 +272,7 @@ async function contactParent(args: {
           reportPath: toDeliver.reportPath,
           bytes: toDeliver.bytes,
           cliPath: context.cliPath,
+          from: context.name,
         });
         if (!result.submitted) fail(result.error ?? result.status);
       } else if (row.kind === "wake") {

@@ -205,9 +205,11 @@ into your pane.
    and the child's pane id, which matters only while the child is alive,
    because a `done` child closes its own pane after the close grace.
 3. End the turn. A report arrives as one new prompt line — the pointer
-the child's `send` command delivered to your pane, typed in as input or
-emitted as a channel event when the channel transport is armed (see
-[Channel wake-up](#channel-wake-up)). It carries no report body,
+the child's `send` command delivered to your pane. Your inbox monitor
+prints it (see [Inbox monitor](#inbox-monitor)). Without a running monitor
+it is typed in as input, or emitted as a channel event when the legacy
+channel is armed (see [Channel wake-up (legacy fallback)](#channel-wake-up-legacy-fallback)).
+It carries no report body,
    only the report ID, the path of the report file, the `ack` command and a
    visibility-token tail:
    ```text
@@ -217,8 +219,8 @@ emitted as a channel event when the channel transport is armed (see
    not before, because an unacknowledged report is the one the wrapper
    re-delivers. A repeat delivery keeps the same report ID and mints a fresh
    token, so dedup pointers by the report ID and ignore a pointer you have
-   already handled. Never touch the report files or the `<session>.sent`
-   event log yourself. Do NOT sit in a polling loop instead of ending your
+   already handled. Never touch the report files, the `<session>.sent`
+   event log or the inbox entries yourself. Do NOT sit in a polling loop instead of ending your
    turn; the wake-up is the message, not the file.
 4. When you are awake again (the report arrived, or you want the child's
    final state), wait for the sidecar and read the JSON the wait prints:
@@ -291,7 +293,42 @@ in a **new** pane — the `resume` command is in
 re-appends the send footer, so the resumed child still knows how to reach
 you.
 
-### Channel wake-up
+### Inbox monitor
+
+Start the inbox monitor once per session, before the first send-mode child.
+It lets a report reach you while you are idle, with no terminal input and
+no channel. Start it with the `Monitor` tool:
+
+```text
+Monitor(
+  description: "pmux inbox: report pointers for this pane",
+  timeout_ms: 1800000,
+  command: "node <skill-dir>/launch.ts inbox --follow"
+)
+```
+
+The monitor prints one line for each report owed to your pane: the backlog
+first, then each new report and each re-delivery. Act on each line exactly
+as you act on a typed pointer: read the named report file, run the `ack`
+command the line names, and dedup by report ID. A repeated line with a higher
+`delivery` count is the same report sent again, not a new one.
+
+While the monitor runs, no pointer is typed into your pane and no channel is
+used. Without a running monitor, the typed-pointer and channel fallbacks
+apply as before.
+
+This build has no `persistent` option, and a monitor stops at its
+`timeout_ms`, which is 30 minutes at most. Start it again when the `Monitor`
+reports that it expired, at the start of each new session, after
+`claude --resume`, and after `/clear`. A second `inbox --follow` on the same
+pane exits 1, because one is already running. Never edit the inbox entries,
+the report files or the `<session>.sent` log yourself.
+
+### Channel wake-up (legacy fallback)
+
+The inbox monitor supersedes this channel. New setups must not pass
+`--dangerously-load-development-channels` for pmux. Keep this section only
+for a setup that already runs it.
 
 When your pane runs Claude Code, the pointer can reach you without any
 terminal input. Start Claude with the development channels flag:
@@ -323,11 +360,12 @@ before. A missing or late `ack` never triggers that fallback: a busy
 parent is not a transport failure, the pointer has been delivered, and
 you dedup by report ID and acknowledge it when you wake.
 
-The `send` result line names the transport it used — `via` is
-`"channel"` or `"tmux"`, and after a fallback `channelError` names why
-— and the `<session>.sent` `notification` record carries the same
-fields. The wrapper's exit re-delivery of an unacknowledged report
-makes the same channel-first choice with a fresh token.
+The `send` result line names the transport it used — `via` is `"inbox"`,
+`"channel"` or `"tmux"`. After a fallback, `inboxError` and `channelError`
+name why each transport did not carry the pointer. The `<session>.sent`
+`notification` record carries the same fields. The wrapper's exit
+re-delivery of an unacknowledged report makes the same choice with a fresh
+token: the inbox first, then the channel, then the typed pointer.
 
 ## While it runs / after
 

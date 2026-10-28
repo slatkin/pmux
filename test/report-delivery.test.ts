@@ -27,6 +27,7 @@ import {
   VISIBILITY_TOKEN_PREFIX,
 } from "../pi-extension/pmux/report-artifact.ts";
 import { appendReportAck, readReportLog } from "../pi-extension/pmux/report-receipt.ts";
+import { inboxDirPath, writeMonitorMarker } from "../pi-extension/pmux/report-inbox.ts";
 import type { VerifiedPromptResult } from "../pi-extension/pmux/tmux.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
 
@@ -76,6 +77,7 @@ function submitArgs(sessionFile: string) {
     reportPath: reportArtifactPath(sessionFile, ID),
     bytes: 7,
     cliPath: CLI,
+    from: "worker",
   };
 }
 
@@ -148,8 +150,9 @@ describe("submitReportPointer", () => {
 
       const state = readReportLog(sessionFile);
       assert.equal(state.notifications.length, 1);
-      // No injected endpoint: the fallback ran, so the record names the
-      // transport and the channel's reason (design D5).
+      // No injected endpoint and no inbox: the fallback ran, so the record
+      // names the transport, the channel's reason (design D5) and the
+      // inbox's reason (report-inbox D4).
       assert.deepEqual(state.notifications[0], {
         id: ID,
         token: result.token,
@@ -158,6 +161,7 @@ describe("submitReportPointer", () => {
         report: reportArtifactPath(sessionFile, ID),
         via: "tmux",
         channelError: "no-endpoint",
+        inboxError: "no-inbox",
         at: state.notifications[0]!.at,
       });
     });
@@ -504,6 +508,121 @@ describe("reportAcknowledged", () => {
       appendReportAck(sessionFile, ID);
       assert.equal(reportAcknowledged(sessionFile, ID), true);
       assert.equal(reportAcknowledged(sessionFile, "bb".repeat(16)), false);
+    });
+  });
+});
+
+describe("submitReportPointer through the inbox", () => {
+  /** The inbox env: a TMUX socket and a runtime dir inside `dir`. */
+  function inboxEnv(dir: string): NodeJS.ProcessEnv {
+    return { TMUX: "/tmp/tmux-1000/default,1,0", XDG_RUNTIME_DIR: join(dir, "run") };
+  }
+
+  it("is carried by a live monitor, with no channel request and no pane input", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = inboxEnv(dir);
+      writeMonitorMarker(inboxDirPath({ env, targetPane: "%12" })!, process.pid);
+      const sessionFile = join(dir, "s.jsonl");
+      const { submit, calls } = fakeSubmit({ status: "submitted" });
+      const { submitChannel, calls: channelCalls } = fakeChannel({ status: "emitted" });
+      const result = await submitReportPointer(submitArgs(sessionFile), {
+        submit,
+        submitChannel,
+        env,
+      });
+
+      assert.equal(result.via, "inbox");
+      assert.equal(result.submitted, true);
+      assert.equal(result.enterAttempted, false);
+      assert.equal(result.notificationRecorded, true);
+      assert.equal(result.inboxError, undefined);
+      assert.equal(calls.length, 0);
+      assert.equal(channelCalls.length, 0);
+
+      const notification = readReportLog(sessionFile).notifications[0]!;
+      assert.equal(notification.via, "inbox");
+      assert.equal(notification.inboxError, undefined);
+      const entry = JSON.parse(
+        readFileSync(join(inboxDirPath({ env, targetPane: "%12" })!, `${ID}.json`), "utf8"),
+      );
+      assert.equal(entry.from, "worker");
+      assert.equal(entry.report, reportArtifactPath(sessionFile, ID));
+      assert.equal(entry.delivery, 1);
+    });
+  });
+
+  it("falls back to the channel with unmonitored as the inbox reason", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const { submit, calls } = fakeSubmit({ status: "submitted" });
+      const { submitChannel, calls: channelCalls } = fakeChannel({ status: "emitted" });
+      const result = await submitReportPointer(submitArgs(sessionFile), {
+        submit,
+        submitChannel,
+        env: inboxEnv(dir),
+      });
+
+      assert.equal(result.via, "channel");
+      assert.equal(result.inboxError, "unmonitored");
+      assert.equal(calls.length, 0);
+      assert.equal(channelCalls.length, 1);
+      assert.equal(readReportLog(sessionFile).notifications[0]!.inboxError, "unmonitored");
+    });
+  });
+
+  it("falls back to the pane input with write-failed when the entry cannot be written", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = inboxEnv(dir);
+      const inbox = inboxDirPath({ env, targetPane: "%12" })!;
+      writeMonitorMarker(inbox, process.pid);
+      // A directory where the entry should go makes the rename fail.
+      mkdirSync(join(inbox, `${ID}.json`), { recursive: true });
+      const sessionFile = join(dir, "s.jsonl");
+      const { submit, calls } = fakeSubmit({ status: "submitted" });
+      const { submitChannel } = fakeChannel({ status: "unavailable", reason: "refused" });
+      const result = await submitReportPointer(submitArgs(sessionFile), {
+        submit,
+        submitChannel,
+        env,
+      });
+
+      assert.equal(result.via, "tmux");
+      assert.equal(result.inboxError, "write-failed");
+      assert.equal(result.channelError, "refused");
+      assert.equal(calls.length, 1);
+    });
+  });
+
+  it("never falls back on a missing ack: one entry, no second submission", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = inboxEnv(dir);
+      writeMonitorMarker(inboxDirPath({ env, targetPane: "%12" })!, process.pid);
+      const sessionFile = join(dir, "s.jsonl");
+      const { submit, calls } = fakeSubmit({ status: "submitted" });
+      const delivery = await deliverReport(
+        { ...submitArgs(sessionFile), ackTimeoutSeconds: 0 },
+        { submit, env, submitChannel: fakeChannel({ status: "emitted" }).submitChannel },
+      );
+
+      assert.equal(delivery.submitted, true);
+      assert.equal(delivery.via, "inbox");
+      assert.equal(delivery.acknowledged, false);
+      assert.equal(calls.length, 0);
+    });
+  });
+
+  it("counts a re-delivery up in the entry's delivery field", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = inboxEnv(dir);
+      const inbox = inboxDirPath({ env, targetPane: "%12" })!;
+      writeMonitorMarker(inbox, process.pid);
+      const sessionFile = join(dir, "s.jsonl");
+      await submitReportPointer(submitArgs(sessionFile), { env });
+      await submitReportPointer(submitArgs(sessionFile), { env });
+
+      const entry = JSON.parse(readFileSync(join(inbox, `${ID}.json`), "utf8"));
+      assert.equal(entry.delivery, 2);
+      assert.equal(readReportLog(sessionFile).notifications.length, 2);
     });
   });
 });

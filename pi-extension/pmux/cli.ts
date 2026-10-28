@@ -42,9 +42,25 @@ import {
   reportAcknowledged,
   type RegisteredReportFile,
 } from "./report-delivery.ts";
-import { appendReportAck, appendReportReceipt, reportReceiptPath } from "./report-receipt.ts";
+import {
+  appendReportAck,
+  appendReportReceipt,
+  readReportLog,
+  reportReceiptPath,
+} from "./report-receipt.ts";
+import {
+  followInbox,
+  inboxDirPath,
+  liveMonitorPid,
+  printPendingEntries,
+  pruneInboxes,
+  removeInboxEntry,
+  removeMonitorMarker,
+  writeMonitorMarker,
+} from "./report-inbox.ts";
 import { submitChannel } from "./channel-endpoint.ts";
 import { type ChannelUnavailableReason } from "./channel-reason.ts";
+import { type InboxUnavailableReason } from "./inbox-reason.ts";
 import { isReportId, reportArtifactPath } from "./report-artifact.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
@@ -90,6 +106,7 @@ const USAGE = [
   "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--report last|send] [--fallback]",
   "  node cli.ts send --to <pane> --text <text> [--ack-timeout <seconds>]",
   "  node cli.ts ack --session <file> --id <id>",
+  "  node cli.ts inbox (--follow | --once) [--parent <pane>]",
   "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>]",
   "  node cli.ts run <spec> [<prompt>]",
   "  node cli.ts last-message --session <file>",
@@ -119,6 +136,8 @@ const CLI_OPTIONS = {
   timeout: { type: "string" },
   "max-age-days": { type: "string" },
   "dry-run": { type: "boolean" },
+  follow: { type: "boolean" },
+  once: { type: "boolean" },
   help: { type: "boolean", short: "h" },
 } as const;
 
@@ -144,6 +163,8 @@ interface CliValues {
   timeout?: string;
   "max-age-days"?: string;
   "dry-run"?: boolean;
+  follow?: boolean;
+  once?: boolean;
   help?: boolean;
 }
 
@@ -480,6 +501,7 @@ function pruneCommand(values: CliValues, deps: CliDeps): number {
     maxAgeMs: 86_400_000,
     dryRun,
   });
+  const inboxes = pruneInboxes({ env: deps.env ?? process.env, maxAgeMs, dryRun });
   write(
     JSON.stringify({
       scratch,
@@ -490,6 +512,9 @@ function pruneCommand(values: CliValues, deps: CliDeps): number {
       deletedBytes: files.deletedBytes,
       sentinelScanned: sentinels.scanned,
       sentinelDeleted: sentinels.deleted,
+      inboxScanned: inboxes.inboxes,
+      inboxEntriesDeleted: inboxes.entriesDeleted,
+      inboxDirsDeleted: inboxes.dirsDeleted,
     }) + "\n",
   );
   return 0;
@@ -552,6 +577,8 @@ interface SendRefusalFields {
   receipt: string;
   /** Why the channel fell back; a refusal only ever follows a fallback. */
   channelError?: ChannelUnavailableReason;
+  /** Why the inbox was unavailable; a refusal always follows that check. */
+  inboxError?: InboxUnavailableReason;
 }
 
 /** Print the structured failure line of a refused send; the caller exits 2. */
@@ -569,6 +596,7 @@ function writeSendRefusalLine(write: (text: string) => void, fields: SendRefusal
       notificationRecorded: false,
       ...(fields.error !== undefined ? { error: fields.error } : {}),
       ...(fields.channelError !== undefined ? { channelError: fields.channelError } : {}),
+      ...(fields.inboxError !== undefined ? { inboxError: fields.inboxError } : {}),
       enterAttempted: fields.enterAttempted,
     }) + "\n",
   );
@@ -628,6 +656,7 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
         bytes: registered.bytes,
         cliPath: CLI_PATH,
         ackTimeoutSeconds,
+        from: env.PI_PMUX_NAME ?? "unnamed",
       },
       {
         ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
@@ -651,6 +680,7 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
           notificationRecorded: delivery.notificationRecorded,
           via: delivery.via,
           ...(delivery.channelError !== undefined ? { channelError: delivery.channelError } : {}),
+          ...(delivery.inboxError !== undefined ? { inboxError: delivery.inboxError } : {}),
         }) + "\n",
       );
       return 0;
@@ -661,6 +691,7 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
       enterAttempted: delivery.enterAttempted,
       error: delivery.error,
       ...(delivery.channelError !== undefined ? { channelError: delivery.channelError } : {}),
+      ...(delivery.inboxError !== undefined ? { inboxError: delivery.inboxError } : {}),
       id: registered.id,
       to,
       bytes: registered.bytes,
@@ -743,6 +774,24 @@ function usageFailure(error: unknown, writeErr: (text: string) => void): number 
 }
 
 /**
+ * Retire the acknowledged report's inbox entry (report-inbox, "Entry
+ * lifecycle"). The entry lives in the inbox of the pane the report went to,
+ * which the report's registration names. A missing entry or a failed removal
+ * is not an error: the reader's own sweep retires what this leaves behind.
+ */
+function retireInboxEntry(env: NodeJS.ProcessEnv, sessionFile: string, id: string): void {
+  const to = readReportLog(sessionFile).reports.find((report) => report.id === id)?.to;
+  if (to === undefined) return;
+  const dir = inboxDirPath({ env, targetPane: to });
+  if (dir === null) return;
+  try {
+    removeInboxEntry(dir, id);
+  } catch {
+    // The reader's sweep retires it.
+  }
+}
+
+/**
  * `ack`: append the read receipt for one report (design D7). The ID must be
  * well formed and its report file must exist; a repeat ack appends nothing
  * and reports `alreadyAcknowledged:true`. Unlike the notification
@@ -767,6 +816,7 @@ function ackCommand(values: CliValues, deps: CliDeps): number {
         `could not append the ack record to ${reportReceiptPath(session)}`,
       );
     }
+    retireInboxEntry(deps.env ?? process.env, session, id);
     write(
       JSON.stringify({
         acked: true,
@@ -782,6 +832,52 @@ function ackCommand(values: CliValues, deps: CliDeps): number {
       writeErr(`cli.ts: ${error.message}\n`);
       return 2;
     }
+    return usageFailure(error, writeErr);
+  }
+}
+
+/**
+ * `inbox`: the parent's report monitor (report-inbox, "Inbox follow command").
+ * `--once` prints the pending entries and exits 0 with no marker. `--follow`
+ * writes the live marker, prints the backlog and every new or re-delivered
+ * entry, and runs until SIGINT or SIGTERM, when it removes its marker and exits
+ * 0. A second follower on a live inbox exits 1 and names the live pid.
+ */
+async function inboxCommand(values: CliValues, deps: CliDeps): Promise<number> {
+  const env = deps.env ?? process.env;
+  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  try {
+    if ((values.follow === true) === (values.once === true)) {
+      throw new Error("inbox needs exactly one of --follow or --once");
+    }
+    const parent = values.parent ?? env.TMUX_PANE;
+    if (!parent) throw new Error("missing --parent: TMUX_PANE is unset, so no pane to follow");
+    const dir = inboxDirPath({ env, targetPane: parent });
+    if (dir === null) throw new Error("no inbox: TMUX is unset");
+    const print = (line: string): void => write(`${line}\n`);
+    if (values.once === true) {
+      printPendingEntries(dir, new Map(), print);
+      return 0;
+    }
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const live = liveMonitorPid(dir);
+    if (live !== null) throw new Error(`an inbox monitor is already running (pid ${live})`);
+    writeMonitorMarker(dir, process.pid);
+    const follower = followInbox({ dir, write: print });
+    await new Promise<void>((done) => {
+      const stop = (): void => {
+        follower.stop();
+        removeMonitorMarker(dir, process.pid);
+        process.off("SIGINT", stop);
+        process.off("SIGTERM", stop);
+        done();
+      };
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+    });
+    return 0;
+  } catch (error) {
     return usageFailure(error, writeErr);
   }
 }
@@ -1022,6 +1118,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   if (command === "run") return runCommand(positionals.slice(1), deps);
   if (command === "send") return sendCommand(values as CliValues, deps);
   if (command === "ack") return ackCommand(values as CliValues, deps);
+  if (command === "inbox") return inboxCommand(values as CliValues, deps);
   if (command === "last-message") return lastMessageCommand(values as CliValues, deps);
   if (command === "wait") return await waitCommand(values as CliValues, deps);
   if (command === "prune") return pruneCommand(values as CliValues, deps);

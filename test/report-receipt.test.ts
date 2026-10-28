@@ -4,7 +4,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   appendReportAck,
@@ -273,6 +273,34 @@ describe("readReportLog", () => {
       const sessionFile = join(dir, "s.jsonl");
       writeFileSync(reportReceiptPath(sessionFile), `{"bytes":3}\n{"to":42}\n`);
       assert.deepEqual(readReportLog(sessionFile).notifications, []);
+    });
+  });
+});
+
+describe("readReportLog inbox fields", () => {
+  it("reads the inbox transport and its reason, and an unknown transport as tmux", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const common = { token: TOKEN, to: "%12", bytes: 4, report: "/r" };
+      appendReportNotification(sessionFile, { id: ID_A, ...common, via: "inbox" });
+      appendReportNotification(sessionFile, {
+        id: ID_B,
+        ...common,
+        via: "tmux",
+        inboxError: "unmonitored",
+      });
+      appendFileSync(
+        reportReceiptPath(sessionFile),
+        `${JSON.stringify({ kind: "notification", id: ID_A, ...common, via: "bogus" })}\n`,
+      );
+
+      const state = readReportLog(sessionFile);
+      assert.deepEqual(
+        state.notifications.map((notification) => notification.via),
+        ["inbox", "tmux", "tmux"],
+      );
+      assert.equal(state.notifications[1]!.inboxError, "unmonitored");
+      assert.equal(state.notifications[0]!.inboxError, undefined);
     });
   });
 });
