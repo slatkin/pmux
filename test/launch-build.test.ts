@@ -361,7 +361,7 @@ describe("pi parent contact (design D3)", () => {
         artifact.content,
         "\n\nYou are a worker.\n\n" +
           "Complete your task autonomously, then call pmux_done.\n\n" +
-          "You can message `parent`, `Reviewer` with pmux_message; it does not end your session.\n\n" +
+          "You can message `parent`, `Reviewer` with pmux_message; it does not end your session. A tmux pane outside this list works too — by %N, session:window.pane, or exact title — but a shell pane is refused.\n\n" +
           `${TASK}\n\n` +
           "Your FINAL assistant message should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one.",
       );
@@ -387,7 +387,7 @@ describe("pi parent contact (design D3)", () => {
         taskArtifact(spec).content,
         "\n\nYou are a worker.\n\n" +
           "Complete your task, then call the pmux_done tool. The user can interact with you at any time.\n\n" +
-          "You can message `parent`, `Reviewer` with pmux_message; it does not end your session.\n\n" +
+          "You can message `parent`, `Reviewer` with pmux_message; it does not end your session. A tmux pane outside this list works too — by %N, session:window.pane, or exact title — but a shell pane is refused.\n\n" +
           `${TASK}\n\n` +
           "Your FINAL assistant message should summarize what you accomplished. Put the verdict or outcome first. Keep it short: results and findings, not your process. Follow your role's report format if it sets one.",
       );
@@ -411,7 +411,7 @@ describe("pi parent contact (design D3)", () => {
       assert.match(artifact.path, /\/pmux-resume\//);
       assert.equal(
         artifact.content,
-        "You can message `parent`, `Reviewer` with pmux_message; it does not end your session.\n\n" +
+        "You can message `parent`, `Reviewer` with pmux_message; it does not end your session. A tmux pane outside this list works too — by %N, session:window.pane, or exact title — but a shell pane is refused.\n\n" +
           MESSAGE,
       );
       assert.equal(spec.env.PI_PMUX_SURFACE, "%24");

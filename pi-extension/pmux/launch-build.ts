@@ -386,7 +386,11 @@ export function buildSubagentTaskPrompt(params: {
 export function buildLaunchMessagingHint(siblingNames: string[]): string {
   const names = [...new Set(["parent", ...siblingNames])];
   const list = names.map((name) => `\`${name}\``).join(", ");
-  return `You can message ${list} with pmux_message; it does not end your session.`;
+  return (
+    `You can message ${list} with pmux_message; it does not end your session. ` +
+    "A tmux pane outside this list works too — by %N, session:window.pane, or " +
+    "exact title — but a shell pane is refused."
+  );
 }
 
 /** Task hint shown to the child: auto-exit agents are now told to exit explicitly too. */

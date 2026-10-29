@@ -12,6 +12,7 @@ import { readdirSync, readFileSync, appendFileSync, existsSync } from "node:fs";
 import {
   isTmuxAvailable,
   tmuxSetupHint,
+  callerPaneId,
   createSurface,
   pollForExit,
   closeSurface,
@@ -19,7 +20,9 @@ import {
   readScreen,
   runInPane,
   agentPrompt,
+  listPaneTargets,
   readWindowOptions,
+  type PaneTargetRow,
 } from "./tmux.ts";
 import { parseSurfaceDefault, type SurfaceDefault } from "./placement.ts";
 import {
@@ -222,7 +225,7 @@ export const __surfaceTest__ = {
 // `parent` is not: a child appends JSON lines to `<session>.msg`, and the
 // parent's existing poll loop injects them as steering messages.
 
-export type SubagentRelation = "parent" | "child" | "sibling";
+export type SubagentRelation = "parent" | "child" | "sibling" | "pane";
 
 export interface MessageTarget {
   relation: SubagentRelation;
@@ -249,10 +252,138 @@ function reachableTargetNames(params: {
   return [...new Set(names)];
 }
 
+/** The outcome of matching `to` against the server pane listing. */
+type PaneResolution = { target: PaneTargetRow } | { error: string } | { none: true };
+
+/** `session:window.pane` labels for ambiguity errors, e.g. `%3 (work:0.1)`. */
+function paneMatchLabels(rows: PaneTargetRow[]): string {
+  return rows
+    .map((row) => `${row.paneId} (${row.sessionName}:${row.windowIndex}.${row.paneIndex})`)
+    .join(", ");
+}
+
+/** Active pane of the matched windows, or an ambiguity error. */
+function activePaneResult(to: string, windowRows: PaneTargetRow[]): PaneResolution | null {
+  const active = windowRows.filter((row) => row.active);
+  if (active.length === 1) return { target: active[0] };
+  if (active.length > 1) {
+    return {
+      error: `Ambiguous pane target "${to}". Matches: ${paneMatchLabels(active)}.`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Match tmux target syntax against the listing: `sess:win.pane`, `sess:win`,
+ * `sess:`, `win.pane`, `win`, `.pane`, `@N` window id, or a bare token.
+ * Session-less forms anchor on the caller pane's session and window, never
+ * the server's current window. Returns null when `to` matches no window or
+ * pane, so the caller can fall through to pane-title matching.
+ */
+function matchTargetSyntax(
+  to: string,
+  panes: PaneTargetRow[],
+  callerRow: PaneTargetRow | undefined,
+): PaneResolution | null {
+  const colon = to.indexOf(":");
+  const sessPart = colon >= 0 ? to.slice(0, colon) : "";
+  const rest = colon >= 0 ? to.slice(colon + 1) : to;
+
+  let sessionRows = panes;
+  if (sessPart) {
+    sessionRows = panes.filter((row) => row.sessionName === sessPart || row.sessionId === sessPart);
+  } else if (callerRow) {
+    sessionRows = panes.filter((row) => row.sessionId === callerRow.sessionId);
+  }
+
+  // `@N` addresses a window by id; its active pane is the target.
+  if (rest.startsWith("@")) {
+    const winRows = sessionRows.filter((row) => row.windowId === rest);
+    return winRows.length ? activePaneResult(to, winRows) : null;
+  }
+
+  const dot = rest.indexOf(".");
+
+  // A bare token is a pane index in the caller's window first, then a window
+  // index, id or name in the anchored session (its active pane is the target).
+  if (colon < 0 && dot < 0) {
+    if (callerRow) {
+      const paneHit = sessionRows.filter(
+        (row) => row.windowId === callerRow.windowId && row.paneIndex === rest,
+      );
+      if (paneHit.length === 1) return { target: paneHit[0] };
+    }
+    const winRows = sessionRows.filter(
+      (row) => row.windowIndex === rest || row.windowId === rest || row.windowName === rest,
+    );
+    return winRows.length ? activePaneResult(to, winRows) : null;
+  }
+
+  // `sess:` alone means the session's active window.
+  const windowRows = sessionRows.filter((row) => row.windowActive);
+  if (rest === "") {
+    return windowRows.length ? activePaneResult(to, windowRows) : null;
+  }
+
+  const winPart = dot >= 0 ? rest.slice(0, dot) : rest;
+  const panePart = dot >= 0 ? rest.slice(dot + 1) : undefined;
+
+  const winRows = winPart
+    ? sessionRows.filter(
+        (row) =>
+          row.windowId === winPart || row.windowIndex === winPart || row.windowName === winPart,
+      )
+    : sessionRows.filter((row) => callerRow && row.windowId === callerRow.windowId);
+  if (!winRows.length) return null;
+
+  // `win.` or `win` alone means the window's active pane.
+  if (panePart === undefined || panePart === "") {
+    return activePaneResult(to, winRows);
+  }
+  const paneRows = winRows.filter((row) => row.paneIndex === panePart || row.paneId === panePart);
+  if (paneRows.length === 1) return { target: paneRows[0] };
+  if (paneRows.length > 1) {
+    return {
+      error: `Ambiguous pane target "${to}". Matches: ${paneMatchLabels(paneRows)}.`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Resolve `to` against the pane listing, after every managed-agent form
+ * failed: exact pane id, then tmux target syntax, then exact pane title
+ * (design D2).
+ */
+function matchPaneTarget(
+  to: string,
+  panes: PaneTargetRow[],
+  callerPane: string | undefined,
+): PaneResolution {
+  const byId = panes.find((row) => row.paneId === to);
+  if (byId) return { target: byId };
+
+  const callerRow = callerPane ? panes.find((row) => row.paneId === callerPane) : undefined;
+  const syntax = matchTargetSyntax(to, panes, callerRow);
+  if (syntax) return syntax;
+
+  const byTitle = panes.filter((row) => row.title === to);
+  if (byTitle.length === 1) return { target: byTitle[0] };
+  if (byTitle.length > 1) {
+    return {
+      error: `Ambiguous pane title "${to}". Matches: ${paneMatchLabels(byTitle)}.`,
+    };
+  }
+  return { none: true };
+}
+
 /**
  * Resolve a `to` target (design Decision 4): `parent`, one of the sender's own
  * running children, or a running sibling (the parent's other children minus
  * the sender). Exact ids win over names; an ambiguous name reports its matches.
+ * When `panes` carries a `list-panes -a` snapshot, a `to` that matches no agent
+ * is then tried as a raw tmux target — pane id, target syntax, pane title.
  */
 export function resolveMessageTarget(params: {
   hasParent: boolean;
@@ -262,6 +393,10 @@ export function resolveMessageTarget(params: {
   parentRoster: SubagentRoster | null;
   selfId: string;
   to: string;
+  /** Server-wide pane listing; enables raw tmux pane targets when present. */
+  panes?: PaneTargetRow[];
+  /** The sender's own pane id (`TMUX_PANE`), anchoring session-less targets. */
+  callerPane?: string;
 }): { target: MessageTarget } | { error: string } {
   const to = params.to?.trim();
   // Materialize once: `ownChildren` is often a live Map iterator, and both the
@@ -318,6 +453,25 @@ export function resolveMessageTarget(params: {
     return { error: `Ambiguous subagent name "${to}". Matches: ${matches}` };
   }
 
+  // A managed pane id resolves to its agent, keeping the real relation.
+  const bySurface = candidates.find((candidate) => candidate.pane === to);
+  if (bySurface) return { target: bySurface };
+
+  if (params.panes) {
+    const paneMatch = matchPaneTarget(to, params.panes, params.callerPane);
+    if ("target" in paneMatch) {
+      return {
+        target: { relation: "pane", name: to, pane: paneMatch.target.paneId },
+      };
+    }
+    if ("error" in paneMatch) return { error: paneMatch.error };
+    return {
+      error:
+        `No reachable agent named "${to}". Reachable: ${reachable()}. ` +
+        "No tmux pane matched it either (%N, session:window.pane, or an exact pane title).",
+    };
+  }
+
   return { error: `No reachable agent named "${to}". Reachable: ${reachable()}.` };
 }
 
@@ -358,10 +512,41 @@ function readParentRoster(file: string | undefined): SubagentRoster | null {
 
 const SubagentMessageParams = Type.Object({
   to: Type.String({
-    description: "`parent`, or the exact id or display name of a running child or sibling.",
+    description:
+      "`parent`, the exact id or display name of a running child or sibling, " +
+      "or a tmux pane: `%N` pane id, `session:window.pane` target, or exact pane " +
+      "title. Shell panes are refused.",
   }),
   message: Type.String({ description: "Message text. Must not be empty." }),
 });
+
+/**
+ * Commands a pane must not be running when a message is typed into it: in a
+ * shell the typed line executes as a command. Checked against
+ * `pane_current_command`'s basename (design D4).
+ */
+const SHELL_COMMANDS = new Set([
+  "sh",
+  "bash",
+  "dash",
+  "ash",
+  "zsh",
+  "fish",
+  "ksh",
+  "mksh",
+  "csh",
+  "tcsh",
+  "nu",
+  "elvish",
+  "xonsh",
+  "pwsh",
+  "powershell",
+  "rc",
+  "es",
+  "osh",
+  "yash",
+  "login",
+]);
 
 /**
  * Validate, resolve and deliver one `pmux_message` call. Exported for unit
@@ -377,14 +562,27 @@ export function sendSubagentMessage(
     selfId: string;
     senderName: string;
     parentMessageFile: string | null;
+    /** The sender's own pane id (`TMUX_PANE`); anchors session-less targets. */
+    callerPane?: string;
   },
   deps: {
     prompt: (pane: string, text: string) => unknown;
     append: (file: string, payload: ParentMessage) => void;
+    /** Server pane listing; a throw disables raw pane targets, not messaging. */
+    panes?: () => PaneTargetRow[];
   },
 ): { ok: true; target: MessageTarget; text: string } | { error: string } {
   if (!input.message?.trim()) {
     return { error: "message must not be empty." };
+  }
+
+  // One listing feeds both target resolution and the shell gate below, so a
+  // pane can never resolve as safe and deliver as a shell (design D1).
+  let panes: PaneTargetRow[] | undefined;
+  try {
+    panes = deps.panes?.();
+  } catch {
+    // Lookup unavailable: agent addressing and delivery behave as without it.
   }
 
   const resolved = resolveMessageTarget({
@@ -394,6 +592,8 @@ export function sendSubagentMessage(
     parentRoster: context.parentRoster,
     selfId: context.selfId,
     to: input.to,
+    panes,
+    callerPane: context.callerPane,
   });
   if ("error" in resolved) return resolved;
 
@@ -420,6 +620,20 @@ export function sendSubagentMessage(
       target,
       text: "Message sent to parent. It arrives as a steering message; a reply will come back as a separate message.",
     };
+  }
+
+  // Shell gate: typed text executes in a shell pane. Covers foreign panes
+  // and managed panes that dropped back to a shell while still registered.
+  if (panes) {
+    const row = panes.find((pane) => pane.paneId === target.pane);
+    const command = row?.command.split("/").pop();
+    if (command && SHELL_COMMANDS.has(command)) {
+      return {
+        error:
+          `Refusing to send to "${target.name}" (pane ${target.pane}): ` +
+          `it is running a shell (${command}), where the message would execute as a command.`,
+      };
+    }
   }
 
   try {
@@ -768,8 +982,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       name: "pmux_message",
       label: "Message Subagent",
       description:
-        "Send a short message to `parent`, one of your running children, or a running sibling. Your session continues. `parent` is reachable only when a pi parent exists. A reply, if any, arrives later as a separate message. caller_ping and pmux_done END your session; this tool does not.",
-      promptSnippet: "Message `parent`, a child, or a sibling without ending your session.",
+        "Send a short message to `parent`, one of your running children, a running sibling, or any tmux pane (`%N`, `session:window.pane`, or an exact pane title — shell panes are refused). Your session continues. `parent` is reachable only when a pi parent exists. A reply, if any, arrives later as a separate message. caller_ping and pmux_done END your session; this tool does not.",
+      promptSnippet:
+        "Message `parent`, a child, a sibling, or a tmux pane without ending your session.",
       parameters: SubagentMessageParams,
 
       async execute(
@@ -791,8 +1006,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             selfId: childEnv.id ?? "",
             senderName: childEnv.name ?? "parent",
             parentMessageFile: sessionFile ? getParentMessageFile(sessionFile) : null,
+            callerPane: callerPaneId() || undefined,
           },
-          { prompt: agentPrompt, append: appendParentMessage },
+          { prompt: agentPrompt, append: appendParentMessage, panes: listPaneTargets },
         );
 
         if ("error" in result) {

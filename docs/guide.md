@@ -340,13 +340,15 @@ pmux_message({ to: "parent", message: "Which DB driver should I use?" });
 pmux_message({ to: "Reviewer", message: "API is in src/api.ts" });
 ```
 
-Reachable targets: exactly these three, nothing else:
+Reachable agent targets: exactly these three by name, nothing else:
 
 - `parent` — the agent that spawned you (subagents only, and only when that parent is a pi session)
 - the display name or id of one of your own running children
 - the display name or id of a running sibling (another running child of your parent)
 
-Grandchildren, grandparents, finished children, and unrelated agents are not reachable. If you message a finished child, the tool returns an error that lists the reachable targets. Use `pmux_resume` for a finished session. If a name is ambiguous, pass the exact subagent id.
+Grandchildren, grandparents, finished children, and unrelated agents are not reachable *by name*. If you message a finished child, the tool returns an error that lists the reachable targets. Use `pmux_resume` for a finished session. If a name is ambiguous, pass the exact subagent id.
+
+Beyond agent names, `to` also accepts a raw tmux pane — for panes outside the agent tree, such as another pi session or a Claude Code pane. The forms, tried in order: a `%N` pane id, tmux target syntax (`session:window.pane`, `window.pane`, `window`, a pane index, or an `@N` window id — session-less forms resolve inside your own session), then an exact pane title. A pane id that belongs to a managed child or sibling still resolves to that agent. A title matching several panes returns an error listing the pane ids. One refusal: a pane running a bare shell is never typed into, because there the message would execute as a command — that covers foreign panes and managed panes that dropped back to a shell.
 
 `parent` is reachable only when a pi parent exists. A child that the pmux skill launcher started for an external orchestrator (Claude Code) carries `PI_PMUX_EXTERNAL_PARENT` in its env: no pi parent reads its message file, so `parent` is not in its reachable-target list, and nothing is delivered. Sending to `parent` returns an error that says the parent is an external orchestrator that does not read subagent messages, tells the child to report the way the parent-contact footer at the end of its brief says, and names `caller_ping` as the way to ask a question. A child of a pi parent still reaches `parent` as before.
 
