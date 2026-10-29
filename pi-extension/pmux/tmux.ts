@@ -488,6 +488,77 @@ export function closeSurface(surface: string): void {
   }
 }
 
+/**
+ * One row of the whole-server pane listing `listPaneTargets` returns: the
+ * fields `pmux_message` needs to resolve a raw tmux target and to check a
+ * pane's command before typing into it.
+ */
+export interface PaneTargetRow {
+  paneId: string;
+  /** The foreground command name (`pane_current_command`), e.g. `zsh`. */
+  command: string;
+  paneIndex: string;
+  /** True when the pane is its window's active pane. */
+  active: boolean;
+  sessionId: string;
+  sessionName: string;
+  windowId: string;
+  windowIndex: string;
+  windowName: string;
+  /** True when the pane's window is its session's active window. */
+  windowActive: boolean;
+  title: string;
+}
+
+/**
+ * The listing's `-F` format. `pane_title` is last because tmux formats have
+ * no escaping and titles are free text: a `|` in a title rejoins on parse
+ * instead of corrupting the structured fields. Session and window names are
+ * free text too, so they sit after every structured id; a `|` inside one
+ * degrades only that row's name and title matching.
+ */
+const PANE_TARGET_FORMAT =
+  "#{pane_id}|#{pane_current_command}|#{pane_index}|#{pane_active}|#{session_id}|" +
+  "#{window_id}|#{window_index}|#{window_active}|#{session_name}|#{window_name}|#{pane_title}";
+
+const PANE_TARGET_FIELDS = 11;
+
+/** Parse one server-wide pane listing into rows. Malformed rows are skipped. */
+function parsePaneTargetRows(out: string): PaneTargetRow[] {
+  const rows: PaneTargetRow[] = [];
+  for (const line of out.split("\n")) {
+    if (!line) continue;
+    const fields = line.split("|");
+    if (fields.length < PANE_TARGET_FIELDS) continue;
+    const [paneId, command, paneIndex, active, sessionId, windowId, windowIndex, windowActive] =
+      fields;
+    if (!paneId.startsWith("%")) continue;
+    rows.push({
+      paneId,
+      command,
+      paneIndex,
+      active: active === "1",
+      sessionId,
+      windowId,
+      windowIndex,
+      windowActive: windowActive === "1",
+      sessionName: fields[8],
+      windowName: fields[9],
+      title: fields.slice(10).join("|"),
+    });
+  }
+  return rows;
+}
+
+/**
+ * List every pane on the tmux server (`-a`, all sessions). Used to resolve a
+ * raw pane target — `%N`, `session:window.pane`, or a pane title — and to
+ * check a target's command before a message is typed into it.
+ */
+export function listPaneTargets(): PaneTargetRow[] {
+  return parsePaneTargetRows(tmux(["list-panes", "-a", "-F", PANE_TARGET_FORMAT]));
+}
+
 /** Shape of the prompt delivery result, as the tmux backend returns it. */
 export type { AgentPromptResult };
 

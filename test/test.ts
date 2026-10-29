@@ -3434,6 +3434,252 @@ describe("subagent messaging", () => {
     });
     assert.match(prompt, /You can message `parent`, `Worker` with pmux_message/);
   });
+
+  /** A server listing for pane-target tests; the caller is %20 in session work. */
+  const paneRows = () => [
+    {
+      paneId: "%20",
+      command: "node",
+      paneIndex: "0",
+      active: true,
+      sessionId: "$1",
+      windowId: "@1",
+      windowIndex: "0",
+      windowActive: true,
+      sessionName: "work",
+      windowName: "main",
+      title: "pi — parent",
+    },
+    {
+      paneId: "%21",
+      command: "node",
+      paneIndex: "1",
+      active: false,
+      sessionId: "$1",
+      windowId: "@1",
+      windowIndex: "0",
+      windowActive: true,
+      sessionName: "work",
+      windowName: "main",
+      title: "Worker — task",
+    },
+    {
+      paneId: "%22",
+      command: "node",
+      paneIndex: "0",
+      active: true,
+      sessionId: "$1",
+      windowId: "@2",
+      windowIndex: "1",
+      windowActive: false,
+      sessionName: "work",
+      windowName: "editor",
+      title: "claude",
+    },
+    {
+      paneId: "%30",
+      command: "zsh",
+      paneIndex: "0",
+      active: true,
+      sessionId: "$2",
+      windowId: "@5",
+      windowIndex: "0",
+      windowActive: true,
+      sessionName: "ops",
+      windowName: "editor",
+      title: "shell",
+    },
+    {
+      paneId: "%31",
+      command: "claude",
+      paneIndex: "0",
+      active: true,
+      sessionId: "$2",
+      windowId: "@6",
+      windowIndex: "1",
+      windowActive: false,
+      sessionName: "ops",
+      windowName: "code",
+      title: "claude",
+    },
+  ];
+
+  const paneBase = {
+    hasParent: false,
+    ownChildren: [] as Array<{ id: string; name: string; surface: string }>,
+    parentRoster: null,
+    selfId: "x1",
+    panes: paneRows(),
+    callerPane: "%20",
+  };
+
+  it("resolves foreign panes by id, window id and title", () => {
+    assert.deepEqual(testApi().resolveMessageTarget({ ...paneBase, to: "%22" }).target, {
+      relation: "pane",
+      name: "%22",
+      pane: "%22",
+    });
+    assert.equal(testApi().resolveMessageTarget({ ...paneBase, to: "@2" }).target.pane, "%22");
+    assert.equal(
+      testApi().resolveMessageTarget({ ...paneBase, to: "pi — parent" }).target.pane,
+      "%20",
+    );
+  });
+
+  it("anchors session-less pane targets on the caller's session and window", () => {
+    // `editor` exists in both work (%22) and ops (%30): the caller's session wins.
+    const cases: Array<[string, string]> = [
+      ["editor", "%22"],
+      ["editor.0", "%22"],
+      ["work:main.1", "%21"],
+      ["ops:editor", "%30"],
+      ["work:", "%20"],
+      ["1", "%21"],
+    ];
+    for (const [to, pane] of cases) {
+      assert.equal(
+        testApi().resolveMessageTarget({ ...paneBase, to }).target?.pane,
+        pane,
+        `to=${to}`,
+      );
+    }
+  });
+
+  it("keeps the managed relation for a child's pane id", () => {
+    const result = testApi().resolveMessageTarget({
+      ...paneBase,
+      ownChildren: [{ id: "d4", name: "Scout", surface: "%21" }],
+      to: "%21",
+    });
+    assert.deepEqual(result.target, { relation: "child", id: "d4", name: "Scout", pane: "%21" });
+  });
+
+  it("agent names beat pane titles, and ambiguous titles list the matches", () => {
+    const named = testApi().resolveMessageTarget({
+      ...paneBase,
+      ownChildren: [{ id: "d4", name: "claude", surface: "%55" }],
+      to: "claude",
+    });
+    assert.deepEqual(named.target, {
+      relation: "child",
+      id: "d4",
+      name: "claude",
+      pane: "%55",
+    });
+
+    const ambiguous = testApi().resolveMessageTarget({ ...paneBase, to: "claude" });
+    assert.match(ambiguous.error, /Ambiguous pane title "claude"\. Matches: %22.+%31/);
+  });
+
+  it("says no tmux pane matched when the listing was consulted", () => {
+    const result = testApi().resolveMessageTarget({ ...paneBase, to: "nosuch" });
+    assert.match(result.error, /No reachable agent named "nosuch"/);
+    assert.match(result.error, /No tmux pane matched it either/);
+  });
+
+  it("delivers to a foreign pane through tmux with the sender header", () => {
+    const prompted: string[] = [];
+    const result = testApi().sendSubagentMessage(
+      { to: "%31", message: "status?" },
+      {
+        hasParent: true,
+        ownChildren: [],
+        parentRoster: null,
+        selfId: "a1",
+        senderName: "parent",
+        parentMessageFile: null,
+        callerPane: "%20",
+      },
+      {
+        prompt: (pane: string, text: string) => prompted.push(`${pane}\u0000${text}`),
+        append: () => {},
+        panes: paneRows,
+      },
+    );
+    assert.equal("ok" in result, true);
+    assert.equal(result.target.relation, "pane");
+    assert.deepEqual(prompted, ["%31\u0000[subagent message from parent]\nstatus?"]);
+  });
+
+  it("refuses a foreign shell pane and a managed pane that dropped to a shell", () => {
+    const prompted: string[] = [];
+    const deps = {
+      prompt: (pane: string, text: string) => prompted.push(`${pane}\u0000${text}`),
+      append: () => {},
+      panes: paneRows,
+    };
+
+    const foreign = testApi().sendSubagentMessage(
+      { to: "%30", message: "rm -rf /" },
+      {
+        hasParent: false,
+        ownChildren: [],
+        parentRoster: null,
+        selfId: "a1",
+        senderName: "parent",
+        parentMessageFile: null,
+        callerPane: "%20",
+      },
+      deps,
+    );
+    assert.match(foreign.error, /running a shell \(zsh\)/);
+
+    const managed = testApi().sendSubagentMessage(
+      { to: "Scout", message: "hi" },
+      {
+        hasParent: false,
+        ownChildren: [{ id: "d4", name: "Scout", surface: "%30" }],
+        parentRoster: null,
+        selfId: "a1",
+        senderName: "parent",
+        parentMessageFile: null,
+        callerPane: "%20",
+      },
+      deps,
+    );
+    assert.match(managed.error, /running a shell \(zsh\)/);
+    assert.equal(prompted.length, 0);
+  });
+
+  it("keeps agent messaging working when the pane listing fails", () => {
+    const prompted: string[] = [];
+    const deps = {
+      prompt: (pane: string, text: string) => prompted.push(`${pane}\u0000${text}`),
+      append: () => {},
+      panes: () => {
+        throw new Error("tmux refused");
+      },
+    };
+
+    const named = testApi().sendSubagentMessage(
+      { to: "Scout", message: "hi" },
+      {
+        hasParent: false,
+        ownChildren: [{ id: "d4", name: "Scout", surface: "%99" }],
+        parentRoster: null,
+        selfId: "a1",
+        senderName: "parent",
+        parentMessageFile: null,
+      },
+      deps,
+    );
+    assert.equal("ok" in named, true);
+    assert.equal(prompted.length, 1);
+
+    const raw = testApi().sendSubagentMessage(
+      { to: "%31", message: "hi" },
+      {
+        hasParent: false,
+        ownChildren: [],
+        parentRoster: null,
+        selfId: "a1",
+        senderName: "parent",
+        parentMessageFile: null,
+      },
+      deps,
+    );
+    assert.match(raw.error, /No reachable agent named "%31"/);
+  });
 });
 
 describe("pmux_result renderer", () => {

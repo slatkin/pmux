@@ -16,6 +16,7 @@ import {
   closeSurface,
   createSurface,
   isTmuxAvailable,
+  listPaneTargets,
   namePane,
   paneExists,
   pollForExit,
@@ -370,6 +371,37 @@ describe("tmux backend", () => {
     const calls = stub(() => "");
     sendEscape("%9");
     assert.deepEqual(calls[0], ["send-keys", "-t", "%9", "Escape"]);
+  });
+
+  it("lists server-wide pane targets, rejoining a title with a separator", () => {
+    const calls = stub((args) => {
+      if (args[0] === "list-panes") {
+        return (
+          "%20|node|0|1|$1|@1|0|1|work|main|pi — parent\n" +
+          "%21|zsh|1|0|$1|@1|0|1|work|main|has|pipe\n" +
+          "malformed\n"
+        );
+      }
+      return "";
+    });
+    const rows = listPaneTargets();
+    assert.deepEqual(calls[0].slice(0, 3), ["list-panes", "-a", "-F"]);
+    assert.equal(rows.length, 2);
+    assert.deepEqual(rows[0], {
+      paneId: "%20",
+      command: "node",
+      paneIndex: "0",
+      active: true,
+      sessionId: "$1",
+      windowId: "@1",
+      windowIndex: "0",
+      windowActive: true,
+      sessionName: "work",
+      windowName: "main",
+      title: "pi — parent",
+    });
+    assert.equal(rows[1].active, false);
+    assert.equal(rows[1].title, "has|pipe");
   });
 
   it("closes a pane and tolerates one that is already gone", () => {
