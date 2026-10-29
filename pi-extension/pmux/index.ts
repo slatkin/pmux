@@ -7,7 +7,6 @@ import { keyHint } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { readdirSync, readFileSync, appendFileSync, existsSync } from "node:fs";
 import {
   isTmuxAvailable,
@@ -80,7 +79,6 @@ import {
   readSidebarTaskStore,
   readSidebarTaskStoreMtime,
 } from "./task-reminders.ts";
-import { ensureSidebarTasksSkill, packagedSidebarTasksSource } from "./skill-install.ts";
 
 // Survive /reload: the supervisor owns every timer, poll watcher and event
 // wiring this module load started. /reload re-imports this file, so shutting
@@ -716,23 +714,6 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   // First-prompt OSC title for unnamed non-subagent panes. A subagent child
   // sets PI_PMUX_NAME, so it keeps its `<name> — <task>` title.
   createLiveTitleController().register(pi);
-
-  // The packaged sidebar-tasks skill, installed for the agents outside pi
-  // (Claude Code, and anything reading the shared agent-skills root): a
-  // refreshed copy under ~/.agent/skills and a symlink from
-  // ~/.claude/skills, both best effort — a failed install disturbs nothing.
-  // The source is the packaged skills/ that pi itself loads through the
-  // manifest (`"skills": ["./skills"]`, the package root, two levels above
-  // this extension file) — the helper owns that walk, so a manifest move
-  // only has to update it there. A child skips the install: a child is a pi
-  // session and gets the skill through the manifest.
-  if (!isSubagentChild(process.env)) {
-    ensureSidebarTasksSkill({
-      source: packagedSidebarTasksSource(import.meta.url),
-      agentSkillsDir: join(homedir(), ".agent", "skills"),
-      claudeSkillsDir: join(homedir(), ".claude", "skills"),
-    });
-  }
 
   // ── Sidebar publishing (openspec/changes/2026-10-20-sidebar-events) ──
   //

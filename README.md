@@ -37,6 +37,12 @@ orchestrator's pane instead. The
 [guide](docs/guide.md#external-orchestrators-claude-code) covers the launcher
 commands, the completion signal and close-on-done behavior.
 
+That one command installs every packaged skill, `sidebar-tasks` (the pane
+task list) and `release` included — no second install step exists. A pmux
+install from before this change may have left `~/.claude/skills/sidebar-tasks`
+as a symlink to `~/.agent/skills/sidebar-tasks`; the command above replaces
+such a symlink with a real copy of the skill, so no manual cleanup is needed.
+
 ## Configuration
 
 The extension reads `config.json` from `~/.pi/agent/extensions/pmux/` (under
