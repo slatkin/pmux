@@ -44,7 +44,7 @@ reach you — see [External orchestrators (Claude Code)](#external-orchestrators
   `"source":"wrapper"` and the exit code. You read the exit after every wait,
   through the CLI's sidecar wait. The pane-side wrapper prints
   `__SUBAGENT_DONE_<exit code>__` when the child exits, and closes its own
-  pane only on a `done` or `handoff` sidecar, after a grace period (5000 ms
+  pane only on a `done` or `handoff` sidecar, after a grace period (1500 ms
   by default, set per launch with `--close-grace-ms`).
 
 Role definitions resolve in this order: the project's `.pi/agents/`, then

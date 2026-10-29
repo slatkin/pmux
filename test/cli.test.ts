@@ -1068,7 +1068,7 @@ describe("cli.ts start", () => {
     assert.equal(argValue(spec.args, "--append-system-prompt"), res.rolePromptPath);
     assert.equal(argValue(spec.args, "--tools"), "read,caller_ping,pmux_done,pmux_message");
     assert.equal(argValue(spec.args, "--name"), "fix-7");
-    assert.equal(spec.closeOnDone?.graceMs, 5000);
+    assert.equal(spec.closeOnDone?.graceMs, 1500);
     assert.equal(spec.title, "fix-7 — # Task");
   });
 

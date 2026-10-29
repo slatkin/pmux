@@ -90,7 +90,7 @@ import { getLaunchRecordFile, readLaunchRecord, writeLaunchRecord } from "./laun
 const CLI_PATH = SUBAGENTS_CLI_PATH;
 
 /** Close-on-done grace used when `--close-grace-ms` is omitted. */
-const DEFAULT_CLOSE_GRACE_MS = 5000;
+const DEFAULT_CLOSE_GRACE_MS = 1500;
 
 /** Defaults for `wait`. */
 const DEFAULT_WAIT_STATUS = TERMINAL_CHILD_STATUSES.join(",");
