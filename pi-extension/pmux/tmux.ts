@@ -241,8 +241,10 @@ function axisDirection(row: PaneRow): SplitDirection {
  * when a pmux float is already open, the new one cascades one row down and two
  * columns left from the newest of them, wrapping back to the first-float
  * position when it would leave the window. `tab` opens a new window named
- * after the subagent in the caller's session and restores focus to the
- * caller's window afterwards. Naming the window at creation is what keeps the
+ * after the subagent in the caller's session with `-d`, so the session does
+ * not make it the current window and no client's focus moves — not even a
+ * client watching another window, which a `select-window` restore would pull
+ * back to the caller. Naming the window at creation is what keeps the
  * name: tmux disables `automatic-rename` for an explicitly named window, so
  * the shell start and the child's OSC title write cannot overwrite it.
  */
@@ -268,12 +270,6 @@ export function createSurface(
       "-F",
       "#{pane_id}",
     ]);
-    const callerWindow = tmux(["display-message", "-p", "-t", caller, "#{window_id}"]).trim();
-    try {
-      tmux(["select-window", "-t", callerWindow]);
-    } catch {
-      // Focus restore is best effort; the new window exists either way.
-    }
     surface = paneIdFrom(created);
   } else if (placement === "float") {
     // The float geometry needs the window size, and only the listing provides

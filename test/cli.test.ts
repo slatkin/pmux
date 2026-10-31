@@ -1493,7 +1493,7 @@ describe("cli.ts start", () => {
     assert.equal(record.args[record.args.length - 1], `@${res.promptPath}`);
   });
 
-  it("opens a tab role in its own window and restores the caller's focus", async () => {
+  it("opens a tab role in its own detached window without moving any client's focus", async () => {
     const cwd = mkdtempSync(join(workdir, "tab-cwd-"));
     writeRole(cwd, "tabber", "model: m\nthinking: low\nsurface: tab", "Body.");
     const res = await runStart({ cwd, role: "tabber", child: "fix-7" });
@@ -1503,8 +1503,6 @@ describe("cli.ts start", () => {
     assert.deepEqual(paneCalls, [
       "display-message -p -t %21 #{session_id}",
       "new-window -d -t $7 -n fix-7 -P -F #{pane_id}",
-      "display-message -p -t %21 #{window_id}",
-      "select-window -t @4",
       "select-pane -t %24 -T fix-7",
       `send-keys -t %24 -l ${paneCommandLine(CLI, res.json.launch)}`,
       "send-keys -t %24 Enter",
@@ -1616,11 +1614,10 @@ describe("cli.ts start", () => {
 
     assert.equal(res.code, 0);
     assert.equal(res.spec.surface, "tab");
-    assert.deepEqual(paneCalls.slice(0, 4), [
+    assert.deepEqual(paneCalls.slice(0, 3), [
       "display-message -p -t %21 #{session_id}",
       "new-window -d -t $7 -n scout-1 -P -F #{pane_id}",
-      "display-message -p -t %21 #{window_id}",
-      "select-window -t @4",
+      "select-pane -t %24 -T scout-1",
     ]);
   });
 
@@ -2099,8 +2096,6 @@ describe("cli.ts resume", () => {
     assert.deepEqual(paneCalls, [
       "display-message -p -t %21 #{session_id}",
       "new-window -d -t $7 -n fix-7 -P -F #{pane_id}",
-      "display-message -p -t %21 #{window_id}",
-      "select-window -t @4",
       "select-pane -t %24 -T fix-7",
       `send-keys -t %24 -l ${paneCommandLine(CLI, started.json.launch)}`,
       "send-keys -t %24 Enter",
@@ -2142,11 +2137,10 @@ describe("cli.ts resume", () => {
       configPath,
     );
     assert.equal(res.code, 0);
-    assert.deepEqual(paneCalls.slice(0, 4), [
+    assert.deepEqual(paneCalls.slice(0, 3), [
       "display-message -p -t %21 #{session_id}",
       "new-window -d -t $7 -n fix-7 -P -F #{pane_id}",
-      "display-message -p -t %21 #{window_id}",
-      "select-window -t @4",
+      "select-pane -t %24 -T fix-7",
     ]);
   });
 });

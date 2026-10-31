@@ -11,7 +11,7 @@ The extension SHALL read an optional `surface` key from its package `config.json
 
 #### Scenario: Default set to tab
 - **WHEN** `config.json` contains `"surface": "tab"` and a subagent of a role with no `surface:` is spawned
-- **THEN** the subagent's pane is placed in its own tmux window and the caller's window regains focus
+- **THEN** the subagent's pane is placed in its own tmux window and the caller's window keeps the focus
 
 #### Scenario: Default unset
 - **WHEN** `config.json` has no `surface` key or an invalid value and a subagent is spawned

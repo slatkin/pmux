@@ -52,7 +52,7 @@ Creating a subagent pane with the `pane` placement SHALL split a target pane in 
 
 #### Scenario: Tab placement
 - **WHEN** the placement is `tab`
-- **THEN** a new window is opened in the caller's session and the focus is returned to the caller's window
+- **THEN** a new window is opened in the caller's session detached (`-d`), so no client's focus moves: not the caller's, and not a client watching another window
 
 ### Requirement: Pane commands
 

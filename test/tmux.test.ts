@@ -319,27 +319,21 @@ describe("tmux backend", () => {
     assert.throws(() => createSurface("Scout", "float", "%3"), /window listing failed/);
   });
 
-  it("opens a window and restores focus for the tab placement", () => {
+  it("opens a detached window for the tab placement and never moves a client", () => {
     const calls = stub((args) => {
-      if (args[0] === "display-message") return args.includes("#{session_id}") ? "$7" : "@4";
+      if (args[0] === "display-message") return "$7";
       return "%9";
     });
     const pane = createSurface("Scout", "tab", "%3");
     assert.equal(pane, "%9");
-    assert.deepEqual(calls[0], ["display-message", "-p", "-t", "%3", "#{session_id}"]);
-    assert.deepEqual(calls[1], [
-      "new-window",
-      "-d",
-      "-t",
-      "$7",
-      "-n",
-      "Scout",
-      "-P",
-      "-F",
-      "#{pane_id}",
+    // `-d` keeps the new window off the session's current window, so no
+    // focus call follows: a restore would pull a client away from whatever
+    // window it is watching.
+    assert.deepEqual(calls, [
+      ["display-message", "-p", "-t", "%3", "#{session_id}"],
+      ["new-window", "-d", "-t", "$7", "-n", "Scout", "-P", "-F", "#{pane_id}"],
+      ["select-pane", "-t", "%9", "-T", "Scout"],
     ]);
-    assert.deepEqual(calls[2], ["display-message", "-p", "-t", "%3", "#{window_id}"]);
-    assert.deepEqual(calls[3], ["select-window", "-t", "@4"]);
   });
 
   it("splits without naming when asked for a bare split", () => {
