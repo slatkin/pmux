@@ -662,9 +662,10 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
 
     // The artifact and its registration come first (design D2): a failure
     // here must refuse the send before the pane is touched.
+    const from = env.PI_PMUX_NAME ?? "unnamed";
     let registered: RegisteredReportFile;
     try {
-      registered = registerReport({ sessionFile: session, to, text });
+      registered = registerReport({ sessionFile: session, to, text, from, env });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       writeErr(
@@ -685,7 +686,7 @@ async function sendMarkedCommand(values: CliValues, deps: CliDeps): Promise<numb
         bytes: registered.bytes,
         cliPath: CLI_PATH,
         ackTimeoutSeconds,
-        from: env.PI_PMUX_NAME ?? "unnamed",
+        from,
       },
       {
         ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),

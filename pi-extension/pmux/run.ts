@@ -149,6 +149,8 @@ interface ContactContext {
   baselineReportIds: Set<string> | null;
   /** The parent's legacy receipt count before this run spawned. */
   receiptsBefore: number;
+  /** The wrapper's environment; the wake row's history record derives from it. */
+  env: NodeJS.ProcessEnv;
 }
 
 /**
@@ -222,6 +224,8 @@ function markedDeliverArgs(row: WakeRow, context: ContactContext): RegisteredRep
     sessionFile: context.sessionFile,
     to: context.parent,
     text: row.text,
+    from: context.name,
+    env: context.env,
   });
 }
 
@@ -422,6 +426,7 @@ export async function runSpec(
         cliPath: deps.cliPath ?? "<pmux-cli>",
         baselineReportIds: reportIdsBefore,
         receiptsBefore: reportsBefore,
+        env: base,
       },
       deliverReport: deps.deliverReport,
       sendToParent: deps.sendToParent,

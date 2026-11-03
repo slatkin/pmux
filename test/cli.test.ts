@@ -40,6 +40,7 @@ import {
   writeInboxEntry,
   writeMonitorMarker,
 } from "../pi-extension/pmux/report-inbox.ts";
+import { historyDirPath, listHistory } from "../pi-extension/pmux/report-history.ts";
 import { registerReport, REPORT_ACK_POLL_MS } from "../pi-extension/pmux/report-delivery.ts";
 import { reportArtifactPath } from "../pi-extension/pmux/report-artifact.ts";
 import { appendReportAck, readReportLog } from "../pi-extension/pmux/report-receipt.ts";
@@ -3181,6 +3182,9 @@ describe("cli.ts send", () => {
   /** A marked-send environment: the protocol marker plus a session file. */
   function protocolEnv(sessionFile: string): NodeJS.ProcessEnv {
     return tmuxEnv({
+      // The report history lands under the temp dir, never the real runtime
+      // directory (the env has TMUX, so a history path exists).
+      XDG_RUNTIME_DIR: join(dirname(sessionFile), "run"),
       PI_PMUX_SESSION: sessionFile,
       PI_PMUX_REPORT_PROTOCOL: "file-ack-v1",
     });
@@ -3595,7 +3599,7 @@ describe("cli.ts ack", () => {
   it("acks a registered report once, and idempotently after that", async () => {
     await withTempDirAsync(async (dir) => {
       const sessionFile = join(dir, "s.jsonl");
-      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      const report = registerReport({ sessionFile, to: "%3", text: "report body", from: "test" });
 
       const first = await runCli(["ack", "--session", sessionFile, "--id", report.id], tmuxEnv());
       assert.equal(first.code, 0);
@@ -3779,7 +3783,7 @@ describe("cli.ts ack retires the inbox entry", () => {
     await withTempDirAsync(async (dir) => {
       const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "run") });
       const sessionFile = join(dir, "s.jsonl");
-      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      const report = registerReport({ sessionFile, to: "%3", text: "report body", from: "test" });
       const inbox = inboxDirPath({ env, targetPane: "%3" })!;
       writeInboxEntry(inbox, {
         v: 1,
@@ -3801,7 +3805,7 @@ describe("cli.ts ack retires the inbox entry", () => {
     await withTempDirAsync(async (dir) => {
       const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "run") });
       const sessionFile = join(dir, "s.jsonl");
-      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      const report = registerReport({ sessionFile, to: "%3", text: "report body", from: "test" });
       const res = await runCli(["ack", "--session", sessionFile, "--id", report.id], env);
       assert.equal(res.code, 0);
     });
@@ -3811,7 +3815,7 @@ describe("cli.ts ack retires the inbox entry", () => {
     await withTempDirAsync(async (dir) => {
       const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "run") });
       const sessionFile = join(dir, "s.jsonl");
-      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      const report = registerReport({ sessionFile, to: "%3", text: "report body", from: "test" });
       // A non-empty directory where the entry file should be cannot be unlinked.
       const blocked = join(inboxDirPath({ env, targetPane: "%3" })!, `${report.id}.json`);
       mkdirSync(blocked, { recursive: true });
@@ -3850,6 +3854,11 @@ describe("cli.ts send through the parent's inbox", () => {
       );
       const entry = JSON.parse(readFileSync(join(inbox, `${line.id}.json`), "utf8"));
       assert.equal(entry.from, "worker-a");
+      // The registration also landed a history record, named for the launch.
+      const history = listHistory(historyDirPath({ env, targetPane: "%3" })!);
+      assert.equal(history.length, 1);
+      assert.equal(history[0]!.id, line.id);
+      assert.equal(history[0]!.from, "worker-a");
     });
   });
 });
