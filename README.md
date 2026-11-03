@@ -97,6 +97,14 @@ act on: a partial failure, a child that errored on its model, or a user
 request. A parent whose own model is hard-limited cannot call anything at
 all, so it cannot start the child; the user starts it.
 
+## `/pmux-spawn`
+
+**BREAKING**: `/pmux-spawn` no longer asks the agent to call `pmux_spawn`;
+it starts the child itself. `/pmux-spawn` opens the spawn dialog in a tmux
+popup at the role list, `/pmux-spawn <role>` opens it at the brief step,
+and `/pmux-spawn <role> <task>` starts the child at once. The `pmux_spawn`
+tool is unchanged.
+
 ## Documentation
 
 The [guide](docs/guide.md) is the full reference: the async subagent flow and
