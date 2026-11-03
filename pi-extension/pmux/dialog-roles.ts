@@ -68,12 +68,15 @@ export interface RolesDialogDeps extends RunDialogDeps {
   listModels?: () => string[];
 }
 
-function errorMessage(error: unknown): string {
+export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** One row of the role list: name, source and the three editable values. */
-function roleRow(role: RoleInfo): string {
+/**
+ * One row of the role list: name, source and the three editable values.
+ * The spawn dialog's role step shows the same rows (spec: "Role step").
+ */
+export function roleRow(role: RoleInfo): string {
   const mark = (value: string | undefined): string => value ?? ABSENT_MARK;
   return `${role.name}  [${role.source}]  model: ${mark(role.model)}  model-fallback: ${mark(role.modelFallback)}  thinking: ${mark(role.thinking)}`;
 }

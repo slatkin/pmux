@@ -65,6 +65,12 @@ import { isReportId, reportArtifactPath } from "./report-artifact.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
 import { DIALOG_HOST_LIMIT_MS, type RunDialogDeps } from "./dialog-host.ts";
 import { rolesDialogInner, rolesDialogOuter, type RolesDialogDeps } from "./dialog-roles.ts";
+import {
+  SPAWN_ARGS_REFUSAL,
+  spawnDialogInner,
+  spawnDialogOuter,
+  type SpawnDialogDeps,
+} from "./dialog-spawn.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
 import {
@@ -115,6 +121,7 @@ const USAGE = [
   "  node cli.ts wait --session <file> [--signal status|sidecar] [--status <list>] [--timeout <seconds>] (--status with --signal sidecar is a usage error)",
   "  node cli.ts prune [--scratch <dir>] [--max-age-days <n>] [--dry-run]",
   "  node cli.ts roles [--cwd <dir>] [--agent-dir <dir>] | roles --inner --cwd <dir> --agent-dir <dir> [--pane <pane>]",
+  "  node cli.ts spawn-dialog [--cwd <dir>] [--agent-dir <dir>] [--args <text>] | spawn-dialog --inner --cwd <dir> --agent-dir <dir> --pane <pane> [--role <role>] [--scratch <dir>]",
 ].join("\n");
 
 const CLI_OPTIONS = {
@@ -142,6 +149,7 @@ const CLI_OPTIONS = {
   follow: { type: "boolean" },
   once: { type: "boolean" },
   inner: { type: "boolean" },
+  args: { type: "string" },
   "agent-dir": { type: "string" },
   pane: { type: "string" },
   help: { type: "boolean", short: "h" },
@@ -172,6 +180,7 @@ interface CliValues {
   follow?: boolean;
   once?: boolean;
   inner?: boolean;
+  args?: string;
   "agent-dir"?: string;
   pane?: string;
   help?: boolean;
@@ -196,10 +205,11 @@ export interface CliDeps {
   submitChannel?: typeof submitChannel;
   /**
    * Dialog seams: the `runDialog` deps for a command's outer side and the
-   * list widget plus model list for an inner side. The defaults are the real
-   * tmux call, the TTY widget and `pi --list-models`.
+   * inner side's injections — the list widget, the model list and the brief
+   * editor. The defaults are the real tmux call, the TTY widget,
+   * `pi --list-models` and the editor.
    */
-  dialog?: RolesDialogDeps;
+  dialog?: RolesDialogDeps & SpawnDialogDeps;
 }
 
 function required(flag: string, value: string | undefined): string {
@@ -946,6 +956,75 @@ async function rolesCommand(values: CliValues, deps: CliDeps): Promise<number> {
   }
 }
 
+/**
+ * `spawn-dialog`: the spawn dialog (designs D1, D6 and D7). Without
+ * `--inner` the command is the outer side — the Claude Code `pmux-spawn`
+ * skill runs it with `--args '$ARGUMENTS'`. An empty `--args` opens the
+ * role list, one word is the role (checked against `listRoles` before any
+ * popup, with the existing unknown-role message), and more than one word
+ * is refused: the task goes in the brief step. The outer side opens the
+ * popup, waits at most `DIALOG_HOST_LIMIT_MS` and prints the one result
+ * line — the inner side's line on `done`, "nothing started" on `cancel`,
+ * or the still-open line (pi's `/pmux-spawn` calls `spawnDialogOuter`
+ * in-process with no limit and starts the child itself).
+ *
+ * With `--inner` the command is the popup side: it runs the role list and
+ * the brief step and writes the collected `{role, brief}` to the state
+ * file.
+ */
+async function spawnDialogCommand(values: CliValues, deps: CliDeps): Promise<number> {
+  const env = deps.env ?? process.env;
+  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  try {
+    if (values.inner === true) {
+      await spawnDialogInner(
+        {
+          cwd: required("--cwd", values.cwd),
+          agentDir: required("--agent-dir", values["agent-dir"]),
+          pane: required("--pane", values.pane),
+          ...(values.role !== undefined ? { role: values.role } : {}),
+          ...(values.scratch !== undefined ? { scratch: values.scratch } : {}),
+          env,
+        },
+        { ...(deps.dialog ?? {}) },
+      );
+      return 0;
+    }
+    const words = (values.args ?? "").trim().split(/\s+/).filter(Boolean);
+    if (words.length > 1) throw new Error(SPAWN_ARGS_REFUSAL);
+    const agentDir =
+      values["agent-dir"] ?? env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+    const dialogDeps: RunDialogDeps = {
+      ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
+      ...(deps.dialog ?? {}),
+    };
+    const outcome = await spawnDialogOuter(
+      {
+        cwd: resolve(values.cwd ?? process.cwd()),
+        agentDir,
+        env,
+        ...(words[0] !== undefined ? { role: words[0] } : {}),
+        stopAfterMs: DIALOG_HOST_LIMIT_MS,
+      },
+      dialogDeps,
+    );
+    let line: string;
+    if (outcome.kind === "done") {
+      const resultLine = outcome.result.line;
+      line = typeof resultLine === "string" && resultLine.length > 0 ? resultLine : "done";
+    } else if (outcome.kind === "cancel") {
+      line = "nothing started";
+    } else {
+      line = outcome.line;
+    }
+    write(`${line}\n`);
+    return 0;
+  } catch (error) {
+    return usageFailure(error, writeErr);
+  }
+}
+
 /** `last-message`: print a session's last assistant message. */
 function lastMessageCommand(values: CliValues, deps: CliDeps): number {
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
@@ -1184,6 +1263,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   if (command === "ack") return ackCommand(values as CliValues, deps);
   if (command === "inbox") return inboxCommand(values as CliValues, deps);
   if (command === "roles") return rolesCommand(values as CliValues, deps);
+  if (command === "spawn-dialog") return spawnDialogCommand(values as CliValues, deps);
   if (command === "last-message") return lastMessageCommand(values as CliValues, deps);
   if (command === "wait") return await waitCommand(values as CliValues, deps);
   if (command === "prune") return pruneCommand(values as CliValues, deps);

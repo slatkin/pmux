@@ -51,6 +51,7 @@ import {
   type ListKey,
 } from "../pi-extension/pmux/dialog-ui.ts";
 import { getBundledAgentsDir } from "../pi-extension/pmux/agent-defs.ts";
+import { type SpawnDialogDeps } from "../pi-extension/pmux/dialog-spawn.ts";
 import type {
   ChannelSubmitArgs,
   ChannelSubmitResult,
@@ -2270,46 +2271,81 @@ describe("cli.ts last-message", () => {
   });
 });
 
+// ─── dialog test helpers (shared by the roles and spawn-dialog suites) ──
+
+const ENTER: ListKey = { name: "return" };
+const ESCAPE: ListKey = { name: "escape" };
+const DOWN: ListKey = { name: "down" };
+const typed = (text: string): ListKey[] => [...text].map((ch) => ({ sequence: ch }));
+
+/** Drive the real list reducer with a key script; returns the choice or null. */
+function scriptChoice(
+  items: readonly string[],
+  keys: ListKey[],
+): { index: number; item: string } | null {
+  let state = initListState(items);
+  for (const key of keys) state = reduceListKey(state, key);
+  if (state.outcome.type === "chosen") {
+    return { index: state.outcome.index, item: state.outcome.item };
+  }
+  if (state.outcome.type === "cancel") return null;
+  assert.fail(`key script left the list pending: ${JSON.stringify(keys)}`);
+}
+
+interface SeenList {
+  items: readonly string[];
+  footer?: string;
+}
+
+/** A chooser that answers each list from a queue of key scripts. */
+function scriptedChoose(keyScripts: ListKey[][], seen: SeenList[]) {
+  return async (
+    items: readonly string[],
+    options?: ListDialogOptions,
+  ): Promise<{ index: number; item: string } | null> => {
+    seen.push({ items, ...(options?.footer !== undefined ? { footer: options.footer } : {}) });
+    const keys = keyScripts.shift();
+    assert.ok(keys, "the dialog asked for more choices than the script holds");
+    return scriptChoice(items, keys);
+  };
+}
+
+/** The `-e <KEY>=<value>` pair for `key` in a display-popup argv. */
+function popupEnvValue(argv: string[], key: string): string | undefined {
+  for (let i = 0; i < argv.length - 1; i++) {
+    if (argv[i] === "-e" && argv[i + 1]!.startsWith(`${key}=`)) {
+      return argv[i + 1]!.slice(key.length + 1);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A tmux exec that answers `display-popup` with the inner side's `done`
+ * record, so the outer side's wait ends on the second poll.
+ */
+function usePopupExec(done: Record<string, unknown>): { calls: string[][] } {
+  const calls: string[][] = [];
+  __setTmuxExecForTests__((args) => {
+    calls.push(args);
+    if (args[0] === "display-popup") {
+      writeDialogDone(`${popupEnvValue(args, DIALOG_STATE_ENV)}`, done);
+    }
+    return "";
+  });
+  return { calls };
+}
+
+/** Restore the suite's shared pane fake after a popup-exec test. */
+function restorePaneFake(): void {
+  __setTmuxExecForTests__(null);
+  paneFake = useTmuxPaneFake();
+  paneCalls = paneFake.lines;
+}
+
 // ─── cli.ts roles ──────────────────────────────────────────────────────
 
 describe("cli.ts roles", () => {
-  const ENTER: ListKey = { name: "return" };
-  const ESCAPE: ListKey = { name: "escape" };
-  const DOWN: ListKey = { name: "down" };
-  const typed = (text: string): ListKey[] => [...text].map((ch) => ({ sequence: ch }));
-
-  /** Drive the real list reducer with a key script; returns the choice or null. */
-  function scriptChoice(
-    items: readonly string[],
-    keys: ListKey[],
-  ): { index: number; item: string } | null {
-    let state = initListState(items);
-    for (const key of keys) state = reduceListKey(state, key);
-    if (state.outcome.type === "chosen") {
-      return { index: state.outcome.index, item: state.outcome.item };
-    }
-    if (state.outcome.type === "cancel") return null;
-    assert.fail(`key script left the list pending: ${JSON.stringify(keys)}`);
-  }
-
-  interface SeenList {
-    items: readonly string[];
-    footer?: string;
-  }
-
-  /** A chooser that answers each list from a queue of key scripts. */
-  function scriptedChoose(keyScripts: ListKey[][], seen: SeenList[]) {
-    return async (
-      items: readonly string[],
-      options?: ListDialogOptions,
-    ): Promise<{ index: number; item: string } | null> => {
-      seen.push({ items, ...(options?.footer !== undefined ? { footer: options.footer } : {}) });
-      const keys = keyScripts.shift();
-      assert.ok(keys, "the dialog asked for more choices than the script holds");
-      return scriptChoice(items, keys);
-    };
-  }
-
   interface RolesInnerRun {
     code: number;
     stdout: string;
@@ -2347,39 +2383,6 @@ describe("cli.ts roles", () => {
       ? (JSON.parse(readFileSync(dirs.statePath, "utf8")) as RolesInnerRun["state"])
       : null;
     return { code, stdout: stdout.join(""), stderr: stderr.join(""), seen, state };
-  }
-
-  /** The `-e <KEY>=<value>` pair for `key` in a display-popup argv. */
-  function popupEnvValue(argv: string[], key: string): string | undefined {
-    for (let i = 0; i < argv.length - 1; i++) {
-      if (argv[i] === "-e" && argv[i + 1]!.startsWith(`${key}=`)) {
-        return argv[i + 1]!.slice(key.length + 1);
-      }
-    }
-    return undefined;
-  }
-
-  /**
-   * A tmux exec that answers `display-popup` with the inner side's `done`
-   * record, so the outer side's wait ends on the second poll.
-   */
-  function usePopupExec(done: Record<string, unknown>): { calls: string[][] } {
-    const calls: string[][] = [];
-    __setTmuxExecForTests__((args) => {
-      calls.push(args);
-      if (args[0] === "display-popup") {
-        writeDialogDone(`${popupEnvValue(args, DIALOG_STATE_ENV)}`, done);
-      }
-      return "";
-    });
-    return { calls };
-  }
-
-  /** Restore the suite's shared pane fake after a popup-exec test. */
-  function restorePaneFake(): void {
-    __setTmuxExecForTests__(null);
-    paneFake = useTmuxPaneFake();
-    paneCalls = paneFake.lines;
   }
 
   it("sends the inner dialog argv to display-popup and prints the result line", async () => {
@@ -2570,6 +2573,353 @@ describe("cli.ts roles", () => {
       const res = await runCli(["roles", "--inner", "--cwd", cwd, "--agent-dir", agentDir], {
         PATH: process.env.PATH,
       });
+      assert.equal(res.code, 1);
+      assert.match(res.stderr, new RegExp(DIALOG_STATE_ENV));
+    });
+  });
+});
+
+// ─── cli.ts spawn-dialog ────────────────────────────────────────────────
+
+describe("cli.ts spawn-dialog", () => {
+  /** The inner side's state-file record fields the tests read. */
+  interface SpawnState {
+    state: string;
+    line?: string;
+    role?: string;
+    brief?: string;
+  }
+
+  interface SpawnInnerRun extends CliResult {
+    seen: SeenList[];
+    state: SpawnState | null;
+    editorCalls: string[];
+  }
+
+  interface SpawnInnerOptions {
+    /** Extra inner argv after the fixed flags; defaults to none. */
+    innerArgs?: string[];
+    /** Key scripts for the chooser's lists, in order. */
+    keyScripts?: ListKey[][];
+    /** What the fake editor leaves in the brief file; unset leaves it empty. */
+    briefText?: string;
+    /** The fake editor's exit status; defaults to 0. */
+    editorStatus?: number | null;
+    /** The popup env; defaults to PATH plus the state-file key. */
+    env?: NodeJS.ProcessEnv;
+  }
+
+  /** Run `spawn-dialog --inner` against temp dirs with a scripted dialog. */
+  async function runSpawnInner(
+    dirs: { cwd: string; agentDir: string; statePath: string; scratch: string },
+    options: SpawnInnerOptions = {},
+  ): Promise<SpawnInnerRun> {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const seen: SeenList[] = [];
+    const editorCalls: string[] = [];
+    const dialog: SpawnDialogDeps = {
+      choose: scriptedChoose(options.keyScripts ?? [], seen),
+      runEditor: (path) => {
+        editorCalls.push(path);
+        if (options.briefText !== undefined) writeFileSync(path, options.briefText);
+        return { status: options.editorStatus === undefined ? 0 : options.editorStatus };
+      },
+    };
+    const code = await main(
+      [
+        "spawn-dialog",
+        "--inner",
+        "--cwd",
+        dirs.cwd,
+        "--agent-dir",
+        dirs.agentDir,
+        "--pane",
+        "%21",
+        "--scratch",
+        dirs.scratch,
+        ...(options.innerArgs ?? []),
+      ],
+      {
+        env: options.env ?? { PATH: process.env.PATH, [DIALOG_STATE_ENV]: dirs.statePath },
+        stdout: (text) => stdout.push(text),
+        stderr: (text) => stderr.push(text),
+        sleep: async () => {},
+        configPath: defaultConfigPath,
+        dialog,
+      },
+    );
+    const state = existsSync(dirs.statePath)
+      ? (JSON.parse(readFileSync(dirs.statePath, "utf8")) as SpawnState)
+      : null;
+    return {
+      code,
+      stdout: stdout.join(""),
+      stderr: stderr.join(""),
+      seen,
+      state,
+      editorCalls,
+    };
+  }
+
+  /** Per-case directories for an inner run. */
+  function spawnDirs(dir: string): {
+    cwd: string;
+    agentDir: string;
+    statePath: string;
+    scratch: string;
+  } {
+    return {
+      cwd: join(dir, "work"),
+      agentDir: join(dir, "agent"),
+      statePath: join(dir, "state.json"),
+      scratch: join(dir, "scratch"),
+    };
+  }
+
+  /** A tmux exec that writes an arbitrary state record (e.g. `cancel`). */
+  function usePopupState(state: Record<string, unknown>): { calls: string[][] } {
+    const calls: string[][] = [];
+    __setTmuxExecForTests__((args) => {
+      calls.push(args);
+      if (args[0] === "display-popup") {
+        writeFileSync(`${popupEnvValue(args, DIALOG_STATE_ENV)}`, JSON.stringify(state));
+      }
+      return "";
+    });
+    return { calls };
+  }
+
+  it("lists the roles, edits the brief and collects role and brief", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m\nthinking: low", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        keyScripts: [[...typed("scout"), ENTER]],
+        briefText: "map the auth module",
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.stderr, "");
+      assert.equal(run.state?.state, "done");
+      assert.equal(run.state?.role, "scout");
+      // The role step listed the same rows the role editor shows.
+      assert.equal(run.seen.length, 1);
+      assert.ok(run.seen[0]?.items.some((item) => /scout {2}\[project\] {2}model: m/.test(item)));
+      // The editor ran once on a brief under <scratch>/briefs/, and the
+      // collected brief is that file.
+      assert.equal(run.editorCalls.length, 1);
+      const brief = run.editorCalls[0]!;
+      assert.ok(brief.startsWith(join(dirs.scratch, "briefs", "scout-")));
+      assert.ok(brief.endsWith(".md"));
+      assert.equal(readFileSync(brief, "utf8"), "map the auth module");
+      assert.equal(run.state?.brief, brief);
+    });
+  });
+
+  it("opens at the brief step for --role and skips the role list", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        innerArgs: ["--role", "scout"],
+        briefText: "do the thing",
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.seen.length, 0);
+      assert.equal(run.editorCalls.length, 1);
+      assert.equal(run.state?.state, "done");
+      assert.equal(run.state?.role, "scout");
+      assert.equal(run.state?.brief, run.editorCalls[0]);
+    });
+  });
+
+  it("cancels on an empty brief and starts nothing", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        innerArgs: ["--role", "scout"],
+        briefText: "   \n",
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "cancel");
+    });
+  });
+
+  it("cancels on an editor error and starts nothing", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        innerArgs: ["--role", "scout"],
+        briefText: "a saved brief",
+        editorStatus: 1,
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "cancel");
+    });
+  });
+
+  it("cancels on Escape at the role list and runs no editor", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, { keyScripts: [[ESCAPE]] });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(run.editorCalls.length, 0);
+    });
+  });
+
+  it("sends the role-only inner argv to display-popup and prints the result line", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "scout", "model: m", "Scout body.");
+      const { calls } = usePopupExec({ line: "started scout in %24" });
+      try {
+        const res = await runCli(
+          ["spawn-dialog", "--cwd", cwd, "--agent-dir", agentDir, "--args", "scout"],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 0);
+        assert.equal(res.stderr, "");
+        assert.equal(res.stdout, "started scout in %24\n");
+      } finally {
+        restorePaneFake();
+      }
+      assert.equal(calls.length, 1);
+      const argv = calls[0]!;
+      const statePath = popupEnvValue(argv, DIALOG_STATE_ENV);
+      assert.ok(statePath, "expected the state path in the popup env");
+      assert.deepEqual(argv.slice(argv.indexOf(CLI)), [
+        CLI,
+        "spawn-dialog",
+        "--inner",
+        "--cwd",
+        cwd,
+        "--agent-dir",
+        agentDir,
+        "--pane",
+        "%21",
+        "--role",
+        "scout",
+      ]);
+    });
+  });
+
+  it("opens at the role list when --args is empty", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupExec({ line: "nothing" });
+      try {
+        const res = await runCli(
+          ["spawn-dialog", "--cwd", cwd, "--agent-dir", agentDir, "--args", ""],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 0);
+      } finally {
+        restorePaneFake();
+      }
+      const inner = calls[0]!.slice(calls[0]!.indexOf("--inner"));
+      assert.equal(inner.includes("--role"), false);
+    });
+  });
+
+  it("refuses task text in --args before any popup", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "scout", "model: m", "Scout body.");
+      const { calls } = usePopupExec({});
+      try {
+        const res = await runCli(
+          [
+            "spawn-dialog",
+            "--cwd",
+            cwd,
+            "--agent-dir",
+            agentDir,
+            "--args",
+            "scout map the auth module",
+          ],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 1);
+        assert.equal(res.stdout, "");
+        assert.match(
+          res.stderr,
+          /the pmux-spawn skill takes a role only; write the task in the brief step/,
+        );
+      } finally {
+        restorePaneFake();
+      }
+      assert.deepEqual(calls, []);
+    });
+  });
+
+  it("refuses an unknown role before any popup", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupExec({});
+      try {
+        const res = await runCli(
+          ["spawn-dialog", "--cwd", cwd, "--agent-dir", agentDir, "--args", "nosuchrole"],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 1);
+        assert.equal(res.stdout, "");
+        assert.match(res.stderr, /unknown role 'nosuchrole'/);
+      } finally {
+        restorePaneFake();
+      }
+      assert.deepEqual(calls, []);
+    });
+  });
+
+  it("prints 'nothing started' on a cancel", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupState({ state: "cancel" });
+      try {
+        const res = await runCli(
+          ["spawn-dialog", "--cwd", cwd, "--agent-dir", agentDir],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 0);
+        assert.equal(res.stdout, "nothing started\n");
+      } finally {
+        restorePaneFake();
+      }
+      assert.equal(calls.length, 1);
+    });
+  });
+
+  it("refuses before any popup call outside tmux", async () => {
+    const { calls } = usePopupExec({});
+    try {
+      const res = await runCli(["spawn-dialog"], { PATH: process.env.PATH });
+      assert.equal(res.code, 1);
+      assert.equal(res.stdout, "");
+      assert.match(res.stderr, /tmux/);
+    } finally {
+      restorePaneFake();
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("refuses the inner side without the dialog state env", async () => {
+    await withTempDirAsync(async (dir) => {
+      const res = await runCli(
+        ["spawn-dialog", "--inner", "--cwd", dir, "--agent-dir", dir, "--pane", "%21"],
+        { PATH: process.env.PATH },
+      );
       assert.equal(res.code, 1);
       assert.match(res.stderr, new RegExp(DIALOG_STATE_ENV));
     });
