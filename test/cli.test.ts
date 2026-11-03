@@ -3171,8 +3171,8 @@ describe("cli.ts reports", () => {
       assert.equal(run.state?.state, "cancel");
       assert.equal(run.seen.length, 1);
       assert.deepEqual(run.seen[0]!.items, [
-        "worker  2026-11-03 21:30  pending",
-        "scout  2026-11-03 20:00  acknowledged",
+        "worker  2026-11-03 21:30  pending  #b0000000",
+        "scout  2026-11-03 20:00  acknowledged  #a0000000",
       ]);
     });
   });
@@ -3214,8 +3214,34 @@ describe("cli.ts reports", () => {
         keyScripts: [[ENTER], [ESCAPE]],
       });
       assert.equal(run.code, 0);
-      assert.match(run.seen[0]?.items[0] ?? "", /missing$/);
+      assert.match(run.seen[0]?.items[0] ?? "", /missing {2}#[0-9a-f]{8}$/);
       assert.deepEqual(run.pagerCalls, []);
+      assert.equal(run.state?.state, "cancel");
+    });
+  });
+
+  it("opens the second of two same-minute rows from one sender", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath, history } = reportsDirs(dir);
+      const older = seedReport(history, dir, {
+        tag: "a",
+        from: "worker",
+        at: "2026-11-03T21:30:00.000Z",
+      });
+      seedReport(history, dir, {
+        tag: "b",
+        from: "worker",
+        at: "2026-11-03T21:30:45.000Z",
+      });
+      const run = await runReportsInner({
+        env,
+        statePath,
+        keyScripts: [[DOWN, ENTER], [ESCAPE]],
+      });
+      assert.equal(run.code, 0);
+      // Both rows read "worker  2026-11-03 21:30  pending"; the record tag
+      // keeps them distinct, so Down+Enter opens the second row's report.
+      assert.deepEqual(run.pagerCalls, [older.report]);
       assert.equal(run.state?.state, "cancel");
     });
   });

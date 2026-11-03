@@ -75,10 +75,16 @@ function reportTime(at: string): string {
   return match === null ? at : `${match[1]} ${match[2]}`;
 }
 
-/** One row of the report list: sender, time and state (spec: "Report list"). */
+/**
+ * One row of the report list: sender, time and state (spec: "Report
+ * list"), then a short record tag. The time shows only the minute, so two
+ * same-sender, same-state reports inside one minute would draw the same
+ * row — and the list maps a chosen row back through `items.indexOf`,
+ * which names the first duplicate. The tag keeps every row unique.
+ */
 function reportRow(entry: ReportEntry): string {
   const state = entry.missing ? "missing" : entry.acknowledged ? "acknowledged" : "pending";
-  return `${entry.record.from}  ${reportTime(entry.record.at)}  ${state}`;
+  return `${entry.record.from}  ${reportTime(entry.record.at)}  ${state}  #${entry.record.id.slice(0, 8)}`;
 }
 
 /** What the inner command line gives the dialog. */
