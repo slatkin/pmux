@@ -13,6 +13,7 @@ import {
   getBundledAgentsDir,
   listModels,
   listRoles,
+  parseAgentDefinition,
   parseModelList,
   setFrontmatterKey,
   writeRoleKey,
@@ -90,6 +91,24 @@ describe("setFrontmatterKey", () => {
 
   it("returns the text unchanged when deleting an absent key", () => {
     assert.equal(setFrontmatterKey(ROLE, "model-fallback", null), ROLE);
+  });
+
+  it("leaves a parseable file when deleting the only frontmatter key", () => {
+    const text = "---\nmodel: a/x\n---\n\nbody\n";
+    const next = setFrontmatterKey(text, "model", null);
+    assert.equal(next, "---\n---\n\nbody\n");
+    // An empty frontmatter block still parses, so the role stays listed.
+    const parsed = parseAgentDefinition(next, "role");
+    assert.ok(parsed);
+    assert.equal(parsed.model, undefined);
+    assert.equal(parsed.body, "body");
+  });
+
+  it("leaves a parseable CRLF file when deleting the only frontmatter key", () => {
+    const text = "---\r\nmodel: a/x\r\n---\r\n\r\nbody\r\n";
+    const next = setFrontmatterKey(text, "model", null);
+    assert.equal(next, "---\r\n---\r\n\r\nbody\r\n");
+    assert.ok(parseAgentDefinition(next, "role"));
   });
 
   it("rejects a file without a frontmatter block", () => {
@@ -221,6 +240,21 @@ describe("writeRoleKey", () => {
         "---\nname: scout\nmodel: a/x\nthinking: high\n---\n\nuser body\n",
       );
       assert.equal(readFileSync(bundled, "utf8"), bundledBefore);
+    });
+  });
+
+  it("keeps the role listed after deleting its only frontmatter key", () => {
+    withTempDir((dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+      const file = join(cwd, ".pi", "agents", "fixer.md");
+      writeFileSync(file, "---\nmodel: a/x\n---\n\nbody\n");
+      const role = listRoles(cwd, agentDir).find((entry) => entry.name === "fixer")!;
+      writeRoleKey(role, "model", null, { agentDir });
+      const after = listRoles(cwd, agentDir).find((entry) => entry.name === "fixer");
+      assert.ok(after);
+      assert.equal(after.model, undefined);
     });
   });
 

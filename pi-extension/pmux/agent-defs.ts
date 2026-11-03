@@ -88,11 +88,15 @@ export function parseAgentDefinition(
 ): AgentDefinition | null {
   // Role files may use CRLF line endings; normalize so both parse identically.
   const text = content.replace(/\r\n/g, "\n");
-  const match = text.match(/^---\n([\s\S]*?)\n---/);
+  // The closing delimiter is the first later line that is exactly `---`,
+  // so an empty frontmatter block (`---\n---`) is still a role file. The
+  // `^---` anchor also keeps a mid-line `---` inside a value from ending
+  // the block.
+  const match = text.startsWith("---\n") ? /^---\n([\s\S]*?)^---/m.exec(text) : null;
   if (!match) return null;
 
   const frontmatter = match[1];
-  const body = text.replace(/^---\n[\s\S]*?\n---\n*/, "").trim();
+  const body = text.slice(match[0].length).trim();
   const systemPromptMode = getFrontmatterValue(frontmatter, "system-prompt");
 
   return {
