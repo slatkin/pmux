@@ -8,10 +8,10 @@
 
 ## 2. Role files (role-editor)
 
-- [ ] 2.1 Add `setFrontmatterKey(text, key, value | null)` to `agent-defs.ts` (design D4). Verify with `test/agent-defs.test.ts` (new) cases: replace in place, append before the closing `---`, delete, CRLF file, and body bytes unchanged.
-- [ ] 2.2 Add `listRoles(cwd, agentDir)`: one row per name, winning file by the existing order, source label, the three values; skip files the parser rejects; write nothing. Verify with temp-dir tests for a shadowed built-in, a built-in only role and a project role.
-- [ ] 2.3 Add `writeRoleKey` with copy-on-first-edit of a built-in role to `<agentDir>/agents/<name>.md` and an atomic temp-file-and-rename write. Verify with tests: built-in edit makes a user copy and leaves the package file unchanged, second edit changes only the copy, project file edited in place.
-- [ ] 2.4 Add the model-list parser for `pi --list-models` output (design D5): skip the header, build `provider/model`, report a non-zero exit or empty list as an error. Verify with tests on captured output and on a failing command.
+- [x] 2.1 Add `setFrontmatterKey(text, key, value | null)` to `agent-defs.ts` (design D4). Verify with `test/agent-defs.test.ts` (new) cases: replace in place, append before the closing `---`, delete, CRLF file, and body bytes unchanged.
+- [x] 2.2 Add `listRoles(cwd, agentDir)`: one row per name, winning file by the existing order, source label, the three values; skip files the parser rejects; write nothing. Verify with temp-dir tests for a shadowed built-in, a built-in only role and a project role.
+- [x] 2.3 Add `writeRoleKey` with copy-on-first-edit of a built-in role to `<agentDir>/agents/<name>.md` and an atomic temp-file-and-rename write. Verify with tests: built-in edit makes a user copy and leaves the package file unchanged, second edit changes only the copy, project file edited in place.
+- [x] 2.4 Add the model-list parser for `pi --list-models` output (design D5): skip the header, build `provider/model`, report a non-zero exit or empty list as an error. Verify with tests on captured output and on a failing command.
 
 ## 3. Role editor dialog and commands (role-editor)
 
