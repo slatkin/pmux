@@ -61,6 +61,7 @@ import {
   type AgentDefinition,
 } from "./agent-defs.ts";
 import { rolesDialogOuter } from "./dialog-roles.ts";
+import { reportsDialogOuter } from "./dialog-reports.ts";
 import { piSpawnCommand } from "./dialog-spawn.ts";
 
 import { decodeChildEnv, isSubagentChild } from "./child-env.ts";
@@ -1199,6 +1200,28 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       try {
         // The outer side runs in-process and waits with no limit (design D1).
         const line = await rolesDialogOuter({
+          cwd: ctx.cwd,
+          agentDir: getAgentConfigDir(),
+          env: process.env,
+        });
+        ctx.ui.notify(line, "info");
+      } catch (error) {
+        ctx.ui.notify(errorText(error), "error");
+      }
+    },
+  });
+
+  // /pmux-reports command — the report viewer dialog (design D9)
+  pi.registerCommand("pmux-reports", {
+    description: "Read the reports children sent this pane in a popup",
+    handler: async (_args, ctx) => {
+      if (!isTmuxAvailable()) {
+        ctx.ui.notify(`Subagents require tmux. ${tmuxSetupHint()}`, "error");
+        return;
+      }
+      try {
+        // The outer side runs in-process and waits with no limit (design D1).
+        const line = await reportsDialogOuter({
           cwd: ctx.cwd,
           agentDir: getAgentConfigDir(),
           env: process.env,

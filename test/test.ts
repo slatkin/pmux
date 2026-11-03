@@ -2671,6 +2671,39 @@ describe("pmux-roles command", () => {
   });
 });
 
+describe("pmux-reports command", () => {
+  function loadCommand() {
+    const { api, registeredCommands } = createMockExtensionApi();
+    (subagentsModule as any).default(api);
+    const command = registeredCommands.find((c: any) => c.name === "pmux-reports");
+    assert.ok(command, "expected /pmux-reports to be registered");
+    const notifications: Array<{ message: string; level: string }> = [];
+    const ctx = {
+      cwd: "/tmp",
+      ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
+    };
+    return { command, notifications, ctx };
+  }
+
+  it("refuses outside tmux before any popup call", async () => {
+    const calls: string[][] = [];
+    __setTmuxExecForTests__((args) => {
+      calls.push(args);
+      return "";
+    });
+    try {
+      const { command, notifications, ctx } = loadCommand();
+      await command.handler("", ctx);
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].level, "error");
+      assert.match(notifications[0].message, /tmux/);
+    } finally {
+      __setTmuxExecForTests__(null);
+    }
+    assert.deepEqual(calls, []);
+  });
+});
+
 describe("pmux-spawn command", () => {
   const testApi = () => (subagentsModule as any).__test__;
 
