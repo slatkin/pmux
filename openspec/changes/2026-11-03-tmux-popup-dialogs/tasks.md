@@ -31,8 +31,8 @@
 - [x] 5.1 Add `report-history.ts` (design D8): `historyDirPath` on the inbox hash under `pmux-history`, `writeHistoryRecord` (temp file and rename, owner-only dir), `listHistory` newest first, `pruneHistory`. Verify with `test/report-history.test.ts`, including the "same key as the inbox" scenario.
 - [x] 5.2 Make `registerReport` take `from` and `env` and write the history record after a successful registration, dropping any error; update the `send` and run-wrapper callers. Verify with `test/report-delivery.test.ts` and `test/run.test.ts` cases: a record exists after `send` and after a wake row, delivery still succeeds when the history dir is unwritable, and `ack` leaves the record.
 - [x] 5.3 Add history pruning to `cli.ts prune` and its output. Verify with `test/prune.test.ts` cases for old and recent records and an empty directory.
-- [ ] 5.4 Add `cli.ts reports` (outer) and `reports --inner` (inner): the list with sender, time and ack state from `readReportLog`, "missing" for a gone file, "no reports" for an empty history, and `$PAGER`/`less` on Enter, back to the list after. Verify with tests that the list order and ack marks are right and that reading writes no `ack` record.
-- [ ] 5.5 Register `/pmux-reports` in `index.ts` and add `skills/pmux-reports/SKILL.md`. Verify the command is registered and refuses outside tmux.
+- [x] 5.4 Add `cli.ts reports` (outer) and `reports --inner` (inner): the list with sender, time and ack state from `readReportLog`, "missing" for a gone file, "no reports" for an empty history, and `$PAGER`/`less` on Enter, back to the list after. Verify with tests that the list order and ack marks are right and that reading writes no `ack` record.
+- [x] 5.5 Register `/pmux-reports` in `index.ts` and add `skills/pmux-reports/SKILL.md`. Verify the command is registered and refuses outside tmux.
 
 ## 6. Claude Code host check and docs
 
