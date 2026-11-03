@@ -36,9 +36,9 @@
 
 ## 6. Claude Code host check and docs
 
-- [ ] 6.1 Write the three `SKILL.md` bodies to the host facts in design D7: use `${CLAUDE_SKILL_DIR}` in the `!` command, quote `$ARGUMENTS` with single quotes, and print each refusal on a non-zero exit; make the `!` command one `node` invocation with no shell operator, with an `allowed-tools` rule that matches its exact text, quotes included; and add `!./skills/pmux-roles`, `!./skills/pmux-spawn` and `!./skills/pmux-reports` to `package.json` `pi.skills`. Verify by reading the three files and `package.json` against D7.
-- [ ] 6.2 Document the three commands, the copy-on-edit rule and the history in `README.md` and `docs/guide.md`, and add the three skills to `skills/pmux/SKILL.md` only where the user starts them. Verify by reading the changed sections.
-- [ ] 6.3 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`, and verify all four pass.
+- [x] 6.1 Write the three `SKILL.md` bodies to the host facts in design D7: use `${CLAUDE_SKILL_DIR}` in the `!` command, quote `$ARGUMENTS` with single quotes, and print each refusal on a non-zero exit; make the `!` command one `node` invocation with no shell operator, with an `allowed-tools` rule that matches its exact text, quotes included; and add `!./skills/pmux-roles`, `!./skills/pmux-spawn` and `!./skills/pmux-reports` to `package.json` `pi.skills`. Verify by reading the three files and `package.json` against D7.
+- [x] 6.2 Document the three commands, the copy-on-edit rule and the history in `README.md` and `docs/guide.md`, and add the three skills to `skills/pmux/SKILL.md` only where the user starts them. Verify by reading the changed sections.
+- [x] 6.3 Run `pnpm run format:check`, `pnpm run lint`, `pnpm run typecheck` and `pnpm test`, and verify all four pass.
 
 ## Workflow follow-up
 
