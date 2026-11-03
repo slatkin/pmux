@@ -1,8 +1,19 @@
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolvePiCommand } from "./launch.ts";
 import { parseSurfacePlacement, type SurfacePlacement } from "./placement.ts";
 
 /** Absolute path to `pi-extension/pmux`. https://github.com/nodejs/node/issues/37845 */
@@ -129,6 +140,218 @@ export function loadAgentDefaults(agentName: string, cwd = process.cwd()): Agent
   }
 
   return null;
+}
+
+/** Which of the three role directories a role's winning file comes from. */
+export type RoleSource = "project" | "user" | "built-in";
+
+/** One row of the role editor's list: the winning file and its values. */
+export interface RoleInfo {
+  name: string;
+  path: string;
+  source: RoleSource;
+  model?: string;
+  modelFallback?: string;
+  thinking?: string;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Replace, add or delete one `key:` line in a role file's frontmatter.
+ *
+ * Pure text: an existing `^key:` line is replaced in place, an absent key
+ * is appended as the last line before the closing `---`, and `value` null
+ * deletes the line. Every other byte stays the same — the line order, the
+ * line endings (a changed line keeps its own ending, an added line takes
+ * the file's CRLF or LF) and the body. Throws when the file has no
+ * frontmatter block.
+ */
+export function setFrontmatterKey(text: string, key: string, value: string | null): string {
+  const eol = text.startsWith("---\r\n") ? "\r\n" : "\n";
+  if (!text.startsWith(`---${eol}`)) {
+    throw new Error("the role file has no frontmatter block");
+  }
+  const openEnd = `---${eol}`.length;
+  // The closing delimiter is the first later line that is exactly `---`,
+  // the same cut parseAgentDefinition makes. The search starts on the
+  // opening line's own newline so an empty frontmatter still finds it.
+  const closingRe = /(\r?\n)---(?=\r?\n|$)/g;
+  closingRe.lastIndex = openEnd - eol.length;
+  const closing = closingRe.exec(text);
+  if (!closing) {
+    throw new Error("the role file has no closing frontmatter delimiter");
+  }
+  const closeLineStart = closing.index + closing[1]!.length;
+
+  const frontmatter = text.slice(openEnd, closeLineStart);
+  const keyRe = new RegExp(`^${escapeRegExp(key)}:[^\\n]*`, "m");
+  const line = keyRe.exec(frontmatter);
+
+  let next: string;
+  if (line) {
+    const lineEnd = line.index + line[0].length;
+    if (value === null) {
+      // The match stops before `\n`; drop the terminator too.
+      const drop = frontmatter[lineEnd] === "\n" ? 1 : 0;
+      next = frontmatter.slice(0, line.index) + frontmatter.slice(lineEnd + drop);
+    } else {
+      // The match carries a trailing `\r` for a CRLF line; keep it.
+      const cr = line[0].endsWith("\r") ? "\r" : "";
+      next =
+        frontmatter.slice(0, line.index) + `${key}: ${value}${cr}` + frontmatter.slice(lineEnd);
+    }
+  } else {
+    if (value === null) return text;
+    // The region ends on the last line's terminator, or is empty.
+    next = `${frontmatter}${key}: ${value}${eol}`;
+  }
+  return text.slice(0, openEnd) + next + text.slice(closeLineStart);
+}
+
+/**
+ * List every role that resolves for `cwd`, once per file name, by the same
+ * order `loadAgentDefaults` uses: `<cwd>/.pi/agents/`, then
+ * `<agentDir>/agents/`, then the package's `agents/`. A file whose
+ * frontmatter the parser rejects falls through to the next source, and a
+ * name no source parses is not listed. Reads only; writes nothing.
+ */
+export function listRoles(cwd: string, agentDir: string): RoleInfo[] {
+  const sources: { dir: string; source: RoleSource }[] = [
+    { dir: join(cwd, ".pi", "agents"), source: "project" },
+    { dir: join(agentDir, "agents"), source: "user" },
+    { dir: getBundledAgentsDir(), source: "built-in" },
+  ];
+  const names = new Set<string>();
+  for (const { dir } of sources) {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.endsWith(".md")) names.add(entry.slice(0, -".md".length));
+    }
+  }
+  const roles: RoleInfo[] = [];
+  for (const name of [...names].sort()) {
+    for (const { dir, source } of sources) {
+      const path = join(dir, `${name}.md`);
+      let text: string;
+      try {
+        text = readFileSync(path, "utf8");
+      } catch {
+        continue;
+      }
+      const parsed = parseAgentDefinition(text, name);
+      if (!parsed) continue;
+      roles.push({
+        name,
+        path,
+        source,
+        model: parsed.model,
+        modelFallback: parsed.modelFallback,
+        thinking: parsed.thinking,
+      });
+      break;
+    }
+  }
+  return roles;
+}
+
+/**
+ * Apply one frontmatter edit to the role's winning file.
+ *
+ * For a `built-in` role the first edit copies the package file whole to
+ * `<agentDir>/agents/<name>.md` (creating the directory) and edits the
+ * copy; the package file never changes. The write is a temp file in the
+ * same directory plus a rename, so a reader sees the old file or the new
+ * file. Returns the path of the file written.
+ */
+export function writeRoleKey(
+  role: RoleInfo,
+  key: string,
+  value: string | null,
+  options: { agentDir: string },
+): string {
+  let target = role.path;
+  if (role.source === "built-in") {
+    target = join(options.agentDir, "agents", `${role.name}.md`);
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(role.path, target);
+  }
+  const next = setFrontmatterKey(readFileSync(target, "utf8"), key, value);
+  const tmp = `${target}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+  writeFileSync(tmp, next, "utf8");
+  renameSync(tmp, target);
+  return target;
+}
+
+/** The shape of a `pi --list-models` run, injectable for tests. */
+export interface ListModelsResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: Error;
+}
+
+/**
+ * Parse `pi --list-models` output into `provider/model` strings.
+ *
+ * The output is a table whose first line is the header row; each later
+ * line's first two whitespace-separated columns are the provider and the
+ * model id. Lines with fewer than two columns are skipped.
+ */
+export function parseModelList(output: string): string[] {
+  const models: string[] = [];
+  for (const line of output.split("\n").slice(1)) {
+    const [provider, model] = line.trim().split(/\s+/);
+    if (provider && model) models.push(`${provider}/${model}`);
+  }
+  return models;
+}
+
+/**
+ * The `provider/model` choices `pi --list-models` offers, resolved through
+ * `resolvePiCommand`. Throws when the command cannot start, exits non-zero
+ * or lists no models.
+ */
+export function listModels(
+  deps: { env?: NodeJS.ProcessEnv; run?: (command: string[]) => ListModelsResult } = {},
+): string[] {
+  const command = [...resolvePiCommand({ env: deps.env }), "--list-models"];
+  const run =
+    deps.run ??
+    ((argv: string[]): ListModelsResult => {
+      const result = spawnSync(argv[0]!, argv.slice(1), {
+        encoding: "utf8",
+        env: deps.env,
+      });
+      return {
+        status: result.status,
+        stdout: result.stdout ?? "",
+        stderr: result.stderr ?? "",
+        error: result.error,
+      };
+    });
+  const result = run(command);
+  if (result.error) {
+    throw new Error(`pi --list-models failed to start: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const detail = result.stderr.trim();
+    throw new Error(
+      detail ? `pi --list-models failed: ${detail}` : `pi --list-models exited ${result.status}`,
+    );
+  }
+  const models = parseModelList(result.stdout);
+  if (models.length === 0) {
+    throw new Error("pi --list-models listed no models");
+  }
+  return models;
 }
 
 /**
