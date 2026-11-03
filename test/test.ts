@@ -37,6 +37,7 @@ import {
 import { interpretExitSidecar } from "../pi-extension/pmux/exit-sidecar.ts";
 import { readChildStatus } from "../pi-extension/pmux/status-file.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
+import { DIALOG_STATE_ENV, writeDialogDone } from "../pi-extension/pmux/dialog-host.ts";
 import { readLaunchSpec } from "../pi-extension/pmux/launch.ts";
 import {
   LAUNCH_RECORD_VERSION,
@@ -2667,6 +2668,234 @@ describe("pmux-roles command", () => {
       __setTmuxExecForTests__(null);
     }
     assert.deepEqual(calls, []);
+  });
+});
+
+describe("pmux-spawn command", () => {
+  const testApi = () => (subagentsModule as any).__test__;
+
+  function loadCommand(cwd: string) {
+    const { api, registeredCommands, sentUserMessages } = createMockExtensionApi();
+    (subagentsModule as any).default(api);
+    const command = registeredCommands.find((c: any) => c.name === "pmux-spawn");
+    assert.ok(command, "expected /pmux-spawn to be registered");
+    const notifications: Array<{ message: string; level: string }> = [];
+    const ctx = {
+      cwd,
+      ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
+    };
+    return { command, notifications, ctx, sentUserMessages };
+  }
+
+  /** A supervisor stand-in that records the params each spawn call gets. */
+  function fakeSupervisor() {
+    const spawnCalls: Array<Record<string, unknown>> = [];
+    const supervisor = {
+      isShutdown: false,
+      shutdown() {},
+      async spawn(params: Record<string, unknown>) {
+        spawnCalls.push(params);
+        return { name: params.name, surface: "%24" };
+      },
+    };
+    return { spawnCalls, supervisor };
+  }
+
+  /** Set the tmux variables the command and the dialog host read. */
+  function tmuxEnv(): Array<[string, string | undefined]> {
+    const saved: Array<[string, string | undefined]> = [
+      ["TMUX", process.env.TMUX],
+      ["TMUX_PANE", process.env.TMUX_PANE],
+    ];
+    process.env.TMUX = "/tmp/tmux-0/default";
+    process.env.TMUX_PANE = "%21";
+    return saved;
+  }
+
+  function restoreAll(saved: Array<[string, string | undefined]>) {
+    for (const [name, value] of saved) restoreEnvVar(name, value);
+  }
+
+  /** The `-e PMUX_DIALOG_STATE=<path>` value in a display-popup argv. */
+  function popupStatePath(argv: string[]): string {
+    for (let i = 0; i < argv.length - 1; i++) {
+      if (argv[i] === "-e" && argv[i + 1]!.startsWith(`${DIALOG_STATE_ENV}=`)) {
+        return argv[i + 1]!.slice(DIALOG_STATE_ENV.length + 1);
+      }
+    }
+    assert.fail("the popup argv carries no state path");
+  }
+
+  /** A tmux exec that answers display-popup with a dialog state record. */
+  function usePopupState(record: Record<string, unknown>): { calls: string[][] } {
+    const calls: string[][] = [];
+    __setTmuxExecForTests__((args) => {
+      calls.push(args);
+      if (args[0] === "display-popup") {
+        writeDialogDone(popupStatePath(args), record);
+      }
+      return "";
+    });
+    return { calls };
+  }
+
+  const POPUP_CANCEL = { state: "cancel" } as const;
+
+  it("refuses outside tmux before any popup call", async () => {
+    const calls: string[][] = [];
+    __setTmuxExecForTests__((args) => {
+      calls.push(args);
+      return "";
+    });
+    try {
+      const { command, notifications, ctx, sentUserMessages } = loadCommand("/tmp");
+      await command.handler("scout map the auth module", ctx);
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].level, "error");
+      assert.match(notifications[0].message, /tmux/);
+      assert.deepEqual(sentUserMessages, []);
+    } finally {
+      __setTmuxExecForTests__(null);
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("starts at once on a role and a task, with no popup and no user message", async () => {
+    await withIsolatedAgentEnv(async ({ projectDir, projectAgentsDir }) => {
+      writeAgentFile(projectAgentsDir, "scout", "name: scout");
+      const saved = tmuxEnv();
+      const { calls } = usePopupState({});
+      const { command, notifications, ctx, sentUserMessages } = loadCommand(projectDir);
+      const fake = fakeSupervisor();
+      const real = testApi().getCurrentSupervisor();
+      testApi().setSupervisorForTests(fake.supervisor as any);
+      try {
+        await command.handler("scout map the auth module", ctx);
+      } finally {
+        testApi().setSupervisorForTests(real);
+        __setTmuxExecForTests__(null);
+        restoreAll(saved);
+      }
+      assert.deepEqual(fake.spawnCalls, [
+        { name: "Scout", task: "map the auth module", agent: "scout" },
+      ]);
+      assert.deepEqual(sentUserMessages, []);
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].level, "info");
+      assert.equal(notifications[0].message, "started Scout in %24");
+      assert.equal(
+        calls.some((args) => args[0] === "display-popup"),
+        false,
+      );
+    });
+  });
+
+  it("opens the role list with no args and starts from the collected brief", async () => {
+    await withIsolatedAgentEnv(async ({ projectDir, projectAgentsDir }) => {
+      writeAgentFile(projectAgentsDir, "scout", "name: scout");
+      const brief = join(projectDir, "brief.md");
+      writeFileSync(brief, "map the auth module");
+      const saved = tmuxEnv();
+      const { calls } = usePopupState({ role: "scout", brief });
+      const { command, notifications, ctx, sentUserMessages } = loadCommand(projectDir);
+      const fake = fakeSupervisor();
+      const real = testApi().getCurrentSupervisor();
+      testApi().setSupervisorForTests(fake.supervisor as any);
+      try {
+        await command.handler("", ctx);
+      } finally {
+        testApi().setSupervisorForTests(real);
+        __setTmuxExecForTests__(null);
+        restoreAll(saved);
+      }
+      const popup = calls.find((args) => args[0] === "display-popup");
+      assert.ok(popup, "expected a display-popup call");
+      assert.equal(popup.includes("--role"), false);
+      // pi collects in the popup and starts the child itself (design D6).
+      assert.equal(popup.includes("--start"), false);
+      assert.deepEqual(fake.spawnCalls, [
+        { name: "Scout", task: "map the auth module", agent: "scout" },
+      ]);
+      assert.deepEqual(sentUserMessages, []);
+      assert.equal(notifications[0]?.message, "started Scout in %24");
+    });
+  });
+
+  it("opens the dialog at the brief step for a role only", async () => {
+    await withIsolatedAgentEnv(async ({ projectDir, projectAgentsDir }) => {
+      writeAgentFile(projectAgentsDir, "scout", "name: scout");
+      const brief = join(projectDir, "brief.md");
+      writeFileSync(brief, "do the thing");
+      const saved = tmuxEnv();
+      const { calls } = usePopupState({ role: "scout", brief });
+      const { command, ctx, sentUserMessages } = loadCommand(projectDir);
+      const fake = fakeSupervisor();
+      const real = testApi().getCurrentSupervisor();
+      testApi().setSupervisorForTests(fake.supervisor as any);
+      try {
+        await command.handler("scout", ctx);
+      } finally {
+        testApi().setSupervisorForTests(real);
+        __setTmuxExecForTests__(null);
+        restoreAll(saved);
+      }
+      const popup = calls.find((args) => args[0] === "display-popup");
+      assert.ok(popup, "expected a display-popup call");
+      const roleIdx = popup.indexOf("--role");
+      assert.notEqual(roleIdx, -1);
+      assert.equal(popup[roleIdx + 1], "scout");
+      assert.deepEqual(fake.spawnCalls, [{ name: "Scout", task: "do the thing", agent: "scout" }]);
+      assert.deepEqual(sentUserMessages, []);
+    });
+  });
+
+  it("reports nothing started on a cancel and starts nothing", async () => {
+    await withIsolatedAgentEnv(async ({ projectDir, projectAgentsDir }) => {
+      writeAgentFile(projectAgentsDir, "scout", "name: scout");
+      const saved = tmuxEnv();
+      usePopupState(POPUP_CANCEL);
+      const { command, notifications, ctx, sentUserMessages } = loadCommand(projectDir);
+      const fake = fakeSupervisor();
+      const real = testApi().getCurrentSupervisor();
+      testApi().setSupervisorForTests(fake.supervisor as any);
+      try {
+        await command.handler("", ctx);
+      } finally {
+        testApi().setSupervisorForTests(real);
+        __setTmuxExecForTests__(null);
+        restoreAll(saved);
+      }
+      assert.deepEqual(fake.spawnCalls, []);
+      assert.equal(notifications[0]?.message, "nothing started");
+      assert.deepEqual(sentUserMessages, []);
+    });
+  });
+
+  it("refuses an unknown role before any popup", async () => {
+    await withIsolatedAgentEnv(async ({ projectDir }) => {
+      const saved = tmuxEnv();
+      const { calls } = usePopupState({});
+      const { command, notifications, ctx, sentUserMessages } = loadCommand(projectDir);
+      const fake = fakeSupervisor();
+      const real = testApi().getCurrentSupervisor();
+      testApi().setSupervisorForTests(fake.supervisor as any);
+      try {
+        await command.handler("nosuchrole", ctx);
+      } finally {
+        testApi().setSupervisorForTests(real);
+        __setTmuxExecForTests__(null);
+        restoreAll(saved);
+      }
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].level, "error");
+      assert.match(notifications[0].message, /unknown role 'nosuchrole'/);
+      assert.equal(
+        calls.some((args) => args[0] === "display-popup"),
+        false,
+      );
+      assert.deepEqual(fake.spawnCalls, []);
+      assert.deepEqual(sentUserMessages, []);
+    });
   });
 });
 

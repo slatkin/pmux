@@ -61,6 +61,7 @@ import {
   type AgentDefinition,
 } from "./agent-defs.ts";
 import { rolesDialogOuter } from "./dialog-roles.ts";
+import { piSpawnCommand } from "./dialog-spawn.ts";
 
 import { decodeChildEnv, isSubagentChild } from "./child-env.ts";
 import { loadStatusConfig, loadSurfaceConfig, writeSurfaceConfig } from "./status.ts";
@@ -681,6 +682,9 @@ export const __test__ = {
   getCurrentSupervisor(): Supervisor {
     return currentSupervisor();
   },
+  setSupervisorForTests(supervisor: Supervisor | null): void {
+    (globalThis as any)[SUPERVISOR_KEY] = supervisor;
+  },
   getDefaultSessionDirFor,
 };
 
@@ -1158,33 +1162,29 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       },
     });
 
-  // /pmux-spawn command — spawn a subagent by name
+  // /pmux-spawn command — the spawn dialog; a role and a task start at
+  // once. The command starts the child itself and sends the agent no
+  // message (designs D6 and D9).
   pi.registerCommand("pmux-spawn", {
-    description: "Spawn a subagent: /pmux-spawn <agent> <task>",
+    description: "Spawn a subagent: /pmux-spawn [<role> [<task>]]",
     handler: async (args, ctx) => {
-      const trimmed = args.trim();
-      if (!trimmed) {
-        ctx.ui.notify("Usage: /pmux-spawn <agent> [task]", "warning");
+      if (!isTmuxAvailable()) {
+        ctx.ui.notify(`Subagents require tmux. ${tmuxSetupHint()}`, "error");
         return;
       }
-
-      const spaceIdx = trimmed.indexOf(" ");
-      const agentName = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
-      const task = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
-
-      const defs = loadAgentDefaults(agentName);
-      if (!defs) {
-        ctx.ui.notify(
-          `Agent "${agentName}" not found in ~/.pi/agent/agents/ or .pi/agents/`,
-          "error",
+      try {
+        const line = await piSpawnCommand(
+          args,
+          { cwd: ctx.cwd, agentDir: getAgentConfigDir(), env: process.env },
+          {
+            spawn: (params) =>
+              currentSupervisor().spawn(params, ctx, { fallback: getSurfaceDefault() }),
+          },
         );
-        return;
+        ctx.ui.notify(line, "info");
+      } catch (error) {
+        ctx.ui.notify(errorText(error), "error");
       }
-
-      const taskText = task || `You are the ${agentName} agent. Wait for instructions.`;
-      const displayName = agentName[0].toUpperCase() + agentName.slice(1);
-      const toolCall = `Use pmux_spawn with agent: "${agentName}", name: "${displayName}", task: ${JSON.stringify(taskText)}`;
-      pi.sendUserMessage(toolCall);
     },
   });
 

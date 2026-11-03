@@ -312,3 +312,88 @@ export async function spawnDialogOuter(
     deps,
   );
 }
+
+/** What the host's start call returns; `supervisor.spawn`'s `RunningSubagent` fits. */
+export interface SpawnedChild {
+  name: string;
+  surface: string;
+}
+
+/**
+ * The pi side's start: `/pmux-spawn` wires it to `supervisor.spawn` with
+ * the handler's ctx and the configured surface fallback — the same call
+ * `pmux_spawn` makes (design D6).
+ */
+export type PiSpawnStart = (params: {
+  name: string;
+  task: string;
+  agent: string;
+}) => Promise<SpawnedChild>;
+
+/** The pieces `/pmux-spawn` injects; `outer` defaults to the real dialog. */
+export interface PiSpawnDeps {
+  /** The child start; the host wires `supervisor.spawn`. */
+  spawn: PiSpawnStart;
+  /** The dialog outer side; defaults to `spawnDialogOuter` (collect only, no limit). */
+  outer?: (args: SpawnOuterArgs) => Promise<DialogOutcome>;
+}
+
+/** The display name a role earns, as the old `/pmux-spawn` made it. */
+function spawnDisplayName(role: string): string {
+  return role[0]!.toUpperCase() + role.slice(1);
+}
+
+/**
+ * pi's `/pmux-spawn` (designs D6 and D9). With `<role> <task>` it starts
+ * the child at once and opens no popup; otherwise it opens the spawn
+ * dialog — the role list with no role, the brief step with one — and
+ * starts the child from the collected `{role, brief}`. Returns the one
+ * result line for `ctx.ui.notify`: "started <name> in <pane>", "nothing
+ * started", or the inner side's own line ("no roles found", "spawn
+ * failed: …"). An unknown role throws `UnknownRoleError` — the outer
+ * side's refusal before any popup for a role alone, the supervisor's for
+ * a role with a task. The command sends the agent no message.
+ */
+export async function piSpawnCommand(
+  argsText: string,
+  host: { cwd: string; agentDir: string; env: NodeJS.ProcessEnv },
+  deps: PiSpawnDeps,
+): Promise<string> {
+  const trimmed = argsText.trim();
+  const space = trimmed.indexOf(" ");
+  const role = space === -1 ? trimmed : trimmed.slice(0, space);
+  const task = space === -1 ? "" : trimmed.slice(space + 1).trim();
+
+  // A role and a task start at once: the `pmux_spawn` path, no popup.
+  if (role !== "" && task !== "") {
+    const running = await deps.spawn({ name: spawnDisplayName(role), task, agent: role });
+    return `started ${running.name} in ${running.surface}`;
+  }
+
+  // pi collects in the popup and starts the child itself: no `--start`, no
+  // wait limit (design D6).
+  const outer = deps.outer ?? spawnDialogOuter;
+  const outcome = await outer({
+    cwd: host.cwd,
+    agentDir: host.agentDir,
+    env: host.env,
+    ...(role !== "" ? { role } : {}),
+  });
+  if (outcome.kind === "cancel") return "nothing started";
+  if (outcome.kind === "still-open") return outcome.line;
+  // A `line` record is the inner side's own answer (a failure or an empty
+  // role list); a `{role, brief}` record is the host's start.
+  const result = outcome.result;
+  if (typeof result.line === "string" && result.line.length > 0) return result.line;
+  const collectedRole = result.role;
+  const brief = result.brief;
+  if (typeof collectedRole !== "string" || typeof brief !== "string") {
+    throw new Error("the dialog's done record holds no role or brief");
+  }
+  const running = await deps.spawn({
+    name: spawnDisplayName(collectedRole),
+    task: readFileSync(brief, "utf8"),
+    agent: collectedRole,
+  });
+  return `started ${running.name} in ${running.surface}`;
+}
