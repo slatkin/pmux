@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main } from "../pi-extension/pmux/cli.ts";
 import { isSentinelFile, pruneScratch, pruneSentinels } from "../pi-extension/pmux/prune.ts";
+import { historyDirPath, writeHistoryRecord } from "../pi-extension/pmux/report-history.ts";
 import { __setTmuxExecForTests__ } from "../pi-extension/pmux/tmux.ts";
 import { useTmuxPaneFake } from "./tmux-fakes.ts";
 
@@ -192,6 +193,52 @@ describe("cli.ts prune", () => {
       message = error instanceof Error ? error.message : String(error);
     }
     assert.match(message, /max-age-days/);
+  });
+
+  it("sweeps the history: old records go, recent stay, an empty dir is removed", async () => {
+    const dir = mkdtempSync(join(workdir, "cli-history-"));
+    const scratch = join(dir, "scratch");
+    mkdirSync(scratch);
+    const sentinels = join(dir, "sentinels");
+    mkdirSync(sentinels);
+    const env = {
+      PATH: process.env.PATH,
+      TMUX: "/tmp/tmux-0/default",
+      XDG_RUNTIME_DIR: join(dir, "run"),
+      PI_PMUX_SENTINEL_DIR: sentinels,
+    };
+    const history = historyDirPath({ env, targetPane: "%3" })!;
+    const record = (id: string): Parameters<typeof writeHistoryRecord>[1] => ({
+      v: 1,
+      id,
+      from: "worker-a",
+      session: join(dir, "w.jsonl"),
+      report: join(dir, `w.jsonl.${id}.report.md`),
+      at: "2026-10-28T10:00:00.000Z",
+    });
+    writeHistoryRecord(history, record("aa".repeat(16)));
+    writeHistoryRecord(history, record("bb".repeat(16)));
+    const old = new Date(Date.now() - 8 * DAY_MS);
+    utimesSync(join(history, `${"aa".repeat(16)}.json`), old, old);
+    // A history directory that holds no record is removed with the sweep.
+    const empty = historyDirPath({ env, targetPane: "%4" })!;
+    mkdirSync(empty, { recursive: true });
+
+    const stdout: string[] = [];
+    const code = await main(["prune", "--scratch", scratch, "--max-age-days", "7"], {
+      env,
+      stdout: (text) => stdout.push(text),
+      stderr: () => {},
+      sleep: async () => {},
+    });
+    assert.equal(code, 0);
+    const counts = JSON.parse(stdout.join(""));
+    assert.equal(counts.historyScanned, 2);
+    assert.equal(counts.historyRecordsDeleted, 1);
+    assert.equal(counts.historyDirsDeleted, 1);
+    assert.equal(existsSync(join(history, `${"aa".repeat(16)}.json`)), false);
+    assert.equal(existsSync(join(history, `${"bb".repeat(16)}.json`)), true);
+    assert.equal(existsSync(empty), false);
   });
 
   it("start removes old scratch files in the same directory", async () => {

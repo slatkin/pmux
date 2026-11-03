@@ -58,6 +58,7 @@ import {
   removeMonitorMarker,
   writeMonitorMarker,
 } from "./report-inbox.ts";
+import { pruneHistory } from "./report-history.ts";
 import { submitChannel } from "./channel-endpoint.ts";
 import { type ChannelUnavailableReason } from "./channel-reason.ts";
 import { type InboxUnavailableReason } from "./inbox-reason.ts";
@@ -531,6 +532,7 @@ function pruneCommand(values: CliValues, deps: CliDeps): number {
     dryRun,
   });
   const inboxes = pruneInboxes({ env: deps.env ?? process.env, maxAgeMs, dryRun });
+  const history = pruneHistory({ env: deps.env ?? process.env, maxAgeMs, dryRun });
   write(
     JSON.stringify({
       scratch,
@@ -544,6 +546,9 @@ function pruneCommand(values: CliValues, deps: CliDeps): number {
       inboxScanned: inboxes.inboxes,
       inboxEntriesDeleted: inboxes.entriesDeleted,
       inboxDirsDeleted: inboxes.dirsDeleted,
+      historyScanned: history.histories,
+      historyRecordsDeleted: history.recordsDeleted,
+      historyDirsDeleted: history.dirsDeleted,
     }) + "\n",
   );
   return 0;
