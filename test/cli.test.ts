@@ -51,7 +51,12 @@ import {
   type ListKey,
 } from "../pi-extension/pmux/dialog-ui.ts";
 import { getBundledAgentsDir } from "../pi-extension/pmux/agent-defs.ts";
-import { type SpawnDialogDeps } from "../pi-extension/pmux/dialog-spawn.ts";
+import { REPORT_PROTOCOL } from "../pi-extension/pmux/launch-build.ts";
+import {
+  type SpawnDialogDeps,
+  type SpawnStart,
+  type SpawnStartResult,
+} from "../pi-extension/pmux/dialog-spawn.ts";
 import type {
   ChannelSubmitArgs,
   ChannelSubmitResult,
@@ -2593,11 +2598,12 @@ describe("cli.ts spawn-dialog", () => {
   interface SpawnInnerRun extends CliResult {
     seen: SeenList[];
     state: SpawnState | null;
+    startCalls: { argv: string[]; env: NodeJS.ProcessEnv }[];
     editorCalls: string[];
   }
 
   interface SpawnInnerOptions {
-    /** Extra inner argv after the fixed flags; defaults to none. */
+    /** Extra inner argv after the fixed flags; defaults to `["--start"]`. */
     innerArgs?: string[];
     /** Key scripts for the chooser's lists, in order. */
     keyScripts?: ListKey[][];
@@ -2605,6 +2611,10 @@ describe("cli.ts spawn-dialog", () => {
     briefText?: string;
     /** The fake editor's exit status; defaults to 0. */
     editorStatus?: number | null;
+    /** The recorded `start` call's result; defaults to a success on `%24`. */
+    startResult?: SpawnStartResult;
+    /** Run the real `start` path instead of the recording dep. */
+    realStart?: boolean;
     /** The popup env; defaults to PATH plus the state-file key. */
     env?: NodeJS.ProcessEnv;
   }
@@ -2617,7 +2627,18 @@ describe("cli.ts spawn-dialog", () => {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const seen: SeenList[] = [];
+    const startCalls: { argv: string[]; env: NodeJS.ProcessEnv }[] = [];
     const editorCalls: string[] = [];
+    const startDep: SpawnStart = async (argv, env) => {
+      startCalls.push({ argv, env });
+      return (
+        options.startResult ?? {
+          code: 0,
+          stdout: `${JSON.stringify({ pane: "%24", session: "s", launch: "l" })}\n`,
+          stderr: "",
+        }
+      );
+    };
     const dialog: SpawnDialogDeps = {
       choose: scriptedChoose(options.keyScripts ?? [], seen),
       runEditor: (path) => {
@@ -2625,6 +2646,7 @@ describe("cli.ts spawn-dialog", () => {
         if (options.briefText !== undefined) writeFileSync(path, options.briefText);
         return { status: options.editorStatus === undefined ? 0 : options.editorStatus };
       },
+      ...(options.realStart === true ? {} : { start: startDep }),
     };
     const code = await main(
       [
@@ -2638,7 +2660,7 @@ describe("cli.ts spawn-dialog", () => {
         "%21",
         "--scratch",
         dirs.scratch,
-        ...(options.innerArgs ?? []),
+        ...(options.innerArgs ?? ["--start"]),
       ],
       {
         env: options.env ?? { PATH: process.env.PATH, [DIALOG_STATE_ENV]: dirs.statePath },
@@ -2658,6 +2680,7 @@ describe("cli.ts spawn-dialog", () => {
       stderr: stderr.join(""),
       seen,
       state,
+      startCalls,
       editorCalls,
     };
   }
@@ -2690,7 +2713,7 @@ describe("cli.ts spawn-dialog", () => {
     return { calls };
   }
 
-  it("lists the roles, edits the brief and collects role and brief", async () => {
+  it("lists the roles, edits the brief and calls the start path with the caller pane", async () => {
     await withTempDirAsync(async (dir) => {
       const dirs = spawnDirs(dir);
       writeRole(dirs.cwd, "scout", "model: m\nthinking: low", "Scout body.");
@@ -2701,18 +2724,37 @@ describe("cli.ts spawn-dialog", () => {
       assert.equal(run.code, 0);
       assert.equal(run.stderr, "");
       assert.equal(run.state?.state, "done");
-      assert.equal(run.state?.role, "scout");
+      assert.equal(run.state?.line, "started scout in %24");
       // The role step listed the same rows the role editor shows.
       assert.equal(run.seen.length, 1);
       assert.ok(run.seen[0]?.items.some((item) => /scout {2}\[project\] {2}model: m/.test(item)));
-      // The editor ran once on a brief under <scratch>/briefs/, and the
-      // collected brief is that file.
+      // The editor ran once on a brief under <scratch>/briefs/.
       assert.equal(run.editorCalls.length, 1);
       const brief = run.editorCalls[0]!;
       assert.ok(brief.startsWith(join(dirs.scratch, "briefs", "scout-")));
       assert.ok(brief.endsWith(".md"));
       assert.equal(readFileSync(brief, "utf8"), "map the auth module");
-      assert.equal(run.state?.brief, brief);
+      // The start path got the design-D6 argv and the caller pane as
+      // both --parent and TMUX_PANE.
+      assert.equal(run.startCalls.length, 1);
+      const call = run.startCalls[0]!;
+      assert.deepEqual(call.argv, [
+        "--report",
+        "send",
+        "--name",
+        "scout",
+        "--role",
+        "scout",
+        "--cwd",
+        dirs.cwd,
+        "--brief",
+        brief,
+        "--parent",
+        "%21",
+        "--scratch",
+        dirs.scratch,
+      ]);
+      assert.equal(call.env.TMUX_PANE, "%21");
     });
   });
 
@@ -2721,15 +2763,14 @@ describe("cli.ts spawn-dialog", () => {
       const dirs = spawnDirs(dir);
       writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
       const run = await runSpawnInner(dirs, {
-        innerArgs: ["--role", "scout"],
+        innerArgs: ["--role", "scout", "--start"],
         briefText: "do the thing",
       });
       assert.equal(run.code, 0);
       assert.equal(run.seen.length, 0);
       assert.equal(run.editorCalls.length, 1);
       assert.equal(run.state?.state, "done");
-      assert.equal(run.state?.role, "scout");
-      assert.equal(run.state?.brief, run.editorCalls[0]);
+      assert.equal(run.state?.line, "started scout in %24");
     });
   });
 
@@ -2738,11 +2779,12 @@ describe("cli.ts spawn-dialog", () => {
       const dirs = spawnDirs(dir);
       writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
       const run = await runSpawnInner(dirs, {
-        innerArgs: ["--role", "scout"],
+        innerArgs: ["--role", "scout", "--start"],
         briefText: "   \n",
       });
       assert.equal(run.code, 0);
       assert.equal(run.state?.state, "cancel");
+      assert.equal(run.startCalls.length, 0);
     });
   });
 
@@ -2751,12 +2793,13 @@ describe("cli.ts spawn-dialog", () => {
       const dirs = spawnDirs(dir);
       writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
       const run = await runSpawnInner(dirs, {
-        innerArgs: ["--role", "scout"],
+        innerArgs: ["--role", "scout", "--start"],
         briefText: "a saved brief",
         editorStatus: 1,
       });
       assert.equal(run.code, 0);
       assert.equal(run.state?.state, "cancel");
+      assert.equal(run.startCalls.length, 0);
     });
   });
 
@@ -2768,6 +2811,76 @@ describe("cli.ts spawn-dialog", () => {
       assert.equal(run.code, 0);
       assert.equal(run.state?.state, "cancel");
       assert.equal(run.editorCalls.length, 0);
+      assert.equal(run.startCalls.length, 0);
+    });
+  });
+
+  it("collects role and brief without a start when --start is absent", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        innerArgs: [],
+        keyScripts: [[...typed("scout"), ENTER]],
+        briefText: "map the auth module",
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      assert.equal(run.state?.role, "scout");
+      assert.equal(run.state?.brief, run.editorCalls[0]);
+      assert.equal(run.startCalls.length, 0);
+    });
+  });
+
+  it("reports a start failure in the done line", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        innerArgs: ["--role", "scout", "--start"],
+        briefText: "do the thing",
+        startResult: { code: 1, stdout: "", stderr: "cli.ts: role 'scout' broke\n" },
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      assert.equal(run.state?.line, "spawn failed: cli.ts: role 'scout' broke");
+    });
+  });
+
+  it("starts a real child in send mode with the caller pane as parent", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m\nthinking: low", "Scout body.");
+      // The popup env holds a different TMUX_PANE than --pane (design D6):
+      // the spec's parent and the split's anchor must be the --pane value.
+      const env = tmuxEnv({ TMUX_PANE: "%99", [DIALOG_STATE_ENV]: dirs.statePath });
+      // The start path's role search reads the process env, not the
+      // injected env (the start tests pin it the same way).
+      const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = dirs.agentDir;
+      try {
+        const run = await runSpawnInner(dirs, {
+          innerArgs: ["--role", "scout", "--start"],
+          briefText: "map the auth module",
+          env,
+          realStart: true,
+        });
+        assert.equal(run.code, 0);
+        assert.equal(run.state?.state, "done");
+        assert.equal(run.state?.line, "started scout in %24");
+      } finally {
+        if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+      }
+      const specFile = readdirSync(dirs.scratch).find(
+        (name) => name.endsWith(".json") && !name.endsWith(".launch.json"),
+      );
+      assert.ok(specFile, "expected a launch spec under the scratch dir");
+      const spec = readLaunchSpec(join(dirs.scratch, specFile!));
+      assert.equal(spec.env.PI_PMUX_REPORT_PROTOCOL, REPORT_PROTOCOL);
+      assert.equal(spec.parent, "%21");
+      // The child pane split off the caller pane, not the popup's %99.
+      assert.equal(paneCalls[0], "split-window -d -h -t %21 -P -F #{pane_id}");
     });
   });
 
@@ -2804,6 +2917,7 @@ describe("cli.ts spawn-dialog", () => {
         "%21",
         "--role",
         "scout",
+        "--start",
       ]);
     });
   });
@@ -2825,6 +2939,7 @@ describe("cli.ts spawn-dialog", () => {
       }
       const inner = calls[0]!.slice(calls[0]!.indexOf("--inner"));
       assert.equal(inner.includes("--role"), false);
+      assert.equal(inner.includes("--start"), true);
     });
   });
 

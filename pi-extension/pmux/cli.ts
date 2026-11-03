@@ -70,6 +70,7 @@ import {
   spawnDialogInner,
   spawnDialogOuter,
   type SpawnDialogDeps,
+  type SpawnStart,
 } from "./dialog-spawn.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
@@ -121,7 +122,7 @@ const USAGE = [
   "  node cli.ts wait --session <file> [--signal status|sidecar] [--status <list>] [--timeout <seconds>] (--status with --signal sidecar is a usage error)",
   "  node cli.ts prune [--scratch <dir>] [--max-age-days <n>] [--dry-run]",
   "  node cli.ts roles [--cwd <dir>] [--agent-dir <dir>] | roles --inner --cwd <dir> --agent-dir <dir> [--pane <pane>]",
-  "  node cli.ts spawn-dialog [--cwd <dir>] [--agent-dir <dir>] [--args <text>] | spawn-dialog --inner --cwd <dir> --agent-dir <dir> --pane <pane> [--role <role>] [--scratch <dir>]",
+  "  node cli.ts spawn-dialog [--cwd <dir>] [--agent-dir <dir>] [--args <text>] | spawn-dialog --inner --cwd <dir> --agent-dir <dir> --pane <pane> [--role <role>] [--start] [--scratch <dir>]",
 ].join("\n");
 
 const CLI_OPTIONS = {
@@ -150,6 +151,7 @@ const CLI_OPTIONS = {
   once: { type: "boolean" },
   inner: { type: "boolean" },
   args: { type: "string" },
+  start: { type: "boolean" },
   "agent-dir": { type: "string" },
   pane: { type: "string" },
   help: { type: "boolean", short: "h" },
@@ -181,6 +183,7 @@ interface CliValues {
   once?: boolean;
   inner?: boolean;
   args?: string;
+  start?: boolean;
   "agent-dir"?: string;
   pane?: string;
   help?: boolean;
@@ -205,9 +208,9 @@ export interface CliDeps {
   submitChannel?: typeof submitChannel;
   /**
    * Dialog seams: the `runDialog` deps for a command's outer side and the
-   * inner side's injections — the list widget, the model list and the brief
-   * editor. The defaults are the real tmux call, the TTY widget,
-   * `pi --list-models` and the editor.
+   * inner side's injections — the list widget, the model list, the brief
+   * editor and the spawn dialog's `start` call. The defaults are the real
+   * tmux call, the TTY widget, `pi --list-models`, the editor and `start`.
    */
   dialog?: RolesDialogDeps & SpawnDialogDeps;
 }
@@ -969,8 +972,10 @@ async function rolesCommand(values: CliValues, deps: CliDeps): Promise<number> {
  * in-process with no limit and starts the child itself).
  *
  * With `--inner` the command is the popup side: it runs the role list and
- * the brief step and writes the collected `{role, brief}` to the state
- * file.
+ * the brief step, and with `--start` it then starts the child itself
+ * through `main(["start", ...])` with `--report send` and the caller's
+ * pane as `--parent` and `TMUX_PANE`, so the start survives the outer
+ * side's limit (design D6).
  */
 async function spawnDialogCommand(values: CliValues, deps: CliDeps): Promise<number> {
   const env = deps.env ?? process.env;
@@ -978,6 +983,29 @@ async function spawnDialogCommand(values: CliValues, deps: CliDeps): Promise<num
   const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
   try {
     if (values.inner === true) {
+      // The default `start` path: this same CLI's `start` command, run
+      // against the env the inner side hands it (design D6). Its output is
+      // captured, not printed — the inner side reads the pane id from the
+      // JSON line and folds a failure into the `done` record's line.
+      const startDep: SpawnStart = async (argv, startEnv) => {
+        const out: string[] = [];
+        const err: string[] = [];
+        try {
+          const code = await main(["start", ...argv], {
+            env: startEnv,
+            stdout: (text) => out.push(text),
+            stderr: (text) => err.push(text),
+            ...(deps.configPath !== undefined ? { configPath: deps.configPath } : {}),
+          });
+          return { code, stdout: out.join(""), stderr: err.join("") };
+        } catch (error) {
+          return {
+            code: 1,
+            stdout: out.join(""),
+            stderr: error instanceof Error ? error.message : String(error),
+          };
+        }
+      };
       await spawnDialogInner(
         {
           cwd: required("--cwd", values.cwd),
@@ -985,9 +1013,10 @@ async function spawnDialogCommand(values: CliValues, deps: CliDeps): Promise<num
           pane: required("--pane", values.pane),
           ...(values.role !== undefined ? { role: values.role } : {}),
           ...(values.scratch !== undefined ? { scratch: values.scratch } : {}),
+          start: values.start === true,
           env,
         },
-        { ...(deps.dialog ?? {}) },
+        { start: startDep, ...(deps.dialog ?? {}) },
       );
       return 0;
     }
@@ -1005,6 +1034,7 @@ async function spawnDialogCommand(values: CliValues, deps: CliDeps): Promise<num
         agentDir,
         env,
         ...(words[0] !== undefined ? { role: words[0] } : {}),
+        startInInner: true,
         stopAfterMs: DIALOG_HOST_LIMIT_MS,
       },
       dialogDeps,

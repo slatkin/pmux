@@ -3,15 +3,23 @@
  *
  * `spawnDialogOuter` is the outer side: it checks a role the command line
  * named, opens the popup over the caller's pane through `runDialog` and
- * resolves with the outcome the host reports.
+ * resolves with the outcome the host reports. pi's `/pmux-spawn` runs it
+ * in-process with `startInInner` unset and starts the child itself from
+ * the collected `{role, brief}`; the Claude Code `pmux-spawn` skill runs
+ * `cli.ts spawn-dialog`, which sets it and prints the one result line.
  *
  * `spawnDialogInner` is the inner side: `cli.ts spawn-dialog --inner` runs
  * it in the popup. With no `--role` it lists the same role rows the role
  * editor shows; the brief step writes an empty file under
  * `<scratch>/briefs/` and hands it to `$VISUAL`, `$EDITOR` or `vi`. An
  * all-whitespace brief, an editor failure and an Escape all end in
- * `cancel`. The `done` record carries the collected `{role, brief}` for
- * the host to start the child.
+ * `cancel`. When `--start` is passed (the Claude Code path) the inner
+ * side then starts the child itself through the `start` path — `--report
+ * send`, `--name` and `--role` the chosen role, `--cwd` the caller's,
+ * `--parent` the caller's pane — so the start does not depend on the
+ * outer side still running (design D1). The `done` record carries the
+ * result line after an inner start, or `{role, brief}` for the host to
+ * start.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -38,19 +46,36 @@ export const SPAWN_DIALOG_TITLE = "pmux spawn";
 export const SPAWN_ARGS_REFUSAL =
   "the pmux-spawn skill takes a role only; write the task in the brief step";
 
+/** The `start` run's captured result, as the inner side reads it. */
+export interface SpawnStartResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * The `start` path the inner side calls (design D6): it gets the flags
+ * after the `start` command name and the environment to run under. The
+ * default lives in `cli.ts`, which turns it into `main(["start", ...])`.
+ */
+export type SpawnStart = (argv: string[], env: NodeJS.ProcessEnv) => Promise<SpawnStartResult>;
+
 /** The editor run on the brief file; `runOnTty`-compatible. */
 export type SpawnEditor = (path: string) => { status: number | null; error?: Error };
 
 /**
  * Injected pieces for both sides of the spawn dialog; every default is the
  * real thing. The `RunDialogDeps` fields cover the outer side's wait, the
- * additions cover the inner side's TTY and its editor run.
+ * additions cover the inner side's TTY, its editor run and its `start`
+ * call.
  */
 export interface SpawnDialogDeps extends RunDialogDeps {
   /** The list widget; defaults to `chooseFromList` on the popup's TTY. */
   choose?: RolesChoose;
   /** The brief file's editor run; defaults to `$VISUAL`/`$EDITOR`/`vi` on the TTY. */
   runEditor?: SpawnEditor;
+  /** The `start` path; the CLI injects its own `main(["start", ...])`. */
+  start?: SpawnStart;
 }
 
 /** The unknown-role refusal, worded like `resolveLaunchRecord`'s. */
@@ -81,12 +106,14 @@ export interface SpawnInnerArgs {
   cwd: string;
   /** The resolved agent config directory (`-e PI_CODING_AGENT_DIR`). */
   agentDir: string;
-  /** The caller's pane id. */
+  /** The caller's pane id: the `start` path's `--parent` and `TMUX_PANE`. */
   pane: string;
   /** A role the command already named; the dialog opens at the brief step. */
   role?: string;
   /** The launcher scratch root `briefs/` lives under; defaults to `<tmp>/pmux`. */
   scratch?: string;
+  /** The inner side starts the child after the brief (the Claude Code path). */
+  start?: boolean;
   /** The popup's environment; defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
 }
@@ -127,6 +154,66 @@ async function collectSpawn(
   return { role, briefPath, scratch };
 }
 
+/** The child pane id from the `start` command's stdout JSON. */
+function startedPane(stdout: string): string | undefined {
+  try {
+    const data: unknown = JSON.parse(stdout);
+    const pane = (data as { pane?: unknown }).pane;
+    return typeof pane === "string" && pane.length > 0 ? pane : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The Claude Code start (design D6): the `start` path in send mode, with
+ * the role as name and role, the caller's cwd and brief file, and the
+ * caller's pane as `--parent`. The env is the popup's with `TMUX_PANE` set
+ * to the `--pane` value — `start` reads the caller pane from it for the
+ * placement and the parent session id; the popup's own `TMUX_PANE` is
+ * never used. Returns the result line for the `done` record.
+ */
+async function startInPopup(
+  args: SpawnInnerArgs,
+  collected: CollectedSpawn,
+  deps: SpawnDialogDeps,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const start = deps.start;
+  if (start === undefined) return "spawn failed: no start path configured";
+  try {
+    const result = await start(
+      [
+        "--report",
+        "send",
+        "--name",
+        collected.role,
+        "--role",
+        collected.role,
+        "--cwd",
+        args.cwd,
+        "--brief",
+        collected.briefPath,
+        "--parent",
+        args.pane,
+        "--scratch",
+        collected.scratch,
+      ],
+      { ...env, TMUX_PANE: args.pane },
+    );
+    if (result.code === 0) {
+      const pane = startedPane(result.stdout);
+      return pane === undefined
+        ? `started ${collected.role}`
+        : `started ${collected.role} in ${pane}`;
+    }
+    const detail = result.stderr.trim();
+    return `spawn failed: ${detail || `the start exited ${result.code}`}`;
+  } catch (error) {
+    return `spawn failed: ${errorMessage(error)}`;
+  }
+}
+
 /**
  * Run the spawn dialog inside the popup: write `open`, collect the role
  * and the brief, and write `done` or `cancel`. Throws when the state-file
@@ -160,8 +247,13 @@ export async function spawnDialogInner(
     writeDialogDone(statePath, { line: "no roles found" });
     return;
   }
-  // The host starts the child from the collected values.
-  writeDialogDone(statePath, { role: collected.role, brief: collected.briefPath });
+  // Without `--start` the host starts the child from the collected values.
+  if (args.start !== true) {
+    writeDialogDone(statePath, { role: collected.role, brief: collected.briefPath });
+    return;
+  }
+  const line = await startInPopup(args, collected, deps, env);
+  writeDialogDone(statePath, { line });
 }
 
 /** What a host command gives the outer side. */
@@ -174,16 +266,19 @@ export interface SpawnOuterArgs {
   env: NodeJS.ProcessEnv;
   /** A role the command named; the dialog opens at the brief step for it. */
   role?: string;
+  /** The inner side starts the child (the Claude Code path); unset collects only (pi). */
+  startInInner?: boolean;
   /** The Claude Code path's wait limit; unset waits with no limit (pi). */
   stopAfterMs?: number;
 }
 
 /**
  * Open the spawn dialog in a popup over the caller's pane and resolve with
- * its outcome: a `done` whose result is the collected `{role, brief}`, a
- * `cancel`, or `still-open` after `stopAfterMs`. A named role that
- * resolves to no role is refused with the existing unknown-role message
- * before any popup opens, and nothing starts.
+ * its outcome: a `done` whose result is the inner start's line (Claude
+ * Code) or the collected `{role, brief}` (pi), a `cancel`, or `still-open`
+ * after `stopAfterMs`. A named role that resolves to no role is refused
+ * with the existing unknown-role message before any popup opens, and
+ * nothing starts.
  */
 export async function spawnDialogOuter(
   args: SpawnOuterArgs,
@@ -204,6 +299,7 @@ export async function spawnDialogOuter(
     args.env.TMUX_PANE ?? "",
   ];
   if (args.role !== undefined) innerArgs.push("--role", args.role);
+  if (args.startInInner === true) innerArgs.push("--start");
   return runDialog(
     {
       title: SPAWN_DIALOG_TITLE,
