@@ -3483,6 +3483,20 @@ function startCwd(caseDir: string): string {
 }
 
 describe("skills/pmux/launch.ts", () => {
+  it("hands `roles` to the CLI and exits with the tmux refusal when TMUX_PANE is unset", async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await shimMain(["roles"], {
+      env: { PATH: process.env.PATH },
+      stdout: (text) => stdout.push(text),
+      stderr: (text) => stderr.push(text),
+      sleep: async () => {},
+    });
+    assert.equal(code, 1);
+    assert.equal(stdout.join(""), "");
+    assert.match(stderr.join(""), /tmux/);
+  });
+
   it("prefers PI_PMUX_DIR over the checkout", async () => {
     const caseDir = mkdtempSync(join(workdir, "shim-override-"));
     const home = mkdtempSync(join(caseDir, "home-"));
