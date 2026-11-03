@@ -11,6 +11,10 @@ This guide holds the full reference for pmux. For an overview and install steps,
 - [Turn-end notification](#turn-end-notification)
 - [tmux sidebar (pmux-explorer)](#tmux-sidebar-pmux-explorer)
 - [External orchestrators (Claude Code)](#external-orchestrators-claude-code)
+- [Popup dialogs](#popup-dialogs)
+  - [`/pmux-spawn`: the spawn dialog](#pmux-spawn-the-spawn-dialog)
+  - [`/pmux-roles`: the role editor](#pmux-roles-the-role-editor)
+  - [`/pmux-reports`: the report viewer](#pmux-reports-the-report-viewer)
 - [Async Subagent Flow](#async-subagent-flow)
   - [Decision model](#decision-model)
   - [In-progress status updates](#in-progress-status-updates)
@@ -166,6 +170,92 @@ Report transport: a marked pointer goes to the parent's inbox first. When the pa
 Close-on-done: after pi exits, the run wrapper closes its own pane only when the session `.exit` sidecar holds `done`, `handoff` or `cancelled`. It first waits a grace period of 1500 ms by default. Set it per launch with `start --close-grace-ms <n>`. `0` closes at once. The delay leaves the end state on screen a moment before the pane goes away; every `wait` and report path reads files, so a shorter delay — or `0` — loses nothing. A provider error, a `caller_ping` or a crash leaves the pane open with the `__SUBAGENT_DONE_<n>__` sentinel visible when the child exited, so you can inspect the outcome. Close those panes yourself when done with them.
 
 ---
+
+## Popup dialogs
+
+Three commands open a dialog in a tmux popup over the caller's pane:
+`/pmux-spawn`, `/pmux-roles` and `/pmux-reports`. In pi they are extension
+commands that refuse outside tmux; in Claude Code they are the packaged
+`pmux-spawn`, `pmux-roles` and `pmux-reports` skills — installed by the
+same `npx skills add` command — which only the user types; the model
+cannot invoke them. Each dialog is a small program in the popup that gets
+the caller's cwd, agent directory and editor or pager variables through
+the popup environment, so the tmux server's environment is never used.
+Escape always cancels, and a cancel changes nothing and starts nothing.
+
+On the Claude Code path the skill command waits at most 100 seconds for
+the dialog, then prints `dialog still open; it finishes in the popup` and
+exits: the popup keeps running and its action still lands when the user
+finishes. In pi the command waits for the dialog and shows the result line
+as a notification.
+
+### `/pmux-spawn`: the spawn dialog
+
+`/pmux-spawn` with no argument opens the dialog at the role list,
+`/pmux-spawn <role>` opens it at the brief step for that role, and
+`/pmux-spawn <role> <task>` in pi starts the child at once and opens no
+popup. The Claude Code skill takes only a role; text after the role is
+refused with a message that the task goes in the brief step.
+
+The role step lists the same roles, sources and models as the role editor.
+The brief step opens the caller's editor — `$VISUAL`, else `$EDITOR`, else
+`vi` — on an empty brief file inside the popup. A brief that holds only
+whitespace, or an editor error, cancels the dialog.
+
+On a completed dialog the command itself starts the child in the caller's
+cwd, with the chosen role and the brief as its task; it sends the agent no
+message. In pi it goes through the same path as `pmux_spawn`; in Claude
+Code through the skill's `start` path with `--report send` and the
+caller's pane as the parent, so the child reports to the orchestrator in
+the caller's pane through the usual `file-ack-v1` delivery. The command
+shows one line: `started <name> in <pane>`, `nothing started` after a
+cancel, or the still-open line above.
+
+### `/pmux-roles`: the role editor
+
+The dialog lists every role name found in `.pi/agents/` of the cwd, in the
+user agents directory (`$PI_CODING_AGENT_DIR/agents/`, or
+`~/.pi/agent/agents/`) and in the package's `agents/`, once per name. Each
+row shows the file that wins the existing resolution order, its source —
+`project`, `user` or `built-in` — and its `model`, `model-fallback` and
+`thinking` values. A file without valid frontmatter is not listed.
+
+Three keys are editable: `model` and `model-fallback` take a
+`provider/model` pair from `pi --list-models` (a failure shows the error
+and offers no model values), `thinking` takes one of `off`, `minimal`,
+`low`, `medium`, `high`, `xhigh` or `max`, and each key offers a remove
+choice. An edit replaces the key's line in place, appends it as the last
+frontmatter line when absent, or deletes the line; every other byte of the
+file is unchanged and the write is atomic.
+
+Copy-on-edit: when the winning file is the package's built-in file, the
+first edit copies it whole to `<user agents directory>/<role>.md` and
+applies the edit to the copy — the built-in file is never written, and the
+dialog says the edit creates a user copy before it writes. Later edits
+change only the copy. A project or user file is edited in place. An edit
+applies to children started after it: a running child keeps its model, and
+a resumed child keeps the model in its launch record.
+
+### `/pmux-reports`: the report viewer
+
+The dialog lists the report history of the caller's pane, newest first,
+each record with its sender, its time and whether the report is
+acknowledged. Enter opens the report in the caller's pager (`$PAGER`, else
+`less`) inside the popup and returns to the list; Escape closes the
+viewer. A record whose report file no longer exists shows as missing and
+does not open, and an empty history shows that there are no reports.
+Reading a report never acknowledges it and changes no report log, inbox or
+history.
+
+The history lives beside the inbox: every `report` registration addressed
+to a pane — from a child's `send` or from the run wrapper's exit pass —
+also writes one record `<id>.json` under
+`$XDG_RUNTIME_DIR/pmux-history/<h>-<n>` (or
+`/tmp/pmux-history-<uid>/<h>-<n>`), in an owner-only directory keyed the
+same way as the inbox. A failed history write never fails or delays the
+delivery. A record survives its `ack`; `launch.ts prune` deletes records
+past the launcher-file retention and removes a history directory left
+empty.
 
 ## Async Subagent Flow
 

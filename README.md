@@ -97,13 +97,30 @@ act on: a partial failure, a child that errored on its model, or a user
 request. A parent whose own model is hard-limited cannot call anything at
 all, so it cannot start the child; the user starts it.
 
-## `/pmux-spawn`
+## Popup dialogs
+
+Three commands open a dialog in a tmux popup over the caller's pane:
+`/pmux-spawn`, `/pmux-roles` and `/pmux-reports`. In pi they are extension
+commands; in Claude Code they are packaged skills that only the user
+types — the model never invokes them. The
+[guide](docs/guide.md#popup-dialogs) covers each one.
 
 **BREAKING**: `/pmux-spawn` no longer asks the agent to call `pmux_spawn`;
 it starts the child itself. `/pmux-spawn` opens the spawn dialog in a tmux
 popup at the role list, `/pmux-spawn <role>` opens it at the brief step,
 and `/pmux-spawn <role> <task>` starts the child at once. The `pmux_spawn`
 tool is unchanged.
+
+`/pmux-roles` opens the role editor: every role once, with its source and
+its `model`, `model-fallback` and `thinking`, each editable or removable.
+The first edit of a built-in role copies the file to
+`~/.pi/agent/agents/` and edits the copy — the package file is never
+written.
+
+`/pmux-reports` opens the report viewer: the reports children sent to the
+caller's pane, newest first, each with its sender, time and
+acknowledgement, read in the pager. A report stays in the history after
+its `ack`.
 
 ## Documentation
 

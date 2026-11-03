@@ -371,6 +371,26 @@ name why each transport did not carry the pointer. The `<session>.sent`
 re-delivery of an unacknowledged report makes the same choice with a fresh
 token: the inbox first, then the channel, then the typed pointer.
 
+### User commands
+
+Three sibling skills open a tmux popup dialog over your pane. Only the
+user types them — they are disabled for model invocation, so you never
+call them yourself:
+
+- `/pmux-spawn [role]` — the spawn dialog. The user picks a role and
+  writes the brief in their editor; the command then starts the child
+  itself, through the same path as `start --report send` with your pane
+  as the parent. Treat that child like any send-mode child: its reports
+  arrive as pointers to your pane, and you read and `ack` them the same
+  way.
+- `/pmux-roles` — the role editor: the user changes a role's `model`,
+  `model-fallback` or `thinking` for children started after the edit.
+- `/pmux-reports` — the report viewer: the user reads the history of
+  reports children sent to your pane, in their pager.
+
+A dialog left open past the skill's time limit still finishes in the
+popup — its action lands when the user finishes, so nothing is lost.
+
 ## While it runs / after
 
 - A follow-up (a recheck, or the answer to the child's question) always
