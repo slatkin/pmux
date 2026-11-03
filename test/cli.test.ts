@@ -40,10 +40,18 @@ import {
   writeInboxEntry,
   writeMonitorMarker,
 } from "../pi-extension/pmux/report-inbox.ts";
-import { historyDirPath, listHistory } from "../pi-extension/pmux/report-history.ts";
+import {
+  historyDirPath,
+  listHistory,
+  writeHistoryRecord,
+} from "../pi-extension/pmux/report-history.ts";
 import { registerReport, REPORT_ACK_POLL_MS } from "../pi-extension/pmux/report-delivery.ts";
 import { reportArtifactPath } from "../pi-extension/pmux/report-artifact.ts";
-import { appendReportAck, readReportLog } from "../pi-extension/pmux/report-receipt.ts";
+import {
+  appendReportAck,
+  appendReportRegistration,
+  readReportLog,
+} from "../pi-extension/pmux/report-receipt.ts";
 import { DIALOG_STATE_ENV, writeDialogDone } from "../pi-extension/pmux/dialog-host.ts";
 import {
   initListState,
@@ -3039,6 +3047,278 @@ describe("cli.ts spawn-dialog", () => {
       assert.equal(res.code, 1);
       assert.match(res.stderr, new RegExp(DIALOG_STATE_ENV));
     });
+  });
+});
+
+// ─── cli.ts reports ─────────────────────────────────────────────────
+
+describe("cli.ts reports", () => {
+  interface ReportsInnerRun {
+    code: number;
+    stdout: string;
+    stderr: string;
+    seen: SeenList[];
+    pagerCalls: string[];
+    state: { state: string; line?: string } | null;
+  }
+
+  /** The env an inner run sees: PATH, the tmux socket and the state file. */
+  function reportsEnv(statePath: string, xdg: string): NodeJS.ProcessEnv {
+    return {
+      PATH: process.env.PATH,
+      TMUX: "/tmp/tmux-0/reports-test,1,0",
+      XDG_RUNTIME_DIR: xdg,
+      [DIALOG_STATE_ENV]: statePath,
+    };
+  }
+
+  /** A well-formed 32-hex report id from a one-character tag. */
+  function reportId(tag: string): string {
+    return tag.padEnd(32, "0").slice(0, 32);
+  }
+
+  /** Register one report in a session's log; ack it when `acked` is set. */
+  function logReport(session: string, id: string, report: string, acked = false): void {
+    assert.ok(appendReportRegistration(session, { id, to: "%21", bytes: 1, report }));
+    if (acked) assert.ok(appendReportAck(session, id));
+  }
+
+  /** Run `reports --inner` for pane %21 with a scripted list and pager. */
+  async function runReportsInner(options: {
+    env: NodeJS.ProcessEnv;
+    statePath: string;
+    keyScripts?: ListKey[][];
+    pagerStatus?: number | null;
+  }): Promise<ReportsInnerRun> {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const seen: SeenList[] = [];
+    const pagerCalls: string[] = [];
+    const code = await main(["reports", "--inner", "--pane", "%21"], {
+      env: options.env,
+      stdout: (text) => stdout.push(text),
+      stderr: (text) => stderr.push(text),
+      sleep: async () => {},
+      dialog: {
+        choose: scriptedChoose(options.keyScripts ?? [], seen),
+        runPager: (path) => {
+          pagerCalls.push(path);
+          return { status: options.pagerStatus === undefined ? 0 : options.pagerStatus };
+        },
+      },
+    });
+    const state = existsSync(options.statePath)
+      ? (JSON.parse(readFileSync(options.statePath, "utf8")) as ReportsInnerRun["state"])
+      : null;
+    return {
+      code,
+      stdout: stdout.join(""),
+      stderr: stderr.join(""),
+      seen,
+      pagerCalls,
+      state,
+    };
+  }
+
+  /** The dirs a reports case needs; the env derives its history from them. */
+  function reportsDirs(dir: string): {
+    env: NodeJS.ProcessEnv;
+    statePath: string;
+    history: string;
+  } {
+    const statePath = join(dir, "state.json");
+    const env = reportsEnv(statePath, join(dir, "xdg"));
+    const history = historyDirPath({ env, targetPane: "%21" });
+    assert.ok(history, "expected a history dir under the test tmux env");
+    return { env, statePath, history };
+  }
+
+  /** Write one history record and its session log. */
+  function seedReport(
+    history: string,
+    dir: string,
+    args: { tag: string; from: string; at: string; acked?: boolean; writeFile?: boolean },
+  ): { id: string; session: string; report: string } {
+    const id = reportId(args.tag);
+    const session = join(dir, `${args.tag}.jsonl`);
+    const report = join(dir, `${args.tag}.report.md`);
+    if (args.writeFile !== false) writeFileSync(report, `report ${args.tag}`);
+    logReport(session, id, report, args.acked === true);
+    writeHistoryRecord(history, {
+      v: 1,
+      id,
+      from: args.from,
+      session,
+      report,
+      at: args.at,
+    });
+    return { id, session, report };
+  }
+
+  it("lists the history newest first with pending and acknowledged marks", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath, history } = reportsDirs(dir);
+      seedReport(history, dir, {
+        tag: "a",
+        from: "scout",
+        at: "2026-11-03T20:00:00.000Z",
+        acked: true,
+      });
+      seedReport(history, dir, { tag: "b", from: "worker", at: "2026-11-03T21:30:00.000Z" });
+      const run = await runReportsInner({ env, statePath, keyScripts: [[ESCAPE]] });
+      assert.equal(run.code, 0);
+      assert.equal(run.stderr, "");
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(run.seen.length, 1);
+      assert.deepEqual(run.seen[0]!.items, [
+        "worker  2026-11-03 21:30  pending",
+        "scout  2026-11-03 20:00  acknowledged",
+      ]);
+    });
+  });
+
+  it("opens the chosen report in the pager and returns to the list", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath, history } = reportsDirs(dir);
+      seedReport(history, dir, { tag: "a", from: "scout", at: "2026-11-03T20:00:00.000Z" });
+      const newest = seedReport(history, dir, {
+        tag: "b",
+        from: "worker",
+        at: "2026-11-03T21:30:00.000Z",
+      });
+      const run = await runReportsInner({
+        env,
+        statePath,
+        keyScripts: [[ENTER], [ESCAPE]],
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "cancel");
+      // Enter paged the newest report; the list showed again for the Escape.
+      assert.deepEqual(run.pagerCalls, [newest.report]);
+      assert.equal(run.seen.length, 2);
+    });
+  });
+
+  it("shows a gone report file as missing and does not open it", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath, history } = reportsDirs(dir);
+      seedReport(history, dir, {
+        tag: "a",
+        from: "scout",
+        at: "2026-11-03T20:00:00.000Z",
+        writeFile: false,
+      });
+      const run = await runReportsInner({
+        env,
+        statePath,
+        keyScripts: [[ENTER], [ESCAPE]],
+      });
+      assert.equal(run.code, 0);
+      assert.match(run.seen[0]?.items[0] ?? "", /missing$/);
+      assert.deepEqual(run.pagerCalls, []);
+      assert.equal(run.state?.state, "cancel");
+    });
+  });
+
+  it("answers 'no reports' for an empty history", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath } = reportsDirs(dir);
+      const run = await runReportsInner({ env, statePath });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      assert.equal(run.state?.line, "no reports");
+      assert.equal(run.seen.length, 0);
+    });
+  });
+
+  it("writes no ack record after reading a pending report", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath, history } = reportsDirs(dir);
+      const seeded = seedReport(history, dir, {
+        tag: "b",
+        from: "worker",
+        at: "2026-11-03T21:30:00.000Z",
+      });
+      const run = await runReportsInner({
+        env,
+        statePath,
+        keyScripts: [[ENTER], [ESCAPE]],
+      });
+      assert.equal(run.code, 0);
+      assert.deepEqual(run.pagerCalls, [seeded.report]);
+      // Reading is not an ack: the log still holds no ack for the report.
+      const log = readReportLog(seeded.session);
+      assert.equal(log.ackedIds.has(seeded.id), false);
+    });
+  });
+
+  it("sends the inner argv to display-popup and prints the result line", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupExec({ line: "no reports" });
+      try {
+        const res = await runCli(["reports", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv());
+        assert.equal(res.code, 0);
+        assert.equal(res.stderr, "");
+        assert.equal(res.stdout, "no reports\n");
+      } finally {
+        restorePaneFake();
+      }
+      assert.equal(calls.length, 1);
+      const argv = calls[0]!;
+      assert.equal(argv[argv.indexOf("-T") + 1], "pmux reports");
+      assert.deepEqual(argv.slice(argv.indexOf(CLI)), [CLI, "reports", "--inner", "--pane", "%21"]);
+    });
+  });
+
+  it("prints 'report viewer closed' on a cancel", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const calls: string[][] = [];
+      __setTmuxExecForTests__((args) => {
+        calls.push(args);
+        if (args[0] === "display-popup") {
+          writeFileSync(
+            `${popupEnvValue(args, DIALOG_STATE_ENV)}`,
+            JSON.stringify({ state: "cancel" }),
+          );
+        }
+        return "";
+      });
+      try {
+        const res = await runCli(["reports", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv());
+        assert.equal(res.code, 0);
+        assert.equal(res.stdout, "report viewer closed\n");
+      } finally {
+        restorePaneFake();
+      }
+      assert.equal(calls.length, 1);
+    });
+  });
+
+  it("refuses before any popup call outside tmux", async () => {
+    const { calls } = usePopupExec({ line: "unreached" });
+    try {
+      const res = await runCli(["reports"], { PATH: process.env.PATH });
+      assert.equal(res.code, 1);
+      assert.equal(res.stdout, "");
+      assert.match(res.stderr, /tmux/);
+    } finally {
+      restorePaneFake();
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("refuses the inner side without the dialog state env", async () => {
+    const res = await runCli(["reports", "--inner", "--pane", "%21"], {
+      PATH: process.env.PATH,
+    });
+    assert.equal(res.code, 1);
+    assert.match(res.stderr, new RegExp(DIALOG_STATE_ENV));
   });
 });
 

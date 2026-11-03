@@ -67,6 +67,11 @@ import { runSpec, type RunSpecDeps } from "./run.ts";
 import { DIALOG_HOST_LIMIT_MS, type RunDialogDeps } from "./dialog-host.ts";
 import { rolesDialogInner, rolesDialogOuter, type RolesDialogDeps } from "./dialog-roles.ts";
 import {
+  reportsDialogInner,
+  reportsDialogOuter,
+  type ReportsDialogDeps,
+} from "./dialog-reports.ts";
+import {
   SPAWN_ARGS_REFUSAL,
   spawnDialogInner,
   spawnDialogOuter,
@@ -123,6 +128,7 @@ const USAGE = [
   "  node cli.ts wait --session <file> [--signal status|sidecar] [--status <list>] [--timeout <seconds>] (--status with --signal sidecar is a usage error)",
   "  node cli.ts prune [--scratch <dir>] [--max-age-days <n>] [--dry-run]",
   "  node cli.ts roles [--cwd <dir>] [--agent-dir <dir>] | roles --inner --cwd <dir> --agent-dir <dir> [--pane <pane>]",
+  "  node cli.ts reports [--cwd <dir>] [--agent-dir <dir>] | reports --inner --pane <pane>",
   "  node cli.ts spawn-dialog [--cwd <dir>] [--agent-dir <dir>] [--args <text>] | spawn-dialog --inner --cwd <dir> --agent-dir <dir> --pane <pane> [--role <role>] [--start] [--scratch <dir>]",
 ].join("\n");
 
@@ -213,7 +219,7 @@ export interface CliDeps {
    * editor and the spawn dialog's `start` call. The defaults are the real
    * tmux call, the TTY widget, `pi --list-models`, the editor and `start`.
    */
-  dialog?: RolesDialogDeps & SpawnDialogDeps;
+  dialog?: RolesDialogDeps & SpawnDialogDeps & ReportsDialogDeps;
 }
 
 function required(flag: string, value: string | undefined): string {
@@ -966,6 +972,47 @@ async function rolesCommand(values: CliValues, deps: CliDeps): Promise<number> {
 }
 
 /**
+ * `reports`: the report viewer (designs D1, D8 and D9). Without `--inner`
+ * the command is the outer side — it opens the popup over the caller's
+ * pane and prints the one result line; the Claude Code `pmux-reports`
+ * skill runs it, so the wait stops at `DIALOG_HOST_LIMIT_MS` and the line
+ * can be the still-open line (pi's `/pmux-reports` calls
+ * `reportsDialogOuter` in-process with no limit instead). With `--inner`
+ * the command is the popup side: it lists the caller pane's report
+ * history, pages the chosen report file, and writes `done` or `cancel`.
+ */
+async function reportsCommand(values: CliValues, deps: CliDeps): Promise<number> {
+  const env = deps.env ?? process.env;
+  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  try {
+    if (values.inner === true) {
+      await reportsDialogInner({ pane: required("--pane", values.pane), env }, deps.dialog ?? {});
+      return 0;
+    }
+    const agentDir =
+      values["agent-dir"] ?? env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+    const dialogDeps: RunDialogDeps = {
+      ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
+      ...(deps.dialog ?? {}),
+    };
+    const line = await reportsDialogOuter(
+      {
+        cwd: resolve(values.cwd ?? process.cwd()),
+        agentDir,
+        env,
+        stopAfterMs: DIALOG_HOST_LIMIT_MS,
+      },
+      dialogDeps,
+    );
+    write(`${line}\n`);
+    return 0;
+  } catch (error) {
+    return usageFailure(error, writeErr);
+  }
+}
+
+/**
  * `spawn-dialog`: the spawn dialog (designs D1, D6 and D7). Without
  * `--inner` the command is the outer side — the Claude Code `pmux-spawn`
  * skill runs it with `--args '$ARGUMENTS'`. An empty `--args` opens the
@@ -1299,6 +1346,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   if (command === "ack") return ackCommand(values as CliValues, deps);
   if (command === "inbox") return inboxCommand(values as CliValues, deps);
   if (command === "roles") return rolesCommand(values as CliValues, deps);
+  if (command === "reports") return reportsCommand(values as CliValues, deps);
   if (command === "spawn-dialog") return spawnDialogCommand(values as CliValues, deps);
   if (command === "last-message") return lastMessageCommand(values as CliValues, deps);
   if (command === "wait") return await waitCommand(values as CliValues, deps);
