@@ -18,6 +18,7 @@ import {
   isTmuxAvailable,
   listPaneTargets,
   namePane,
+  openPopup,
   paneExists,
   pollForExit,
   readPaneOption,
@@ -365,6 +366,64 @@ describe("tmux backend", () => {
     const calls = stub(() => "");
     sendEscape("%9");
     assert.deepEqual(calls[0], ["send-keys", "-t", "%9", "Escape"]);
+  });
+
+  it("runs display-popup through the seam with the exact argv", async () => {
+    const calls = stub(() => "");
+    const popup = openPopup([
+      "display-popup",
+      "-E",
+      "-t",
+      "%5",
+      "-T",
+      "pmux roles",
+      "-w",
+      "80%",
+      "-h",
+      "80%",
+      "node",
+      "cli.ts",
+      "roles",
+      "--inner",
+    ]);
+    // The seam call runs on the promise microtask: awaiting `done` settles it.
+    await popup.done;
+    assert.deepEqual(calls, [
+      [
+        "display-popup",
+        "-E",
+        "-t",
+        "%5",
+        "-T",
+        "pmux roles",
+        "-w",
+        "80%",
+        "-h",
+        "80%",
+        "node",
+        "cli.ts",
+        "roles",
+        "--inner",
+      ],
+    ]);
+    // The unref hook is a no-op under the seam.
+    popup.unref();
+  });
+
+  it("carries a thrown seam error as the popup's error text", async () => {
+    __setTmuxExecForTests__(() => {
+      throw new Error("unknown option: -T");
+    });
+    const popup = openPopup(["display-popup", "-E", "-T", "pmux roles"]);
+    await assert.rejects(popup.done, /unknown option: -T/);
+  });
+
+  it("carries a rejected seam promise as the popup's error text", async () => {
+    __setTmuxExecForTests__(async () => {
+      throw new Error("tmux server gone");
+    });
+    const popup = openPopup(["display-popup", "-E"]);
+    await assert.rejects(popup.done, /tmux server gone/);
   });
 
   it("lists server-wide pane targets, rejoining a title with a separator", () => {

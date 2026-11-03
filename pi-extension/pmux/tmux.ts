@@ -10,7 +10,7 @@
  * is sent to it afterwards, which keeps the pane alive after the child exits:
  * the parent reads the exit sentinel from the pane and closes it afterwards.
  */
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, rmSync } from "node:fs";
 import {
@@ -553,6 +553,71 @@ function parsePaneTargetRows(out: string): PaneTargetRow[] {
  */
 export function listPaneTargets(): PaneTargetRow[] {
   return parsePaneTargetRows(tmux(["list-panes", "-a", "-F", PANE_TARGET_FORMAT]));
+}
+
+/**
+ * Handle to a tmux call that runs outside the five-second call budget —
+ * `display-popup`, which lives as long as the dialog inside it (dialog-host
+ * D1). Without the test seam the call runs on a detached child with stdin
+ * and stdout ignored and stderr piped: when the caller stops waiting, the
+ * `unref` hook releases the child and its stderr pipe so Node can exit while
+ * the popup stays open (design D2).
+ */
+export interface PopupHandle {
+  /**
+   * Settles when the tmux client exits: resolves on a zero exit, rejects
+   * with an error that carries tmux's stderr on a non-zero exit or a spawn
+   * failure.
+   */
+  done: Promise<void>;
+  /**
+   * Release the child and its stderr pipe so the process can exit while the
+   * popup stays open. A no-op under the test seam.
+   */
+  unref(): void;
+}
+
+/**
+ * Run `tmux` with `args` verbatim and no timeout. Under the test seam the
+ * argv goes through `__setTmuxExecForTests__` like every other call — a
+ * thrown error or a rejected promise becomes the `done` rejection — so
+ * tests can assert the exact argv and the error text.
+ */
+export function openPopup(args: string[]): PopupHandle {
+  if (execOverride) {
+    const exec = execOverride;
+    const done = Promise.resolve()
+      .then(() => exec(args))
+      .then(() => undefined);
+    return { done, unref: () => {} };
+  }
+  const child = spawn("tmux", args, {
+    detached: true,
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  // SAFETY: with stdio "pipe" the stderr stream is a net.Socket, which has
+  // unref(); the child_process typings only promise a Readable, so the call
+  // is optional-chained to stay safe on any stream.
+  const stderrPipe = child.stderr as unknown as { unref?: () => void } | null;
+  let stderr = "";
+  const done = new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.once("close", (code) => {
+      const detail = stderr.trim();
+      if (code === 0) resolve();
+      else reject(new Error(detail || `tmux ${args[0] ?? "call"} exited with code ${code}`));
+    });
+  });
+  return {
+    done,
+    unref: () => {
+      child.unref();
+      stderrPipe?.unref?.();
+    },
+  };
 }
 
 /** Shape of the prompt delivery result, as the tmux backend returns it. */
