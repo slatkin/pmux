@@ -60,6 +60,7 @@ import {
   parseAgentDefinition,
   type AgentDefinition,
 } from "./agent-defs.ts";
+import { rolesDialogOuter } from "./dialog-roles.ts";
 
 import { decodeChildEnv, isSubagentChild } from "./child-env.ts";
 import { loadStatusConfig, loadSurfaceConfig, writeSurfaceConfig } from "./status.ts";
@@ -1184,6 +1185,28 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       const displayName = agentName[0].toUpperCase() + agentName.slice(1);
       const toolCall = `Use pmux_spawn with agent: "${agentName}", name: "${displayName}", task: ${JSON.stringify(taskText)}`;
       pi.sendUserMessage(toolCall);
+    },
+  });
+
+  // /pmux-roles command — the role editor dialog (design D9)
+  pi.registerCommand("pmux-roles", {
+    description: "Edit a subagent role's model, model-fallback or thinking in a popup",
+    handler: async (_args, ctx) => {
+      if (!isTmuxAvailable()) {
+        ctx.ui.notify(`Subagents require tmux. ${tmuxSetupHint()}`, "error");
+        return;
+      }
+      try {
+        // The outer side runs in-process and waits with no limit (design D1).
+        const line = await rolesDialogOuter({
+          cwd: ctx.cwd,
+          agentDir: getAgentConfigDir(),
+          env: process.env,
+        });
+        ctx.ui.notify(line, "info");
+      } catch (error) {
+        ctx.ui.notify(errorText(error), "error");
+      }
     },
   });
 

@@ -2637,6 +2637,39 @@ describe("pmux-surface command", () => {
   });
 });
 
+describe("pmux-roles command", () => {
+  function loadCommand() {
+    const { api, registeredCommands } = createMockExtensionApi();
+    (subagentsModule as any).default(api);
+    const command = registeredCommands.find((c: any) => c.name === "pmux-roles");
+    assert.ok(command, "expected /pmux-roles to be registered");
+    const notifications: Array<{ message: string; level: string }> = [];
+    const ctx = {
+      cwd: "/tmp",
+      ui: { notify: (message: string, level: string) => notifications.push({ message, level }) },
+    };
+    return { command, notifications, ctx };
+  }
+
+  it("refuses outside tmux before any popup call", async () => {
+    const calls: string[][] = [];
+    __setTmuxExecForTests__((args) => {
+      calls.push(args);
+      return "";
+    });
+    try {
+      const { command, notifications, ctx } = loadCommand();
+      await command.handler("", ctx);
+      assert.equal(notifications.length, 1);
+      assert.equal(notifications[0].level, "error");
+      assert.match(notifications[0].message, /tmux/);
+    } finally {
+      __setTmuxExecForTests__(null);
+    }
+    assert.deepEqual(calls, []);
+  });
+});
+
 describe("tool registration", () => {
   it("declares no surface parameter and names no surface value on pmux_spawn and pmux_resume", () => {
     const { api, registeredTools } = createMockExtensionApi();
