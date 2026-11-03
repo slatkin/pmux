@@ -15,9 +15,9 @@
 
 ## 3. Role editor dialog and commands (role-editor)
 
-- [ ] 3.1 Add `cli.ts roles` (outer) and `roles --inner` (inner): role list, key choice, value list (models, thinking levels, remove), the "edits create a user copy" confirm for a built-in role, and the write. Pass `--cwd`, `--agent-dir` and `--pane` as arguments. Verify with `test/cli.test.ts` cases for the argv the outer side sends to `openPopup` (including `-e PI_CODING_AGENT_DIR=<agent dir>`, `-e PATH=<caller PATH>`, and `-e VISUAL`/`EDITOR`/`PAGER` only when the caller's env sets them, design D1), and for an inner run with injected keys that edits a temp role file.
-- [ ] 3.2 Register `/pmux-roles` in `index.ts` (design D9), with the tmux refusal and the result line through `ctx.ui.notify`. Verify with a test that the command is registered and refuses outside tmux.
-- [ ] 3.3 Add `skills/pmux-roles/SKILL.md` (design D7) and verify that `node skills/pmux/launch.ts roles` with `TMUX_PANE` unset exits with the tmux refusal through the shim.
+- [x] 3.1 Add `cli.ts roles` (outer) and `roles --inner` (inner): role list, key choice, value list (models, thinking levels, remove), the "edits create a user copy" confirm for a built-in role, and the write. Pass `--cwd`, `--agent-dir` and `--pane` as arguments. Verify with `test/cli.test.ts` cases for the argv the outer side sends to `openPopup` (including `-e PI_CODING_AGENT_DIR=<agent dir>`, `-e PATH=<caller PATH>`, and `-e VISUAL`/`EDITOR`/`PAGER` only when the caller's env sets them, design D1), and for an inner run with injected keys that edits a temp role file.
+- [x] 3.2 Register `/pmux-roles` in `index.ts` (design D9), with the tmux refusal and the result line through `ctx.ui.notify`. Verify with a test that the command is registered and refuses outside tmux.
+- [x] 3.3 Add `skills/pmux-roles/SKILL.md` (design D7) and verify that `node skills/pmux/launch.ts roles` with `TMUX_PANE` unset exits with the tmux refusal through the shim.
 
 ## 4. Spawn dialog and commands (spawn-dialog)
 
