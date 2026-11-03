@@ -9,7 +9,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
@@ -63,6 +63,8 @@ import { type ChannelUnavailableReason } from "./channel-reason.ts";
 import { type InboxUnavailableReason } from "./inbox-reason.ts";
 import { isReportId, reportArtifactPath } from "./report-artifact.ts";
 import { runSpec, type RunSpecDeps } from "./run.ts";
+import { DIALOG_HOST_LIMIT_MS, type RunDialogDeps } from "./dialog-host.ts";
+import { rolesDialogInner, rolesDialogOuter, type RolesDialogDeps } from "./dialog-roles.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
 import { loadSurfaceConfig } from "./status.ts";
 import {
@@ -112,6 +114,7 @@ const USAGE = [
   "  node cli.ts last-message --session <file>",
   "  node cli.ts wait --session <file> [--signal status|sidecar] [--status <list>] [--timeout <seconds>] (--status with --signal sidecar is a usage error)",
   "  node cli.ts prune [--scratch <dir>] [--max-age-days <n>] [--dry-run]",
+  "  node cli.ts roles [--cwd <dir>] [--agent-dir <dir>] | roles --inner --cwd <dir> --agent-dir <dir> [--pane <pane>]",
 ].join("\n");
 
 const CLI_OPTIONS = {
@@ -138,6 +141,9 @@ const CLI_OPTIONS = {
   "dry-run": { type: "boolean" },
   follow: { type: "boolean" },
   once: { type: "boolean" },
+  inner: { type: "boolean" },
+  "agent-dir": { type: "string" },
+  pane: { type: "string" },
   help: { type: "boolean", short: "h" },
 } as const;
 
@@ -165,6 +171,9 @@ interface CliValues {
   "dry-run"?: boolean;
   follow?: boolean;
   once?: boolean;
+  inner?: boolean;
+  "agent-dir"?: string;
+  pane?: string;
   help?: boolean;
 }
 
@@ -185,6 +194,12 @@ export interface CliDeps {
    * report delivery offers the parent's channel first (design D3).
    */
   submitChannel?: typeof submitChannel;
+  /**
+   * Dialog seams: the `runDialog` deps for a command's outer side and the
+   * list widget plus model list for an inner side. The defaults are the real
+   * tmux call, the TTY widget and `pi --list-models`.
+   */
+  dialog?: RolesDialogDeps;
 }
 
 function required(flag: string, value: string | undefined): string {
@@ -883,6 +898,54 @@ async function inboxCommand(values: CliValues, deps: CliDeps): Promise<number> {
   }
 }
 
+/**
+ * `roles`: the role editor (design D1). Without `--inner` the command is the
+ * outer side — it opens the popup over the caller's pane and prints the one
+ * result line; the Claude Code `pmux-roles` skill runs it, so the wait stops
+ * at `DIALOG_HOST_LIMIT_MS` and the line can be the still-open line (pi's
+ * `/pmux-roles` calls `rolesDialogOuter` in-process with no limit instead).
+ * With `--inner` the command is the popup side: it writes the state file's
+ * `open` record, runs the lists on the TTY and writes `done` or `cancel`.
+ */
+async function rolesCommand(values: CliValues, deps: CliDeps): Promise<number> {
+  const env = deps.env ?? process.env;
+  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  try {
+    if (values.inner === true) {
+      await rolesDialogInner(
+        {
+          cwd: required("--cwd", values.cwd),
+          agentDir: required("--agent-dir", values["agent-dir"]),
+          ...(values.pane !== undefined ? { pane: values.pane } : {}),
+          env,
+        },
+        deps.dialog ?? {},
+      );
+      return 0;
+    }
+    const agentDir =
+      values["agent-dir"] ?? env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+    const dialogDeps: RunDialogDeps = {
+      ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
+      ...(deps.dialog ?? {}),
+    };
+    const line = await rolesDialogOuter(
+      {
+        cwd: resolve(values.cwd ?? process.cwd()),
+        agentDir,
+        env,
+        stopAfterMs: DIALOG_HOST_LIMIT_MS,
+      },
+      dialogDeps,
+    );
+    write(`${line}\n`);
+    return 0;
+  } catch (error) {
+    return usageFailure(error, writeErr);
+  }
+}
+
 /** `last-message`: print a session's last assistant message. */
 function lastMessageCommand(values: CliValues, deps: CliDeps): number {
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
@@ -1120,6 +1183,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   if (command === "send") return sendCommand(values as CliValues, deps);
   if (command === "ack") return ackCommand(values as CliValues, deps);
   if (command === "inbox") return inboxCommand(values as CliValues, deps);
+  if (command === "roles") return rolesCommand(values as CliValues, deps);
   if (command === "last-message") return lastMessageCommand(values as CliValues, deps);
   if (command === "wait") return await waitCommand(values as CliValues, deps);
   if (command === "prune") return pruneCommand(values as CliValues, deps);

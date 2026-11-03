@@ -43,6 +43,14 @@ import {
 import { registerReport, REPORT_ACK_POLL_MS } from "../pi-extension/pmux/report-delivery.ts";
 import { reportArtifactPath } from "../pi-extension/pmux/report-artifact.ts";
 import { appendReportAck, readReportLog } from "../pi-extension/pmux/report-receipt.ts";
+import { DIALOG_STATE_ENV, writeDialogDone } from "../pi-extension/pmux/dialog-host.ts";
+import {
+  initListState,
+  reduceListKey,
+  type ListDialogOptions,
+  type ListKey,
+} from "../pi-extension/pmux/dialog-ui.ts";
+import { getBundledAgentsDir } from "../pi-extension/pmux/agent-defs.ts";
 import type {
   ChannelSubmitArgs,
   ChannelSubmitResult,
@@ -2258,6 +2266,312 @@ describe("cli.ts last-message", () => {
       ]);
       const res = await runCli(["last-message", "--session", sessionPath], tmuxEnv());
       assert.equal(res.stdout, "(no assistant message)\n");
+    });
+  });
+});
+
+// ─── cli.ts roles ──────────────────────────────────────────────────────
+
+describe("cli.ts roles", () => {
+  const ENTER: ListKey = { name: "return" };
+  const ESCAPE: ListKey = { name: "escape" };
+  const DOWN: ListKey = { name: "down" };
+  const typed = (text: string): ListKey[] => [...text].map((ch) => ({ sequence: ch }));
+
+  /** Drive the real list reducer with a key script; returns the choice or null. */
+  function scriptChoice(
+    items: readonly string[],
+    keys: ListKey[],
+  ): { index: number; item: string } | null {
+    let state = initListState(items);
+    for (const key of keys) state = reduceListKey(state, key);
+    if (state.outcome.type === "chosen") {
+      return { index: state.outcome.index, item: state.outcome.item };
+    }
+    if (state.outcome.type === "cancel") return null;
+    assert.fail(`key script left the list pending: ${JSON.stringify(keys)}`);
+  }
+
+  interface SeenList {
+    items: readonly string[];
+    footer?: string;
+  }
+
+  /** A chooser that answers each list from a queue of key scripts. */
+  function scriptedChoose(keyScripts: ListKey[][], seen: SeenList[]) {
+    return async (
+      items: readonly string[],
+      options?: ListDialogOptions,
+    ): Promise<{ index: number; item: string } | null> => {
+      seen.push({ items, ...(options?.footer !== undefined ? { footer: options.footer } : {}) });
+      const keys = keyScripts.shift();
+      assert.ok(keys, "the dialog asked for more choices than the script holds");
+      return scriptChoice(items, keys);
+    };
+  }
+
+  interface RolesInnerRun {
+    code: number;
+    stdout: string;
+    stderr: string;
+    seen: SeenList[];
+    state: { state: string; line?: string } | null;
+  }
+
+  /** Run `roles --inner` against temp dirs with scripted lists and models. */
+  async function runRolesInner(
+    dirs: { cwd: string; agentDir: string; statePath: string },
+    keyScripts: ListKey[][],
+    models: string[] | Error = ["prov/m1", "prov/m2"],
+  ): Promise<RolesInnerRun> {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const seen: SeenList[] = [];
+    const code = await main(
+      ["roles", "--inner", "--cwd", dirs.cwd, "--agent-dir", dirs.agentDir, "--pane", "%21"],
+      {
+        env: { PATH: process.env.PATH, [DIALOG_STATE_ENV]: dirs.statePath },
+        stdout: (text) => stdout.push(text),
+        stderr: (text) => stderr.push(text),
+        sleep: async () => {},
+        dialog: {
+          choose: scriptedChoose(keyScripts, seen),
+          listModels: () => {
+            if (models instanceof Error) throw models;
+            return models;
+          },
+        },
+      },
+    );
+    const state = existsSync(dirs.statePath)
+      ? (JSON.parse(readFileSync(dirs.statePath, "utf8")) as RolesInnerRun["state"])
+      : null;
+    return { code, stdout: stdout.join(""), stderr: stderr.join(""), seen, state };
+  }
+
+  /** The `-e <KEY>=<value>` pair for `key` in a display-popup argv. */
+  function popupEnvValue(argv: string[], key: string): string | undefined {
+    for (let i = 0; i < argv.length - 1; i++) {
+      if (argv[i] === "-e" && argv[i + 1]!.startsWith(`${key}=`)) {
+        return argv[i + 1]!.slice(key.length + 1);
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * A tmux exec that answers `display-popup` with the inner side's `done`
+   * record, so the outer side's wait ends on the second poll.
+   */
+  function usePopupExec(done: Record<string, unknown>): { calls: string[][] } {
+    const calls: string[][] = [];
+    __setTmuxExecForTests__((args) => {
+      calls.push(args);
+      if (args[0] === "display-popup") {
+        writeDialogDone(`${popupEnvValue(args, DIALOG_STATE_ENV)}`, done);
+      }
+      return "";
+    });
+    return { calls };
+  }
+
+  /** Restore the suite's shared pane fake after a popup-exec test. */
+  function restorePaneFake(): void {
+    __setTmuxExecForTests__(null);
+    paneFake = useTmuxPaneFake();
+    paneCalls = paneFake.lines;
+  }
+
+  it("sends the inner dialog argv to display-popup and prints the result line", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupExec({ line: "worker: model = prov/m2" });
+      try {
+        const env = tmuxEnv({
+          VISUAL: "vim",
+          EDITOR: "nano",
+          PAGER: "less",
+          PI_CODING_AGENT_DIR: agentDir,
+        });
+        const res = await runCli(["roles", "--cwd", cwd], env);
+        assert.equal(res.code, 0);
+        assert.equal(res.stderr, "");
+        assert.equal(res.stdout, "worker: model = prov/m2\n");
+      } finally {
+        restorePaneFake();
+      }
+      assert.equal(calls.length, 1);
+      const argv = calls[0]!;
+      const statePath = popupEnvValue(argv, DIALOG_STATE_ENV);
+      assert.ok(statePath, "expected the state path in the popup env");
+      assert.deepEqual(argv, [
+        "display-popup",
+        "-E",
+        "-t",
+        "%21",
+        "-T",
+        "pmux roles",
+        "-w",
+        "80%",
+        "-h",
+        "80%",
+        "-d",
+        cwd,
+        "-e",
+        `${DIALOG_STATE_ENV}=${statePath}`,
+        "-e",
+        `PI_CODING_AGENT_DIR=${agentDir}`,
+        "-e",
+        `PATH=${process.env.PATH}`,
+        "-e",
+        "VISUAL=vim",
+        "-e",
+        "EDITOR=nano",
+        "-e",
+        "PAGER=less",
+        process.execPath,
+        CLI,
+        "roles",
+        "--inner",
+        "--cwd",
+        cwd,
+        "--agent-dir",
+        agentDir,
+        "--pane",
+        "%21",
+      ]);
+    });
+  });
+
+  it("leaves VISUAL, EDITOR and PAGER out of the popup env when the caller lacks them", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupExec({ line: "done" });
+      try {
+        const res = await runCli(["roles", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv());
+        assert.equal(res.code, 0);
+        assert.equal(res.stdout, "done\n");
+      } finally {
+        restorePaneFake();
+      }
+      const argv = calls[0]!;
+      assert.equal(popupEnvValue(argv, "VISUAL"), undefined);
+      assert.equal(popupEnvValue(argv, "EDITOR"), undefined);
+      assert.equal(popupEnvValue(argv, "PAGER"), undefined);
+      assert.equal(popupEnvValue(argv, "PI_CODING_AGENT_DIR"), agentDir);
+      assert.equal(popupEnvValue(argv, "PATH"), process.env.PATH);
+    });
+  });
+
+  it("refuses before any popup call outside tmux", async () => {
+    const { calls } = usePopupExec({ line: "unreached" });
+    try {
+      const res = await runCli(["roles"], { PATH: process.env.PATH });
+      assert.equal(res.code, 1);
+      assert.equal(res.stdout, "");
+      assert.match(res.stderr, /tmux/);
+    } finally {
+      restorePaneFake();
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("edits a project role file in place through injected keys", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x\nthinking: high", "Worker body.");
+      const run = await runRolesInner({ cwd, agentDir, statePath: join(dir, "state.json") }, [
+        [...typed("wor"), ENTER],
+        [ENTER],
+        [DOWN, ENTER],
+      ]);
+      assert.equal(run.code, 0);
+      assert.equal(run.stderr, "");
+      assert.equal(run.state?.state, "done");
+      assert.match(run.state?.line ?? "", /worker: model = prov\/m2/);
+      const text = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      assert.ok(text.includes("model: prov/m2"));
+      assert.ok(text.includes("thinking: high"));
+      // A project file is edited in place: no user copy was made.
+      assert.equal(existsSync(join(agentDir, "agents", "worker.md")), false);
+    });
+  });
+
+  it("copies a built-in role to the user agents dir on the first edit", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      mkdirSync(cwd, { recursive: true });
+      const agentDir = join(dir, "agent");
+      const bundled = join(getBundledAgentsDir(), "visual-tester.md");
+      const before = readFileSync(bundled, "utf8");
+      const run = await runRolesInner({ cwd, agentDir, statePath: join(dir, "state.json") }, [
+        [...typed("vis"), ENTER],
+        [DOWN, DOWN, ENTER],
+        [DOWN, DOWN, ENTER],
+      ]);
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      // The value step's confirm line announced the user copy.
+      const valueList = run.seen[2];
+      assert.match(valueList?.footer ?? "", /edits create a user copy/);
+      const copy = join(agentDir, "agents", "visual-tester.md");
+      assert.equal(existsSync(copy), true);
+      assert.ok(readFileSync(copy, "utf8").includes("thinking: low"));
+      assert.equal(readFileSync(bundled, "utf8"), before);
+    });
+  });
+
+  it("writes cancel when the user presses Escape and changes no file", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x", "Worker body.");
+      const before = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      const run = await runRolesInner({ cwd, agentDir, statePath: join(dir, "state.json") }, [
+        [ESCAPE],
+      ]);
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8"), before);
+    });
+  });
+
+  it("shows the pi --list-models error and keeps the model keys out of the key list", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x", "Worker body.");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        [[...typed("wor"), ENTER], [ENTER], [DOWN, DOWN, DOWN, DOWN, ENTER]],
+        new Error("pi --list-models failed: no pi on PATH"),
+      );
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      // The error rides the list footers, and the key list offers thinking only.
+      assert.match(run.seen[0]?.footer ?? "", /pi --list-models failed: no pi on PATH/);
+      assert.deepEqual(run.seen[1]?.items, ["thinking"]);
+      // "high" is the fifth thinking level: off, minimal, low, medium, high.
+      assert.match(run.state?.line ?? "", /worker: thinking = high/);
+      const text = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      assert.ok(text.includes("thinking: high"));
+    });
+  });
+
+  it("refuses the inner side without the dialog state env", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      const res = await runCli(["roles", "--inner", "--cwd", cwd, "--agent-dir", agentDir], {
+        PATH: process.env.PATH,
+      });
+      assert.equal(res.code, 1);
+      assert.match(res.stderr, new RegExp(DIALOG_STATE_ENV));
     });
   });
 });
