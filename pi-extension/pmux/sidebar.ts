@@ -164,12 +164,18 @@ export type SidebarEvent =
   | "notification"
   | "session-end";
 
-/** The part of a spawned child the publisher touches: its stdin. */
+/** The part of a spawned child the publisher touches: its stdin and its end. */
 export interface SidebarChild {
   stdin: {
     write(chunk: string): boolean | void;
     end(): void;
   };
+  /**
+   * Fires the listener once when the child is done — exit or spawn error.
+   * The hook queue's step settles on it, so the next hook spawns only after
+   * this one has applied.
+   */
+  onExit(listener: () => void): void;
 }
 
 export interface SidebarDeps {
@@ -179,7 +185,12 @@ export interface SidebarDeps {
   exists(path: string): boolean;
   /** The spawner. It must not await the child, and it must inherit `env`. */
   spawn(command: string, args: string[], options: { env: NodeJS.ProcessEnv }): SidebarChild;
+  /** How long one hook may run before the queue moves on without it. Tests inject a short one. */
+  hookStallMs?: number;
 }
+
+/** The stall bound: a hook that never exits must not strand the queue. */
+const HOOK_STALL_MS = 10_000;
 
 const DEFAULT_DEPS: SidebarDeps = {
   env: process.env,
@@ -192,7 +203,14 @@ const DEFAULT_DEPS: SidebarDeps = {
     child.on("error", () => {});
     child.stdin?.on?.("error", () => {});
     child.unref();
-    return child as SidebarChild;
+    return {
+      stdin: child.stdin,
+      // A spawn failure fires `error` without `exit`; both settle the step.
+      onExit(listener: () => void) {
+        child.once("exit", listener);
+        child.once("error", listener);
+      },
+    };
   },
 };
 
@@ -260,6 +278,46 @@ export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): Sideba
     }
   };
 
+  // The hook queue: one hook process at a time, in publish order. Each hook
+  // reads the pane's options, decides and applies as its own tmux calls, so
+  // two concurrent hooks can interleave read and apply and land out of
+  // order — and pi emits `session_start` and the first `input` inside one
+  // synchronous startup stretch, so their hooks always run concurrently.
+  // When the session-start reset lands after its session's
+  // user-prompt-submit, the pane is pinned at `idle` for the whole run: an
+  // activity-log lifts only `waiting` and `error`, never `idle`. Spawning a
+  // hook only after the previous one exited orders the applies; the queue
+  // still never delays the caller's turn. A stalled hook settles on the
+  // stall bound and accepts the old race rather than stranding the queue.
+  let queue: Promise<void> = Promise.resolve();
+
+  const runHook = (event: SidebarEvent, payload: Record<string, unknown>): Promise<void> =>
+    new Promise<void>((settle) => {
+      let settled = false;
+      const done = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(stall);
+        settle();
+      };
+      const stall = setTimeout(done, deps.hookStallMs ?? HOOK_STALL_MS);
+      stall.unref?.();
+      try {
+        const bin = findBinary();
+        if (!bin) return done();
+        const child = deps.spawn(bin, ["hook", "pi", event], { env: deps.env });
+        child.stdin.write(JSON.stringify(payload));
+        child.stdin.end();
+        child.onExit(done);
+      } catch {
+        done();
+      }
+    });
+
+  const enqueue = (event: SidebarEvent, payload: Record<string, unknown>): void => {
+    queue = queue.then(() => runHook(event, payload));
+  };
+
   return {
     canPublish(): boolean {
       try {
@@ -274,8 +332,8 @@ export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): Sideba
       try {
         if (!guardsPass()) return;
         // setImmediate keeps the relative order: events published in one
-        // handler turn reach the sidebar in the order they were published.
-        setImmediate(() => emit(event, payload));
+        // handler turn reach the queue in the order they were published.
+        setImmediate(() => enqueue(event, payload));
       } catch {
         // A missing, broken or slow sidebar never disturbs the session.
       }

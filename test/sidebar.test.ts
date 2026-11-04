@@ -21,7 +21,7 @@ import {
   type SidebarDeps,
   type SidebarEvent,
 } from "../pi-extension/pmux/sidebar.ts";
-import { flushSidebarQueue, makeSidebarSpawn } from "./sidebar-fakes.ts";
+import { exitOneSidebarChild, flushSidebarQueue, makeSidebarSpawn } from "./sidebar-fakes.ts";
 
 const existsNever = () => false;
 
@@ -213,6 +213,51 @@ describe("publisher", () => {
     });
   });
 
+  it("spawns the next hook only after the previous one exited", async () => {
+    // The regression: pi emits `session_start` and the first `input` inside
+    // one synchronous startup stretch, so their hook processes used to spawn
+    // concurrently and could apply out of order — the session-start reset
+    // landing last pinned the pane at `idle` for the whole run. The queue
+    // spawns hook two only after hook one exited.
+    const { spawn, calls } = makeSidebarSpawn();
+    const publisher = createSidebarPublisher({
+      env: { ...ENV, PMUX_EXPLORER_BIN: BIN },
+      exists: binaryThere,
+      spawn,
+    });
+    publisher.publish("session-start", { cwd: "/w", session_id: "s1" });
+    publisher.publish("user-prompt-submit", { prompt: "task", cwd: "/w", session_id: "s1" });
+    // One tick: both publishes enqueued, the first hook spawned, the second
+    // one still waiting for the first child's exit.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.length, 1, "the second hook waits for the first child's exit");
+    assert.deepEqual(calls[0].args, ["hook", "pi", "session-start"]);
+    exitOneSidebarChild();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1].args, ["hook", "pi", "user-prompt-submit"]);
+    exitOneSidebarChild();
+  });
+
+  it("moves the queue on when a hook stalls past the stall bound", async () => {
+    const { spawn, calls } = makeSidebarSpawn();
+    const publisher = createSidebarPublisher({
+      env: { ...ENV, PMUX_EXPLORER_BIN: BIN },
+      exists: binaryThere,
+      spawn,
+      hookStallMs: 5,
+    });
+    publisher.publish("session-start", { cwd: "/w", session_id: "s1" });
+    publisher.publish("user-prompt-submit", { prompt: "task", cwd: "/w", session_id: "s1" });
+    // One tick spawns the first hook; flushSidebarQueue would exit it, and
+    // this test needs it stuck, so the queue advances only via the stall.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.length, 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(calls.length, 2, "a stalled hook must not strand the queue");
+  });
+
   it("swallows a throwing spawner and a throwing stdin, and writes nothing to the output", async () => {
     const spawnCalls = await publishWith(
       {
@@ -240,6 +285,7 @@ describe("publisher", () => {
             published = true;
           },
         },
+        onExit() {},
       }),
     }).publish("stop", { last_assistant_message: "x" });
     await flushSidebarQueue();
