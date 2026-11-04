@@ -271,9 +271,9 @@ export function listRoles(cwd: string, agentDir: string): RoleInfo[] {
  *
  * For a `built-in` role the first edit copies the package file whole to
  * `<agentDir>/agents/<name>.md` (creating the directory) and edits the
- * copy; the package file never changes. The write is a temp file in the
- * same directory plus a rename, so a reader sees the old file or the new
- * file. Returns the path of the file written.
+ * copy; the package file never changes. Both the copy and the edit write
+ * go through a temp file in the same directory plus a rename, so a reader
+ * sees the old file or the new file. Returns the path of the file written.
  */
 export function writeRoleKey(
   role: RoleInfo,
@@ -285,7 +285,9 @@ export function writeRoleKey(
   if (role.source === "built-in") {
     target = join(options.agentDir, "agents", `${role.name}.md`);
     mkdirSync(dirname(target), { recursive: true });
-    copyFileSync(role.path, target);
+    const copyTmp = `${target}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+    copyFileSync(role.path, copyTmp);
+    renameSync(copyTmp, target);
   }
   const next = setFrontmatterKey(readFileSync(target, "utf8"), key, value);
   const tmp = `${target}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
