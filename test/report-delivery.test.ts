@@ -6,7 +6,7 @@
 import "./host-env.ts";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   awaitReportAck,
@@ -27,6 +27,7 @@ import {
   VISIBILITY_TOKEN_PREFIX,
 } from "../pi-extension/pmux/report-artifact.ts";
 import { appendReportAck, readReportLog } from "../pi-extension/pmux/report-receipt.ts";
+import { historyDirPath, listHistory } from "../pi-extension/pmux/report-history.ts";
 import { inboxDirPath, writeMonitorMarker } from "../pi-extension/pmux/report-inbox.ts";
 import type { VerifiedPromptResult } from "../pi-extension/pmux/tmux.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
@@ -86,7 +87,7 @@ describe("registerReport", () => {
     withTempDir((dir) => {
       const sessionFile = join(dir, "s.jsonl");
       const text = "line one\nline two — naïve";
-      const report = registerReport({ sessionFile, to: "%12", text });
+      const report = registerReport({ sessionFile, to: "%12", text, from: "worker" });
 
       assert.equal(isReportId(report.id), true);
       assert.equal(report.reportPath, reportArtifactPath(sessionFile, report.id));
@@ -108,7 +109,7 @@ describe("registerReport", () => {
 
   it("throws when the artifact write fails, before any registration", () => {
     const sessionFile = join("/nonexistent-dir-pmux", "s.jsonl");
-    assert.throws(() => registerReport({ sessionFile, to: "%12", text: "hi" }));
+    assert.throws(() => registerReport({ sessionFile, to: "%12", text: "hi", from: "worker" }));
     assert.equal(existsSync(`${sessionFile}.sent`), false);
   });
 
@@ -117,10 +118,104 @@ describe("registerReport", () => {
       const sessionFile = join(dir, "s.jsonl");
       // A directory where the log file must go makes the append fail.
       mkdirSync(`${sessionFile}.sent`);
-      assert.throws(() => registerReport({ sessionFile, to: "%12", text: "hi" }), /register/);
+      assert.throws(
+        () => registerReport({ sessionFile, to: "%12", text: "hi", from: "worker" }),
+        /register/,
+      );
       // The artifact was written; the log holds no record of it.
       const state = readReportLog(sessionFile);
       assert.equal(state.reports.length, 0);
+    });
+  });
+
+  it("writes a history record for the registration (report-viewer, 'History record')", () => {
+    withTempDir((dir) => {
+      const env = { TMUX: "/tmp/tmux-1000/default,1,0", XDG_RUNTIME_DIR: join(dir, "run") };
+      const sessionFile = join(dir, "s.jsonl");
+      const report = registerReport({
+        sessionFile,
+        to: "%12",
+        text: "the body",
+        from: "scout",
+        env,
+      });
+      const dir12 = historyDirPath({ env, targetPane: "%12" })!;
+      const record = JSON.parse(readFileSync(join(dir12, `${report.id}.json`), "utf8"));
+      assert.equal(record.v, 1);
+      assert.equal(record.id, report.id);
+      assert.equal(record.from, "scout");
+      assert.equal(record.session, sessionFile);
+      assert.equal(record.report, report.reportPath);
+      assert.equal(typeof record.at, "string");
+      // A re-delivery registers nothing new: the record is written once, at
+      // the registration, and stays the only one.
+      assert.deepEqual(
+        listHistory(dir12).map((item) => item.id),
+        [report.id],
+      );
+    });
+  });
+
+  it("writes no record and still registers when TMUX is absent", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "s.jsonl");
+      const report = registerReport({
+        sessionFile,
+        to: "%12",
+        text: "hi",
+        from: "worker",
+        env: {},
+      });
+      assert.equal(isReportId(report.id), true);
+    });
+  });
+
+  it("still registers and delivers when the history write fails", async () => {
+    await withTempDirAsync(async (dir) => {
+      const env = { TMUX: "/tmp/tmux-1000/default,1,0", XDG_RUNTIME_DIR: join(dir, "run") };
+      // A file where the history root must be a directory makes every write
+      // fail; the registration and the delivery are unaffected.
+      writeFileSync(join(dir, "run"), "not a dir");
+      const sessionFile = join(dir, "s.jsonl");
+      const report = registerReport({
+        sessionFile,
+        to: "%12",
+        text: "the body",
+        from: "scout",
+        env,
+      });
+      const { submit } = fakeSubmit({ status: "submitted" });
+      const delivery = await deliverReport(
+        {
+          sessionFile,
+          to: "%12",
+          id: report.id,
+          reportPath: report.reportPath,
+          bytes: report.bytes,
+          cliPath: CLI,
+          from: "scout",
+        },
+        { submit, env },
+      );
+      assert.equal(delivery.submitted, true);
+      assert.equal(readReportLog(sessionFile).reports.length, 1);
+    });
+  });
+
+  it("leaves the history record after an ack", () => {
+    withTempDir((dir) => {
+      const env = { TMUX: "/tmp/tmux-1000/default,1,0", XDG_RUNTIME_DIR: join(dir, "run") };
+      const sessionFile = join(dir, "s.jsonl");
+      const report = registerReport({
+        sessionFile,
+        to: "%12",
+        text: "the body",
+        from: "scout",
+        env,
+      });
+      appendReportAck(sessionFile, report.id);
+      const dir12 = historyDirPath({ env, targetPane: "%12" })!;
+      assert.equal(existsSync(join(dir12, `${report.id}.json`)), true);
     });
   });
 });

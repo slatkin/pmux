@@ -20,8 +20,10 @@
  * and instead rechecks the ack immediately before each retry
  * (`reportAcknowledged`).
  */
+import { resolve } from "node:path";
 import { encodePaneText } from "./pane-input.ts";
 import { buildReportPointer, writeReportArtifact } from "./report-artifact.ts";
+import { historyDirPath, writeHistoryRecord } from "./report-history.ts";
 import { submitChannel, type ChannelSubmitResult } from "./channel-endpoint.ts";
 import { type ChannelUnavailableReason } from "./channel-reason.ts";
 import { type InboxUnavailableReason } from "./inbox-reason.ts";
@@ -88,6 +90,13 @@ export function registerReport(args: {
   sessionFile: string;
   to: string;
   text: string;
+  /** The child's launch name; the history record names it. */
+  from: string;
+  /**
+   * The environment the history path is derived from; defaults to
+   * `process.env`. With no `TMUX` in it, no history exists.
+   */
+  env?: NodeJS.ProcessEnv;
 }): RegisteredReportFile {
   const { id, reportPath } = writeReportArtifact(args.sessionFile, args.text);
   const bytes = Buffer.byteLength(args.text, "utf8");
@@ -99,6 +108,24 @@ export function registerReport(args: {
   });
   if (!registered) {
     throw new Error(`could not register report ${id} in ${args.sessionFile}.sent`);
+  }
+  // The history record rides on every registration (report-viewer, "History
+  // record"): a `send` and a run-wrapper wake row land the same way. It is
+  // best-effort — a failed write must not fail or delay the delivery.
+  try {
+    const dir = historyDirPath({ env: args.env ?? process.env, targetPane: args.to });
+    if (dir !== null) {
+      writeHistoryRecord(dir, {
+        v: 1,
+        id,
+        from: args.from,
+        session: resolve(args.sessionFile),
+        report: resolve(reportPath),
+        at: new Date().toISOString(),
+      });
+    }
+  } catch {
+    // The history is a viewer convenience; the registration stands without it.
   }
   return { id, reportPath, bytes };
 }

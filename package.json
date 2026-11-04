@@ -43,7 +43,10 @@
     ],
     "skills": [
       "./skills",
-      "!./skills/pmux"
+      "!./skills/pmux",
+      "!./skills/pmux-roles",
+      "!./skills/pmux-spawn",
+      "!./skills/pmux-reports"
     ]
   },
   "devDependencies": {

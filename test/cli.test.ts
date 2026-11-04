@@ -40,9 +40,32 @@ import {
   writeInboxEntry,
   writeMonitorMarker,
 } from "../pi-extension/pmux/report-inbox.ts";
+import {
+  historyDirPath,
+  listHistory,
+  writeHistoryRecord,
+} from "../pi-extension/pmux/report-history.ts";
 import { registerReport, REPORT_ACK_POLL_MS } from "../pi-extension/pmux/report-delivery.ts";
 import { reportArtifactPath } from "../pi-extension/pmux/report-artifact.ts";
-import { appendReportAck, readReportLog } from "../pi-extension/pmux/report-receipt.ts";
+import {
+  appendReportAck,
+  appendReportRegistration,
+  readReportLog,
+} from "../pi-extension/pmux/report-receipt.ts";
+import { DIALOG_STATE_ENV, writeDialogDone } from "../pi-extension/pmux/dialog-host.ts";
+import {
+  initListState,
+  reduceListKey,
+  type ListDialogOptions,
+  type ListKey,
+} from "../pi-extension/pmux/dialog-ui.ts";
+import { getBundledAgentsDir } from "../pi-extension/pmux/agent-defs.ts";
+import { REPORT_PROTOCOL } from "../pi-extension/pmux/launch-build.ts";
+import {
+  type SpawnDialogDeps,
+  type SpawnStart,
+  type SpawnStartResult,
+} from "../pi-extension/pmux/dialog-spawn.ts";
 import type {
   ChannelSubmitArgs,
   ChannelSubmitResult,
@@ -2262,6 +2285,1069 @@ describe("cli.ts last-message", () => {
   });
 });
 
+// ─── dialog test helpers (shared by the roles and spawn-dialog suites) ──
+
+const ENTER: ListKey = { name: "return" };
+const ESCAPE: ListKey = { name: "escape" };
+const DOWN: ListKey = { name: "down" };
+const typed = (text: string): ListKey[] => [...text].map((ch) => ({ sequence: ch }));
+
+/** Drive the real list reducer with a key script; returns the choice or null. */
+function scriptChoice(
+  items: readonly string[],
+  keys: ListKey[],
+): { index: number; item: string } | null {
+  let state = initListState(items);
+  for (const key of keys) state = reduceListKey(state, key);
+  if (state.outcome.type === "chosen") {
+    return { index: state.outcome.index, item: state.outcome.item };
+  }
+  if (state.outcome.type === "cancel") return null;
+  assert.fail(`key script left the list pending: ${JSON.stringify(keys)}`);
+}
+
+interface SeenList {
+  items: readonly string[];
+  footer?: string;
+}
+
+/** A chooser that answers each list from a queue of key scripts. */
+function scriptedChoose(keyScripts: ListKey[][], seen: SeenList[]) {
+  return async (
+    items: readonly string[],
+    options?: ListDialogOptions,
+  ): Promise<{ index: number; item: string } | null> => {
+    seen.push({ items, ...(options?.footer !== undefined ? { footer: options.footer } : {}) });
+    const keys = keyScripts.shift();
+    assert.ok(keys, "the dialog asked for more choices than the script holds");
+    return scriptChoice(items, keys);
+  };
+}
+
+/** The `-e <KEY>=<value>` pair for `key` in a display-popup argv. */
+function popupEnvValue(argv: string[], key: string): string | undefined {
+  for (let i = 0; i < argv.length - 1; i++) {
+    if (argv[i] === "-e" && argv[i + 1]!.startsWith(`${key}=`)) {
+      return argv[i + 1]!.slice(key.length + 1);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A tmux exec that answers `display-popup` with the inner side's `done`
+ * record, so the outer side's wait ends on the second poll.
+ */
+function usePopupExec(done: Record<string, unknown>): { calls: string[][] } {
+  const calls: string[][] = [];
+  __setTmuxExecForTests__((args) => {
+    calls.push(args);
+    if (args[0] === "display-popup") {
+      writeDialogDone(`${popupEnvValue(args, DIALOG_STATE_ENV)}`, done);
+    }
+    return "";
+  });
+  return { calls };
+}
+
+/** Restore the suite's shared pane fake after a popup-exec test. */
+function restorePaneFake(): void {
+  __setTmuxExecForTests__(null);
+  paneFake = useTmuxPaneFake();
+  paneCalls = paneFake.lines;
+}
+
+// ─── cli.ts roles ──────────────────────────────────────────────────────
+
+describe("cli.ts roles", () => {
+  interface RolesInnerRun {
+    code: number;
+    stdout: string;
+    stderr: string;
+    seen: SeenList[];
+    state: { state: string; line?: string } | null;
+  }
+
+  /** Run `roles --inner` against temp dirs with scripted lists and models. */
+  async function runRolesInner(
+    dirs: { cwd: string; agentDir: string; statePath: string },
+    keyScripts: ListKey[][],
+    models: string[] | Error = ["prov/m1", "prov/m2"],
+  ): Promise<RolesInnerRun> {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const seen: SeenList[] = [];
+    const code = await main(
+      ["roles", "--inner", "--cwd", dirs.cwd, "--agent-dir", dirs.agentDir, "--pane", "%21"],
+      {
+        env: { PATH: process.env.PATH, [DIALOG_STATE_ENV]: dirs.statePath },
+        stdout: (text) => stdout.push(text),
+        stderr: (text) => stderr.push(text),
+        sleep: async () => {},
+        dialog: {
+          choose: scriptedChoose(keyScripts, seen),
+          listModels: () => {
+            if (models instanceof Error) throw models;
+            return models;
+          },
+        },
+      },
+    );
+    const state = existsSync(dirs.statePath)
+      ? (JSON.parse(readFileSync(dirs.statePath, "utf8")) as RolesInnerRun["state"])
+      : null;
+    return { code, stdout: stdout.join(""), stderr: stderr.join(""), seen, state };
+  }
+
+  it("sends the inner dialog argv to display-popup and prints the result line", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupExec({ line: "worker: model = prov/m2" });
+      try {
+        const env = tmuxEnv({
+          VISUAL: "vim",
+          EDITOR: "nano",
+          PAGER: "less",
+          PI_CODING_AGENT_DIR: agentDir,
+        });
+        const res = await runCli(["roles", "--cwd", cwd], env);
+        assert.equal(res.code, 0);
+        assert.equal(res.stderr, "");
+        assert.equal(res.stdout, "worker: model = prov/m2\n");
+      } finally {
+        restorePaneFake();
+      }
+      assert.equal(calls.length, 1);
+      const argv = calls[0]!;
+      const statePath = popupEnvValue(argv, DIALOG_STATE_ENV);
+      assert.ok(statePath, "expected the state path in the popup env");
+      assert.deepEqual(argv, [
+        "display-popup",
+        "-E",
+        "-t",
+        "%21",
+        "-T",
+        "pmux roles",
+        "-w",
+        "80%",
+        "-h",
+        "80%",
+        "-d",
+        cwd,
+        "-e",
+        `${DIALOG_STATE_ENV}=${statePath}`,
+        "-e",
+        `PI_CODING_AGENT_DIR=${agentDir}`,
+        "-e",
+        `PATH=${process.env.PATH}`,
+        "-e",
+        "VISUAL=vim",
+        "-e",
+        "EDITOR=nano",
+        "-e",
+        "PAGER=less",
+        process.execPath,
+        CLI,
+        "roles",
+        "--inner",
+        "--cwd",
+        cwd,
+        "--agent-dir",
+        agentDir,
+        "--pane",
+        "%21",
+      ]);
+    });
+  });
+
+  it("leaves VISUAL, EDITOR and PAGER out of the popup env when the caller lacks them", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupExec({ line: "done" });
+      try {
+        const res = await runCli(["roles", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv());
+        assert.equal(res.code, 0);
+        assert.equal(res.stdout, "done\n");
+      } finally {
+        restorePaneFake();
+      }
+      const argv = calls[0]!;
+      assert.equal(popupEnvValue(argv, "VISUAL"), undefined);
+      assert.equal(popupEnvValue(argv, "EDITOR"), undefined);
+      assert.equal(popupEnvValue(argv, "PAGER"), undefined);
+      assert.equal(popupEnvValue(argv, "PI_CODING_AGENT_DIR"), agentDir);
+      assert.equal(popupEnvValue(argv, "PATH"), process.env.PATH);
+    });
+  });
+
+  it("refuses before any popup call outside tmux", async () => {
+    const { calls } = usePopupExec({ line: "unreached" });
+    try {
+      const res = await runCli(["roles"], { PATH: process.env.PATH });
+      assert.equal(res.code, 1);
+      assert.equal(res.stdout, "");
+      assert.match(res.stderr, /tmux/);
+    } finally {
+      restorePaneFake();
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("edits a project role file in place through injected keys", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x\nthinking: high", "Worker body.");
+      const run = await runRolesInner({ cwd, agentDir, statePath: join(dir, "state.json") }, [
+        [...typed("wor"), ENTER],
+        [ENTER],
+        [DOWN, ENTER],
+      ]);
+      assert.equal(run.code, 0);
+      assert.equal(run.stderr, "");
+      assert.equal(run.state?.state, "done");
+      assert.match(run.state?.line ?? "", /worker: model = prov\/m2/);
+      const text = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      assert.ok(text.includes("model: prov/m2"));
+      assert.ok(text.includes("thinking: high"));
+      // A project file is edited in place: no user copy was made.
+      assert.equal(existsSync(join(agentDir, "agents", "worker.md")), false);
+    });
+  });
+
+  it("copies a built-in role to the user agents dir on the first edit", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      mkdirSync(cwd, { recursive: true });
+      const agentDir = join(dir, "agent");
+      const bundled = join(getBundledAgentsDir(), "visual-tester.md");
+      const before = readFileSync(bundled, "utf8");
+      const run = await runRolesInner({ cwd, agentDir, statePath: join(dir, "state.json") }, [
+        [...typed("vis"), ENTER],
+        [DOWN, DOWN, ENTER],
+        [DOWN, DOWN, ENTER],
+      ]);
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      // The value step's confirm line announced the user copy.
+      const valueList = run.seen[2];
+      assert.match(valueList?.footer ?? "", /edits create a user copy/);
+      const copy = join(agentDir, "agents", "visual-tester.md");
+      assert.equal(existsSync(copy), true);
+      assert.ok(readFileSync(copy, "utf8").includes("thinking: low"));
+      assert.equal(readFileSync(bundled, "utf8"), before);
+    });
+  });
+
+  it("writes cancel when the user presses Escape and changes no file", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x", "Worker body.");
+      const before = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      const run = await runRolesInner({ cwd, agentDir, statePath: join(dir, "state.json") }, [
+        [ESCAPE],
+      ]);
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8"), before);
+    });
+  });
+
+  it("shows the pi --list-models error and keeps the model keys out of the key list", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x", "Worker body.");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        [[...typed("wor"), ENTER], [ENTER], [DOWN, DOWN, DOWN, DOWN, ENTER]],
+        new Error("pi --list-models failed: no pi on PATH"),
+      );
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      // The error rides the list footers, and the key list offers thinking only.
+      assert.match(run.seen[0]?.footer ?? "", /pi --list-models failed: no pi on PATH/);
+      assert.deepEqual(run.seen[1]?.items, ["thinking"]);
+      // "high" is the fifth thinking level: off, minimal, low, medium, high.
+      assert.match(run.state?.line ?? "", /worker: thinking = high/);
+      const text = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      assert.ok(text.includes("thinking: high"));
+    });
+  });
+
+  it("refuses the inner side without the dialog state env", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      const res = await runCli(["roles", "--inner", "--cwd", cwd, "--agent-dir", agentDir], {
+        PATH: process.env.PATH,
+      });
+      assert.equal(res.code, 1);
+      assert.match(res.stderr, new RegExp(DIALOG_STATE_ENV));
+    });
+  });
+});
+
+// ─── cli.ts spawn-dialog ────────────────────────────────────────────────
+
+describe("cli.ts spawn-dialog", () => {
+  /** The inner side's state-file record fields the tests read. */
+  interface SpawnState {
+    state: string;
+    line?: string;
+    role?: string;
+    brief?: string;
+  }
+
+  interface SpawnInnerRun extends CliResult {
+    seen: SeenList[];
+    state: SpawnState | null;
+    startCalls: { argv: string[]; env: NodeJS.ProcessEnv }[];
+    editorCalls: string[];
+  }
+
+  interface SpawnInnerOptions {
+    /** Extra inner argv after the fixed flags; defaults to `["--start"]`. */
+    innerArgs?: string[];
+    /** Key scripts for the chooser's lists, in order. */
+    keyScripts?: ListKey[][];
+    /** What the fake editor leaves in the brief file; unset leaves it empty. */
+    briefText?: string;
+    /** The fake editor's exit status; defaults to 0. */
+    editorStatus?: number | null;
+    /** The recorded `start` call's result; defaults to a success on `%24`. */
+    startResult?: SpawnStartResult;
+    /** Run the real `start` path instead of the recording dep. */
+    realStart?: boolean;
+    /** The popup env; defaults to PATH plus the state-file key. */
+    env?: NodeJS.ProcessEnv;
+  }
+
+  /** Run `spawn-dialog --inner` against temp dirs with a scripted dialog. */
+  async function runSpawnInner(
+    dirs: { cwd: string; agentDir: string; statePath: string; scratch: string },
+    options: SpawnInnerOptions = {},
+  ): Promise<SpawnInnerRun> {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const seen: SeenList[] = [];
+    const startCalls: { argv: string[]; env: NodeJS.ProcessEnv }[] = [];
+    const editorCalls: string[] = [];
+    const startDep: SpawnStart = async (argv, env) => {
+      startCalls.push({ argv, env });
+      return (
+        options.startResult ?? {
+          code: 0,
+          stdout: `${JSON.stringify({ pane: "%24", session: "s", launch: "l" })}\n`,
+          stderr: "",
+        }
+      );
+    };
+    const dialog: SpawnDialogDeps = {
+      choose: scriptedChoose(options.keyScripts ?? [], seen),
+      runEditor: (path) => {
+        editorCalls.push(path);
+        if (options.briefText !== undefined) writeFileSync(path, options.briefText);
+        return { status: options.editorStatus === undefined ? 0 : options.editorStatus };
+      },
+      ...(options.realStart === true ? {} : { start: startDep }),
+    };
+    const code = await main(
+      [
+        "spawn-dialog",
+        "--inner",
+        "--cwd",
+        dirs.cwd,
+        "--agent-dir",
+        dirs.agentDir,
+        "--pane",
+        "%21",
+        "--scratch",
+        dirs.scratch,
+        ...(options.innerArgs ?? ["--start"]),
+      ],
+      {
+        env: options.env ?? { PATH: process.env.PATH, [DIALOG_STATE_ENV]: dirs.statePath },
+        stdout: (text) => stdout.push(text),
+        stderr: (text) => stderr.push(text),
+        sleep: async () => {},
+        configPath: defaultConfigPath,
+        dialog,
+      },
+    );
+    const state = existsSync(dirs.statePath)
+      ? (JSON.parse(readFileSync(dirs.statePath, "utf8")) as SpawnState)
+      : null;
+    return {
+      code,
+      stdout: stdout.join(""),
+      stderr: stderr.join(""),
+      seen,
+      state,
+      startCalls,
+      editorCalls,
+    };
+  }
+
+  /** Per-case directories for an inner run. */
+  function spawnDirs(dir: string): {
+    cwd: string;
+    agentDir: string;
+    statePath: string;
+    scratch: string;
+  } {
+    return {
+      cwd: join(dir, "work"),
+      agentDir: join(dir, "agent"),
+      statePath: join(dir, "state.json"),
+      scratch: join(dir, "scratch"),
+    };
+  }
+
+  /** A tmux exec that writes an arbitrary state record (e.g. `cancel`). */
+  function usePopupState(state: Record<string, unknown>): { calls: string[][] } {
+    const calls: string[][] = [];
+    __setTmuxExecForTests__((args) => {
+      calls.push(args);
+      if (args[0] === "display-popup") {
+        writeFileSync(`${popupEnvValue(args, DIALOG_STATE_ENV)}`, JSON.stringify(state));
+      }
+      return "";
+    });
+    return { calls };
+  }
+
+  it("lists the roles, edits the brief and calls the start path with the caller pane", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m\nthinking: low", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        keyScripts: [[...typed("scout"), ENTER]],
+        briefText: "map the auth module",
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.stderr, "");
+      assert.equal(run.state?.state, "done");
+      assert.equal(run.state?.line, "started scout in %24");
+      // The role step listed the same rows the role editor shows.
+      assert.equal(run.seen.length, 1);
+      assert.ok(run.seen[0]?.items.some((item) => /scout {2}\[project\] {2}model: m/.test(item)));
+      // The editor ran once on a brief under <scratch>/briefs/.
+      assert.equal(run.editorCalls.length, 1);
+      const brief = run.editorCalls[0]!;
+      assert.ok(brief.startsWith(join(dirs.scratch, "briefs", "scout-")));
+      assert.ok(brief.endsWith(".md"));
+      assert.equal(readFileSync(brief, "utf8"), "map the auth module");
+      // The start path got the design-D6 argv and the caller pane as
+      // both --parent and TMUX_PANE.
+      assert.equal(run.startCalls.length, 1);
+      const call = run.startCalls[0]!;
+      assert.deepEqual(call.argv, [
+        "--report",
+        "send",
+        "--name",
+        "scout",
+        "--role",
+        "scout",
+        "--cwd",
+        dirs.cwd,
+        "--brief",
+        brief,
+        "--parent",
+        "%21",
+        "--scratch",
+        dirs.scratch,
+      ]);
+      assert.equal(call.env.TMUX_PANE, "%21");
+    });
+  });
+
+  it("opens at the brief step for --role and skips the role list", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        innerArgs: ["--role", "scout", "--start"],
+        briefText: "do the thing",
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.seen.length, 0);
+      assert.equal(run.editorCalls.length, 1);
+      assert.equal(run.state?.state, "done");
+      assert.equal(run.state?.line, "started scout in %24");
+    });
+  });
+
+  it("cancels on an empty brief and starts nothing", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        innerArgs: ["--role", "scout", "--start"],
+        briefText: "   \n",
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(run.startCalls.length, 0);
+    });
+  });
+
+  it("cancels on an editor error and starts nothing", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        innerArgs: ["--role", "scout", "--start"],
+        briefText: "a saved brief",
+        editorStatus: 1,
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(run.startCalls.length, 0);
+    });
+  });
+
+  it("cancels on Escape at the role list and runs no editor", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, { keyScripts: [[ESCAPE]] });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(run.editorCalls.length, 0);
+      assert.equal(run.startCalls.length, 0);
+    });
+  });
+
+  it("collects role and brief without a start when --start is absent", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        innerArgs: [],
+        keyScripts: [[...typed("scout"), ENTER]],
+        briefText: "map the auth module",
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      assert.equal(run.state?.role, "scout");
+      assert.equal(run.state?.brief, run.editorCalls[0]);
+      assert.equal(run.startCalls.length, 0);
+    });
+  });
+
+  it("reports a start failure in the done line", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m", "Scout body.");
+      const run = await runSpawnInner(dirs, {
+        innerArgs: ["--role", "scout", "--start"],
+        briefText: "do the thing",
+        startResult: { code: 1, stdout: "", stderr: "cli.ts: role 'scout' broke\n" },
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      assert.equal(run.state?.line, "spawn failed: cli.ts: role 'scout' broke");
+    });
+  });
+
+  it("starts a real child in send mode with the caller pane as parent", async () => {
+    await withTempDirAsync(async (dir) => {
+      const dirs = spawnDirs(dir);
+      writeRole(dirs.cwd, "scout", "model: m\nthinking: low", "Scout body.");
+      // The popup env holds a different TMUX_PANE than --pane (design D6):
+      // the spec's parent and the split's anchor must be the --pane value.
+      const env = tmuxEnv({ TMUX_PANE: "%99", [DIALOG_STATE_ENV]: dirs.statePath });
+      // The start path's role search reads the process env, not the
+      // injected env (the start tests pin it the same way).
+      const savedAgentDir = process.env.PI_CODING_AGENT_DIR;
+      process.env.PI_CODING_AGENT_DIR = dirs.agentDir;
+      try {
+        const run = await runSpawnInner(dirs, {
+          innerArgs: ["--role", "scout", "--start"],
+          briefText: "map the auth module",
+          env,
+          realStart: true,
+        });
+        assert.equal(run.code, 0);
+        assert.equal(run.state?.state, "done");
+        assert.equal(run.state?.line, "started scout in %24");
+      } finally {
+        if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = savedAgentDir;
+      }
+      const specFile = readdirSync(dirs.scratch).find(
+        (name) => name.endsWith(".json") && !name.endsWith(".launch.json"),
+      );
+      assert.ok(specFile, "expected a launch spec under the scratch dir");
+      const spec = readLaunchSpec(join(dirs.scratch, specFile!));
+      assert.equal(spec.env.PI_PMUX_REPORT_PROTOCOL, REPORT_PROTOCOL);
+      assert.equal(spec.parent, "%21");
+      // The child pane split off the caller pane, not the popup's %99.
+      assert.equal(paneCalls[0], "split-window -d -h -t %21 -P -F #{pane_id}");
+    });
+  });
+
+  it("sends the role-only inner argv to display-popup and prints the result line", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "scout", "model: m", "Scout body.");
+      const { calls } = usePopupExec({ line: "started scout in %24" });
+      try {
+        const res = await runCli(
+          ["spawn-dialog", "--cwd", cwd, "--agent-dir", agentDir, "--args", "scout"],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 0);
+        assert.equal(res.stderr, "");
+        assert.equal(res.stdout, "started scout in %24\n");
+      } finally {
+        restorePaneFake();
+      }
+      assert.equal(calls.length, 1);
+      const argv = calls[0]!;
+      const statePath = popupEnvValue(argv, DIALOG_STATE_ENV);
+      assert.ok(statePath, "expected the state path in the popup env");
+      assert.deepEqual(argv.slice(argv.indexOf(CLI)), [
+        CLI,
+        "spawn-dialog",
+        "--inner",
+        "--cwd",
+        cwd,
+        "--agent-dir",
+        agentDir,
+        "--pane",
+        "%21",
+        "--role",
+        "scout",
+        "--start",
+      ]);
+    });
+  });
+
+  it("opens at the role list when --args is empty", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupExec({ line: "nothing" });
+      try {
+        const res = await runCli(
+          ["spawn-dialog", "--cwd", cwd, "--agent-dir", agentDir, "--args", ""],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 0);
+      } finally {
+        restorePaneFake();
+      }
+      const inner = calls[0]!.slice(calls[0]!.indexOf("--inner"));
+      assert.equal(inner.includes("--role"), false);
+      assert.equal(inner.includes("--start"), true);
+    });
+  });
+
+  it("refuses task text in --args before any popup", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "scout", "model: m", "Scout body.");
+      const { calls } = usePopupExec({});
+      try {
+        const res = await runCli(
+          [
+            "spawn-dialog",
+            "--cwd",
+            cwd,
+            "--agent-dir",
+            agentDir,
+            "--args",
+            "scout map the auth module",
+          ],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 1);
+        assert.equal(res.stdout, "");
+        assert.match(
+          res.stderr,
+          /the pmux-spawn skill takes a role only; write the task in the brief step/,
+        );
+      } finally {
+        restorePaneFake();
+      }
+      assert.deepEqual(calls, []);
+    });
+  });
+
+  it("refuses an unknown role before any popup", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupExec({});
+      try {
+        const res = await runCli(
+          ["spawn-dialog", "--cwd", cwd, "--agent-dir", agentDir, "--args", "nosuchrole"],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 1);
+        assert.equal(res.stdout, "");
+        assert.match(res.stderr, /unknown role 'nosuchrole'/);
+      } finally {
+        restorePaneFake();
+      }
+      assert.deepEqual(calls, []);
+    });
+  });
+
+  it("prints 'nothing started' on a cancel", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupState({ state: "cancel" });
+      try {
+        const res = await runCli(
+          ["spawn-dialog", "--cwd", cwd, "--agent-dir", agentDir],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 0);
+        assert.equal(res.stdout, "nothing started\n");
+      } finally {
+        restorePaneFake();
+      }
+      assert.equal(calls.length, 1);
+    });
+  });
+
+  it("refuses before any popup call outside tmux", async () => {
+    const { calls } = usePopupExec({});
+    try {
+      const res = await runCli(["spawn-dialog"], { PATH: process.env.PATH });
+      assert.equal(res.code, 1);
+      assert.equal(res.stdout, "");
+      assert.match(res.stderr, /tmux/);
+    } finally {
+      restorePaneFake();
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("refuses the inner side without the dialog state env", async () => {
+    await withTempDirAsync(async (dir) => {
+      const res = await runCli(
+        ["spawn-dialog", "--inner", "--cwd", dir, "--agent-dir", dir, "--pane", "%21"],
+        { PATH: process.env.PATH },
+      );
+      assert.equal(res.code, 1);
+      assert.match(res.stderr, new RegExp(DIALOG_STATE_ENV));
+    });
+  });
+});
+
+// ─── cli.ts reports ─────────────────────────────────────────────────
+
+describe("cli.ts reports", () => {
+  interface ReportsInnerRun {
+    code: number;
+    stdout: string;
+    stderr: string;
+    seen: SeenList[];
+    pagerCalls: string[];
+    state: { state: string; line?: string } | null;
+  }
+
+  /** The env an inner run sees: PATH, the tmux socket and the state file. */
+  function reportsEnv(statePath: string, xdg: string): NodeJS.ProcessEnv {
+    return {
+      PATH: process.env.PATH,
+      TMUX: "/tmp/tmux-0/reports-test,1,0",
+      XDG_RUNTIME_DIR: xdg,
+      [DIALOG_STATE_ENV]: statePath,
+    };
+  }
+
+  /** A well-formed 32-hex report id from a one-character tag. */
+  function reportId(tag: string): string {
+    return tag.padEnd(32, "0").slice(0, 32);
+  }
+
+  /** Register one report in a session's log; ack it when `acked` is set. */
+  function logReport(session: string, id: string, report: string, acked = false): void {
+    assert.ok(appendReportRegistration(session, { id, to: "%21", bytes: 1, report }));
+    if (acked) assert.ok(appendReportAck(session, id));
+  }
+
+  /** Run `reports --inner` for pane %21 with a scripted list and pager. */
+  async function runReportsInner(options: {
+    env: NodeJS.ProcessEnv;
+    statePath: string;
+    keyScripts?: ListKey[][];
+    pagerStatus?: number | null;
+  }): Promise<ReportsInnerRun> {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const seen: SeenList[] = [];
+    const pagerCalls: string[] = [];
+    const code = await main(["reports", "--inner", "--pane", "%21"], {
+      env: options.env,
+      stdout: (text) => stdout.push(text),
+      stderr: (text) => stderr.push(text),
+      sleep: async () => {},
+      dialog: {
+        choose: scriptedChoose(options.keyScripts ?? [], seen),
+        runPager: (path) => {
+          pagerCalls.push(path);
+          return { status: options.pagerStatus === undefined ? 0 : options.pagerStatus };
+        },
+      },
+    });
+    const state = existsSync(options.statePath)
+      ? (JSON.parse(readFileSync(options.statePath, "utf8")) as ReportsInnerRun["state"])
+      : null;
+    return {
+      code,
+      stdout: stdout.join(""),
+      stderr: stderr.join(""),
+      seen,
+      pagerCalls,
+      state,
+    };
+  }
+
+  /** The dirs a reports case needs; the env derives its history from them. */
+  function reportsDirs(dir: string): {
+    env: NodeJS.ProcessEnv;
+    statePath: string;
+    history: string;
+  } {
+    const statePath = join(dir, "state.json");
+    const env = reportsEnv(statePath, join(dir, "xdg"));
+    const history = historyDirPath({ env, targetPane: "%21" });
+    assert.ok(history, "expected a history dir under the test tmux env");
+    return { env, statePath, history };
+  }
+
+  /** Write one history record and its session log. */
+  function seedReport(
+    history: string,
+    dir: string,
+    args: { tag: string; from: string; at: string; acked?: boolean; writeFile?: boolean },
+  ): { id: string; session: string; report: string } {
+    const id = reportId(args.tag);
+    const session = join(dir, `${args.tag}.jsonl`);
+    const report = join(dir, `${args.tag}.report.md`);
+    if (args.writeFile !== false) writeFileSync(report, `report ${args.tag}`);
+    logReport(session, id, report, args.acked === true);
+    writeHistoryRecord(history, {
+      v: 1,
+      id,
+      from: args.from,
+      session,
+      report,
+      at: args.at,
+    });
+    return { id, session, report };
+  }
+
+  it("lists the history newest first with pending and acknowledged marks", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath, history } = reportsDirs(dir);
+      seedReport(history, dir, {
+        tag: "a",
+        from: "scout",
+        at: "2026-11-03T20:00:00.000Z",
+        acked: true,
+      });
+      seedReport(history, dir, { tag: "b", from: "worker", at: "2026-11-03T21:30:00.000Z" });
+      const run = await runReportsInner({ env, statePath, keyScripts: [[ESCAPE]] });
+      assert.equal(run.code, 0);
+      assert.equal(run.stderr, "");
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(run.seen.length, 1);
+      assert.deepEqual(run.seen[0]!.items, [
+        "worker  2026-11-03 21:30  pending  #b0000000",
+        "scout  2026-11-03 20:00  acknowledged  #a0000000",
+      ]);
+    });
+  });
+
+  it("opens the chosen report in the pager and returns to the list", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath, history } = reportsDirs(dir);
+      seedReport(history, dir, { tag: "a", from: "scout", at: "2026-11-03T20:00:00.000Z" });
+      const newest = seedReport(history, dir, {
+        tag: "b",
+        from: "worker",
+        at: "2026-11-03T21:30:00.000Z",
+      });
+      const run = await runReportsInner({
+        env,
+        statePath,
+        keyScripts: [[ENTER], [ESCAPE]],
+      });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "cancel");
+      // Enter paged the newest report; the list showed again for the Escape.
+      assert.deepEqual(run.pagerCalls, [newest.report]);
+      assert.equal(run.seen.length, 2);
+    });
+  });
+
+  it("shows a gone report file as missing and does not open it", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath, history } = reportsDirs(dir);
+      seedReport(history, dir, {
+        tag: "a",
+        from: "scout",
+        at: "2026-11-03T20:00:00.000Z",
+        writeFile: false,
+      });
+      const run = await runReportsInner({
+        env,
+        statePath,
+        keyScripts: [[ENTER], [ESCAPE]],
+      });
+      assert.equal(run.code, 0);
+      assert.match(run.seen[0]?.items[0] ?? "", /missing {2}#[0-9a-f]{8}$/);
+      assert.deepEqual(run.pagerCalls, []);
+      assert.equal(run.state?.state, "cancel");
+    });
+  });
+
+  it("opens the second of two same-minute rows from one sender", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath, history } = reportsDirs(dir);
+      const older = seedReport(history, dir, {
+        tag: "a",
+        from: "worker",
+        at: "2026-11-03T21:30:00.000Z",
+      });
+      seedReport(history, dir, {
+        tag: "b",
+        from: "worker",
+        at: "2026-11-03T21:30:45.000Z",
+      });
+      const run = await runReportsInner({
+        env,
+        statePath,
+        keyScripts: [[DOWN, ENTER], [ESCAPE]],
+      });
+      assert.equal(run.code, 0);
+      // Both rows read "worker  2026-11-03 21:30  pending"; the record tag
+      // keeps them distinct, so Down+Enter opens the second row's report.
+      assert.deepEqual(run.pagerCalls, [older.report]);
+      assert.equal(run.state?.state, "cancel");
+    });
+  });
+
+  it("answers 'no reports' for an empty history", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath } = reportsDirs(dir);
+      const run = await runReportsInner({ env, statePath });
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      assert.equal(run.state?.line, "no reports");
+      assert.equal(run.seen.length, 0);
+    });
+  });
+
+  it("writes no ack record after reading a pending report", async () => {
+    await withTempDirAsync(async (dir) => {
+      const { env, statePath, history } = reportsDirs(dir);
+      const seeded = seedReport(history, dir, {
+        tag: "b",
+        from: "worker",
+        at: "2026-11-03T21:30:00.000Z",
+      });
+      const run = await runReportsInner({
+        env,
+        statePath,
+        keyScripts: [[ENTER], [ESCAPE]],
+      });
+      assert.equal(run.code, 0);
+      assert.deepEqual(run.pagerCalls, [seeded.report]);
+      // Reading is not an ack: the log still holds no ack for the report.
+      const log = readReportLog(seeded.session);
+      assert.equal(log.ackedIds.has(seeded.id), false);
+    });
+  });
+
+  it("sends the inner argv to display-popup and prints the result line", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const { calls } = usePopupExec({ line: "no reports" });
+      try {
+        const res = await runCli(["reports", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv());
+        assert.equal(res.code, 0);
+        assert.equal(res.stderr, "");
+        assert.equal(res.stdout, "no reports\n");
+      } finally {
+        restorePaneFake();
+      }
+      assert.equal(calls.length, 1);
+      const argv = calls[0]!;
+      assert.equal(argv[argv.indexOf("-T") + 1], "pmux reports");
+      assert.deepEqual(argv.slice(argv.indexOf(CLI)), [CLI, "reports", "--inner", "--pane", "%21"]);
+    });
+  });
+
+  it("prints 'report viewer closed' on a cancel", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const calls: string[][] = [];
+      __setTmuxExecForTests__((args) => {
+        calls.push(args);
+        if (args[0] === "display-popup") {
+          writeFileSync(
+            `${popupEnvValue(args, DIALOG_STATE_ENV)}`,
+            JSON.stringify({ state: "cancel" }),
+          );
+        }
+        return "";
+      });
+      try {
+        const res = await runCli(["reports", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv());
+        assert.equal(res.code, 0);
+        assert.equal(res.stdout, "report viewer closed\n");
+      } finally {
+        restorePaneFake();
+      }
+      assert.equal(calls.length, 1);
+    });
+  });
+
+  it("refuses before any popup call outside tmux", async () => {
+    const { calls } = usePopupExec({ line: "unreached" });
+    try {
+      const res = await runCli(["reports"], { PATH: process.env.PATH });
+      assert.equal(res.code, 1);
+      assert.equal(res.stdout, "");
+      assert.match(res.stderr, /tmux/);
+    } finally {
+      restorePaneFake();
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("refuses the inner side without the dialog state env", async () => {
+    const res = await runCli(["reports", "--inner", "--pane", "%21"], {
+      PATH: process.env.PATH,
+    });
+    assert.equal(res.code, 1);
+    assert.match(res.stderr, new RegExp(DIALOG_STATE_ENV));
+  });
+});
+
 // ─── cli.ts send ───────────────────────────────────────────────────────
 
 describe("cli.ts send", () => {
@@ -2402,6 +3488,9 @@ describe("cli.ts send", () => {
   /** A marked-send environment: the protocol marker plus a session file. */
   function protocolEnv(sessionFile: string): NodeJS.ProcessEnv {
     return tmuxEnv({
+      // The report history lands under the temp dir, never the real runtime
+      // directory (the env has TMUX, so a history path exists).
+      XDG_RUNTIME_DIR: join(dirname(sessionFile), "run"),
       PI_PMUX_SESSION: sessionFile,
       PI_PMUX_REPORT_PROTOCOL: "file-ack-v1",
     });
@@ -2816,7 +3905,7 @@ describe("cli.ts ack", () => {
   it("acks a registered report once, and idempotently after that", async () => {
     await withTempDirAsync(async (dir) => {
       const sessionFile = join(dir, "s.jsonl");
-      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      const report = registerReport({ sessionFile, to: "%3", text: "report body", from: "test" });
 
       const first = await runCli(["ack", "--session", sessionFile, "--id", report.id], tmuxEnv());
       assert.equal(first.code, 0);
@@ -3000,7 +4089,7 @@ describe("cli.ts ack retires the inbox entry", () => {
     await withTempDirAsync(async (dir) => {
       const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "run") });
       const sessionFile = join(dir, "s.jsonl");
-      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      const report = registerReport({ sessionFile, to: "%3", text: "report body", from: "test" });
       const inbox = inboxDirPath({ env, targetPane: "%3" })!;
       writeInboxEntry(inbox, {
         v: 1,
@@ -3022,7 +4111,7 @@ describe("cli.ts ack retires the inbox entry", () => {
     await withTempDirAsync(async (dir) => {
       const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "run") });
       const sessionFile = join(dir, "s.jsonl");
-      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      const report = registerReport({ sessionFile, to: "%3", text: "report body", from: "test" });
       const res = await runCli(["ack", "--session", sessionFile, "--id", report.id], env);
       assert.equal(res.code, 0);
     });
@@ -3032,7 +4121,7 @@ describe("cli.ts ack retires the inbox entry", () => {
     await withTempDirAsync(async (dir) => {
       const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "run") });
       const sessionFile = join(dir, "s.jsonl");
-      const report = registerReport({ sessionFile, to: "%3", text: "report body" });
+      const report = registerReport({ sessionFile, to: "%3", text: "report body", from: "test" });
       // A non-empty directory where the entry file should be cannot be unlinked.
       const blocked = join(inboxDirPath({ env, targetPane: "%3" })!, `${report.id}.json`);
       mkdirSync(blocked, { recursive: true });
@@ -3071,6 +4160,11 @@ describe("cli.ts send through the parent's inbox", () => {
       );
       const entry = JSON.parse(readFileSync(join(inbox, `${line.id}.json`), "utf8"));
       assert.equal(entry.from, "worker-a");
+      // The registration also landed a history record, named for the launch.
+      const history = listHistory(historyDirPath({ env, targetPane: "%3" })!);
+      assert.equal(history.length, 1);
+      assert.equal(history[0]!.id, line.id);
+      assert.equal(history[0]!.from, "worker-a");
     });
   });
 });
@@ -3169,6 +4263,20 @@ function startCwd(caseDir: string): string {
 }
 
 describe("skills/pmux/launch.ts", () => {
+  it("hands `roles` to the CLI and exits with the tmux refusal when TMUX_PANE is unset", async () => {
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const code = await shimMain(["roles"], {
+      env: { PATH: process.env.PATH },
+      stdout: (text) => stdout.push(text),
+      stderr: (text) => stderr.push(text),
+      sleep: async () => {},
+    });
+    assert.equal(code, 1);
+    assert.equal(stdout.join(""), "");
+    assert.match(stderr.join(""), /tmux/);
+  });
+
   it("prefers PI_PMUX_DIR over the checkout", async () => {
     const caseDir = mkdtempSync(join(workdir, "shim-override-"));
     const home = mkdtempSync(join(caseDir, "home-"));

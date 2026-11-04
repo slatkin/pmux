@@ -29,6 +29,7 @@ import {
   type ReportDeliveryDeps,
 } from "../pi-extension/pmux/report-delivery.ts";
 import type { ChannelSubmitArgs } from "../pi-extension/pmux/channel-endpoint.ts";
+import { historyDirPath, listHistory } from "../pi-extension/pmux/report-history.ts";
 import { newReportId, reportArtifactPath } from "../pi-extension/pmux/report-artifact.ts";
 import {
   appendReportAck,
@@ -83,6 +84,8 @@ interface MarkedCaseOptions {
   realDelivery?: boolean;
   /** Deps the real delivery flow runs with, e.g. an injected channel client. */
   deliveryDeps?: ReportDeliveryDeps;
+  /** Extra environment for the wrapper, e.g. the history's TMUX vector. */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Run the wrapper on a send-mode spec with every side effect recorded. */
@@ -126,6 +129,7 @@ async function runMarkedCase(
       PI_STUB_EXIT: exitPath,
       ...(options.exitBody !== undefined ? { PI_STUB_EXIT_BODY: options.exitBody } : {}),
       ...(options.stubCode !== undefined ? { PI_STUB_CODE: options.stubCode } : {}),
+      ...options.env,
     },
     stdout: (text) => stdout.push(text),
     stderr: (text) => stderr.push(text),
@@ -353,8 +357,13 @@ describe("runSpec under file-ack-v1 (design D8)", () => {
       const sessionFile = join(dir, "session.jsonl");
       // A resumed marked run's snapshot: one earlier report the parent never
       // acked, one it acked later. Neither belongs to this run.
-      registerReport({ sessionFile, to: PARENT, text: "older run A" });
-      const olderAcked = registerReport({ sessionFile, to: PARENT, text: "older run B" });
+      registerReport({ sessionFile, to: PARENT, text: "older run A", from: "scout-1" });
+      const olderAcked = registerReport({
+        sessionFile,
+        to: PARENT,
+        text: "older run B",
+        from: "scout-1",
+      });
       appendReportAck(sessionFile, olderAcked.id);
       const current = newReportId();
       const res = await runMarkedCase(dir, markedSpec(dir), {
@@ -407,6 +416,27 @@ describe("runSpec under file-ack-v1 (design D8)", () => {
         [PARENT],
       );
       assert.equal(res.stderr, "");
+    });
+  });
+
+  it("writes a history record for the wake row's registration", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionFile = join(dir, "session.jsonl");
+      const env = { TMUX: "/tmp/tmux-1000/default,1,0", XDG_RUNTIME_DIR: join(dir, "run") };
+      const res = await runMarkedCase(dir, markedSpec(dir), {
+        exitBody: '{"type":"done"}',
+        env,
+      });
+      assert.equal(res.deliveries.length, 1);
+      const wake = res.deliveries[0]!;
+      // The wake row's registration landed one record in the parent's history,
+      // named for the launch (report-viewer, "History record").
+      const records = listHistory(historyDirPath({ env, targetPane: PARENT })!);
+      assert.equal(records.length, 1);
+      assert.equal(records[0]!.id, wake.id);
+      assert.equal(records[0]!.from, "scout-1");
+      assert.equal(records[0]!.session, sessionFile);
+      assert.equal(records[0]!.report, wake.reportPath);
     });
   });
 
