@@ -127,6 +127,28 @@ export function paneExists(surface: string): boolean {
   }
 }
 
+/** A pane's size in cells. */
+export interface PaneSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * Read a pane's size in cells with one `display-message` call. The dialog
+ * host clamps a popup's content-fit hints against this; a failed read (a
+ * closed pane, a wedged server) throws and the caller falls back.
+ */
+export function paneSize(surface: string): PaneSize {
+  const out = tmux(["display-message", "-p", "-t", surface, "#{pane_width} #{pane_height}"]);
+  const [width, height] = out.trim().split(/\s+/);
+  const w = Number.parseInt(width ?? "", 10);
+  const h = Number.parseInt(height ?? "", 10);
+  if (!Number.isInteger(w) || w <= 0 || !Number.isInteger(h) || h <= 0) {
+    throw new Error(`Unexpected tmux pane size: ${out.trim()}`);
+  }
+  return { width: w, height: h };
+}
+
 /** The tmux format of the placement listing, shared by both branches. */
 const PLACEMENT_FORMAT =
   "#{pane_id} #{pane_width} #{pane_height} #{pane_floating_flag} #{pane_left} " +

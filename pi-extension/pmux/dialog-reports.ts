@@ -87,6 +87,20 @@ function reportRow(entry: ReportEntry): string {
   return `${entry.record.from}  ${reportTime(entry.record.at)}  ${state}  #${entry.record.id.slice(0, 8)}`;
 }
 
+/**
+ * The size hints the viewer's outer side computes from the history it
+ * already read for the no-reports pre-check: the width covers the title
+ * and the widest row, the height the rows plus the list chrome.
+ */
+export function reportsSizeHints(records: readonly HistoryRecord[]): {
+  width: number;
+  height: number;
+} {
+  const rows = reportEntries(records).map(reportRow);
+  const width = Math.max(REPORTS_DIALOG_TITLE.length, ...rows.map((row) => row.length));
+  return { width, height: 2 + rows.length };
+}
+
 /** What the inner command line gives the dialog. */
 export interface ReportsInnerArgs {
   /** The caller's pane id: the pane whose history the viewer lists. */
@@ -170,13 +184,27 @@ export async function reportsDialogOuter(
   args: ReportsOuterArgs,
   deps: RunDialogDeps = {},
 ): Promise<string> {
+  // The pre-check reads the history before anything opens: an empty or
+  // missing history answers `no reports` and no popup opens (spec:
+  // "Report viewer commands"). The same read sizes the popup. The inner
+  // side still lists the history itself, so a report that lands between
+  // this read and the popup shows in the list.
+  const pane = args.env.TMUX_PANE ?? "";
+  let hints: { width: number; height: number } | undefined;
+  if (args.env.TMUX && pane !== "") {
+    const dir = historyDirPath({ env: args.env, targetPane: pane });
+    const records = dir === null ? [] : listHistory(dir);
+    if (records.length === 0) return NO_REPORTS_LINE;
+    hints = reportsSizeHints(records);
+  }
   const outcome = await runDialog(
     {
       title: REPORTS_DIALOG_TITLE,
-      innerArgs: ["reports", "--inner", "--pane", args.env.TMUX_PANE ?? ""],
+      innerArgs: ["reports", "--inner", "--pane", pane],
       cwd: args.cwd,
       agentDir: args.agentDir,
       env: args.env,
+      ...hints,
       ...(args.stopAfterMs !== undefined ? { stopAfterMs: args.stopAfterMs } : {}),
     },
     deps,

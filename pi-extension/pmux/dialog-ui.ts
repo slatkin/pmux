@@ -109,6 +109,33 @@ export interface ListChoice {
   item: string;
 }
 
+/**
+ * Word-wrap one line to a width: greedy on spaces, and a word longer than
+ * the width hard-splits. A width below 1 returns the line whole.
+ */
+export function wrapLine(line: string, width: number): string[] {
+  if (width < 1 || line.length <= width) return [line];
+  const rows: string[] = [];
+  let rest = line;
+  while (rest.length > width) {
+    const head = rest.slice(0, width + 1);
+    const cut = head.lastIndexOf(" ");
+    const at = cut > 0 ? cut : width;
+    rows.push(rest.slice(0, at));
+    rest = rest.slice(at).replace(/^ /, "");
+  }
+  if (rest.length > 0) rows.push(rest);
+  return rows;
+}
+
+/**
+ * One item's display lines: embedded newlines divide the item, and each
+ * divided line wraps to the width.
+ */
+export function itemLines(item: string, width: number): string[] {
+  return item.split("\n").flatMap((line) => wrapLine(line, width));
+}
+
 export interface ListDialogOptions {
   /** A line drawn above the filter (the dialog's title). */
   title?: string;
@@ -119,26 +146,67 @@ export interface ListDialogOptions {
 }
 
 /** The rows a list draw takes besides the items: filter line plus chrome. */
-function chromeLines(options: ListDialogOptions): number {
-  return 1 + (options.title ? 1 : 0) + (options.footer ? 1 : 0);
+function chromeLines(options: ListDialogOptions, width: number): number {
+  return (
+    1 +
+    (options.title ? wrapLine(options.title, width).length : 0) +
+    (options.footer ? wrapLine(options.footer, width).length : 0)
+  );
 }
 
-/** The state's draw lines: title, filter, the visible window, the footer. */
-function drawLines(state: ListState, maxRows: number, options: ListDialogOptions): string[] {
-  const lines: string[] = [];
-  if (options.title) lines.push(options.title);
-  lines.push(`> ${state.filter}`);
-  const filtered = filteredItems(state);
-  const first = Math.min(
-    Math.max(0, state.selected - maxRows + 1),
-    Math.max(0, filtered.length - maxRows),
-  );
-  const visible = filtered.slice(first, first + maxRows);
-  for (const [row, item] of visible.entries()) {
-    lines.push(first + row === state.selected ? `\x1b[7m${item}\x1b[0m` : item);
+/** The window of items a draw shows: whole items between start (incl.) and end (excl.). */
+function listWindow(
+  wrapped: string[][],
+  selected: number,
+  maxRows: number,
+): { start: number; end: number } {
+  // Walk back from the selection while the earlier items still fit.
+  let start = selected;
+  let used = wrapped[selected]!.length;
+  while (start > 0 && used + wrapped[start - 1]!.length <= maxRows) {
+    start--;
+    used += wrapped[start]!.length;
   }
-  if (visible.length === 0) lines.push("(no matches)");
-  if (options.footer) lines.push(options.footer);
+  // Draw forward from the start while whole items fit. The caller clips
+  // the lone-item case by line budget.
+  let end = start;
+  used = 0;
+  while (end < wrapped.length && used + wrapped[end]!.length <= maxRows) {
+    used += wrapped[end]!.length;
+    end++;
+  }
+  if (end === start) end = start + 1;
+  return { start, end: Math.min(end, wrapped.length) };
+}
+
+/** The state's draw lines: title, filter, the visible items' lines, the footer. */
+export function renderListLines(
+  state: ListState,
+  size: { rows: number; columns: number },
+  options: ListDialogOptions,
+): string[] {
+  const width = Math.max(1, size.columns);
+  const maxRows = Math.max(1, size.rows - chromeLines(options, width));
+  const lines: string[] = [];
+  if (options.title) lines.push(...wrapLine(options.title, width));
+  lines.push(...wrapLine(`> ${state.filter}`, width));
+  const filtered = filteredItems(state);
+  if (filtered.length === 0) {
+    lines.push("(no matches)");
+  } else {
+    const wrapped = filtered.map((item) => itemLines(item, width));
+    const { start, end } = listWindow(wrapped, state.selected, maxRows);
+    let budget = maxRows;
+    draw: for (const [row, item] of wrapped.slice(start, end).entries()) {
+      const chosen = start + row === state.selected;
+      for (const line of item) {
+        // A lone item taller than the window clips at the budget.
+        if (budget-- === 0) break draw;
+        lines.push(chosen ? `\x1b[7m${line}\x1b[0m` : line);
+      }
+    }
+  }
+  if (options.footer) lines.push(...wrapLine(options.footer, width));
   return lines;
 }
 
@@ -157,8 +225,11 @@ export function chooseFromList(
 
   return new Promise((resolve) => {
     const draw = (): void => {
-      const maxRows = Math.max(1, (output.rows ?? 24) - chromeLines(options));
-      const lines = drawLines(state, maxRows, options);
+      const lines = renderListLines(
+        state,
+        { rows: output.rows ?? 24, columns: output.columns ?? 80 },
+        options,
+      );
       output.write(`\x1b[H${lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`);
     };
 

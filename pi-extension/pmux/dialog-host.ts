@@ -27,7 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SUBAGENTS_DIR } from "./launch-build.ts";
 import { defaultSleep } from "./sleep.ts";
-import { openPopup, tmuxSetupHint, type PopupHandle } from "./tmux.ts";
+import { openPopup, paneSize, tmuxSetupHint, type PopupHandle } from "./tmux.ts";
 
 /** The env key that carries the state file path into the popup. */
 export const DIALOG_STATE_ENV = "PMUX_DIALOG_STATE";
@@ -46,6 +46,12 @@ export const DIALOG_HOST_LIMIT_MS = 100_000;
 
 /** The line the outer side reports when its limit passes with the dialog up. */
 export const DIALOG_STILL_OPEN_LINE = "dialog still open; it finishes in the popup";
+
+/** The share of the caller pane's size a clamped popup may take. */
+export const DIALOG_SIZE_SHARE = 0.8;
+
+/** The margin the width hint adds for the popup's border and slack, in cells. */
+export const DIALOG_WIDTH_MARGIN = 4;
 
 /** `{"state":"open","pid":n}` — the inner side's first write. */
 export interface DialogOpenState {
@@ -149,6 +155,17 @@ export interface RunDialogArgs {
    * Code path's `DIALOG_HOST_LIMIT_MS`); unset waits with no limit (pi).
    */
   stopAfterMs?: number;
+  /**
+   * The popup's content-fit width hint in cells: the widest line the
+   * dialog's outer side knows, before the host's margin and cap. Unset
+   * keeps the `80%` width.
+   */
+  width?: number;
+  /**
+   * The popup's content-fit height hint in cells: the largest known list's
+   * lines plus the list chrome. Unset keeps the `80%` height.
+   */
+  height?: number;
   /** The process environment; defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
   /** The node binary the inner command runs under; defaults to `process.execPath`. */
@@ -169,6 +186,11 @@ export interface RunDialogDeps {
   pidAlive?: (pid: number) => boolean;
   /** The private temp-dir factory; defaults to a `mkdtemp` under `os.tmpdir()`. */
   makeDir?: () => string;
+  /**
+   * The caller pane's size read the clamp uses; defaults to `paneSize` in
+   * `tmux.ts`. A throw falls back to the percent argv.
+   */
+  paneSize?: (pane: string) => { width: number; height: number };
 }
 
 function toError(error: unknown): Error {
@@ -181,8 +203,18 @@ function toError(error: unknown): Error {
  * `EDITOR` and `PAGER` the caller's env sets — the popup gets the tmux
  * server's env, so nothing else is inherited. The inner command runs under
  * the caller's own node binary.
+ *
+ * The size: with both hints set the popup opens at cell counts — the hints
+ * plus the width margin, capped at `DIALOG_SIZE_SHARE` of the caller pane's
+ * size. Without both hints, or when the size read fails, the popup keeps
+ * the `80%` by `80%` share.
  */
-function popupArgs(args: RunDialogArgs, env: NodeJS.ProcessEnv, statePath: string): string[] {
+function popupArgs(
+  args: RunDialogArgs,
+  deps: RunDialogDeps,
+  env: NodeJS.ProcessEnv,
+  statePath: string,
+): string[] {
   const argv = [
     "display-popup",
     "-E",
@@ -190,10 +222,7 @@ function popupArgs(args: RunDialogArgs, env: NodeJS.ProcessEnv, statePath: strin
     env.TMUX_PANE ?? "",
     "-T",
     args.title,
-    "-w",
-    "80%",
-    "-h",
-    "80%",
+    ...popupSizeArgs(args, deps, env),
     "-d",
     args.cwd,
     "-e",
@@ -208,6 +237,45 @@ function popupArgs(args: RunDialogArgs, env: NodeJS.ProcessEnv, statePath: strin
   argv.push(args.nodePath ?? process.execPath, args.cliPath ?? join(SUBAGENTS_DIR, "cli.ts"));
   argv.push(...args.innerArgs);
   return argv;
+}
+
+/**
+ * The size argv the hints earn, one axis at a time: a hint set opens that
+ * axis at cell counts — the width hint plus the margin, each capped at
+ * `DIALOG_SIZE_SHARE` of the caller pane's size — and a hint unset keeps
+ * that axis's `80%` share. The caller pane's size read happens here, so a
+ * failed read falls back rather than failing the dialog.
+ */
+export function popupSizeArgs(
+  args: Pick<RunDialogArgs, "width" | "height">,
+  deps: RunDialogDeps,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  if (args.width === undefined && args.height === undefined) {
+    return ["-w", "80%", "-h", "80%"];
+  }
+  try {
+    const size = (deps.paneSize ?? paneSize)(env.TMUX_PANE ?? "");
+    const width =
+      args.width === undefined
+        ? "80%"
+        : String(
+            Math.max(
+              1,
+              Math.min(
+                args.width + DIALOG_WIDTH_MARGIN,
+                Math.floor(size.width * DIALOG_SIZE_SHARE),
+              ),
+            ),
+          );
+    const height =
+      args.height === undefined
+        ? "80%"
+        : String(Math.max(1, Math.min(args.height, Math.floor(size.height * DIALOG_SIZE_SHARE))));
+    return ["-w", width, "-h", height];
+  } catch {
+    return ["-w", "80%", "-h", "80%"];
+  }
 }
 
 /**
@@ -237,7 +305,7 @@ export async function runDialog(
 
   let handle: PopupHandle;
   try {
-    handle = openPopupCall(popupArgs(args, env, statePath));
+    handle = openPopupCall(popupArgs(args, deps, env, statePath));
   } catch (error) {
     rmSync(dir, { recursive: true, force: true });
     throw error;

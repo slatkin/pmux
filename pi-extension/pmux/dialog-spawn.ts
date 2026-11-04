@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { getBundledAgentsDir, listRoles } from "./agent-defs.ts";
 import {
   DIALOG_STATE_ENV,
+  DIALOG_WIDTH_MARGIN,
   dialogStatePath,
   markDialogOpen,
   runDialog,
@@ -34,13 +35,20 @@ import {
   type DialogOutcome,
   type RunDialogDeps,
 } from "./dialog-host.ts";
-import { errorMessage, roleRow, type RolesChoose } from "./dialog-roles.ts";
+import { errorMessage, roleRow, rolesSizeHints, type RolesChoose } from "./dialog-roles.ts";
 import { chooseFromList, runOnTty } from "./dialog-ui.ts";
 import { UnknownRoleError } from "./launch-build.ts";
 import { defaultScratchDir } from "./prune.ts";
 
 /** The popup title (`-T`) and the role list's title line. */
 export const SPAWN_DIALOG_TITLE = "pmux spawn";
+
+/**
+ * The brief editor's width floor, in cells: the brief step runs in the
+ * same popup as the role list, so the role list's narrow fit must not
+ * cramp the editor.
+ */
+const SPAWN_EDITOR_MIN_WIDTH = 80;
 
 /** The refusal a multi-word `--args` earns on the Claude Code path (design D7). */
 export const SPAWN_ARGS_REFUSAL =
@@ -288,6 +296,17 @@ export async function spawnDialogOuter(
     const known = listRoles(args.cwd, args.agentDir).some((role) => role.name === args.role);
     if (!known) throw unknownRoleError(args.role, args.cwd, args.agentDir);
   }
+  // With a role named the dialog opens at the brief step: the editor's
+  // floor is the only width hint, and the height keeps the `80%` share.
+  // Without one the role list drives both hints, never below the floor.
+  const width = Math.max(
+    args.role === undefined ? rolesSizeHints(args.cwd, args.agentDir).width : 0,
+    SPAWN_EDITOR_MIN_WIDTH - DIALOG_WIDTH_MARGIN,
+  );
+  const hints =
+    args.role === undefined
+      ? { width, height: rolesSizeHints(args.cwd, args.agentDir).height }
+      : { width };
   const innerArgs = [
     "spawn-dialog",
     "--inner",
@@ -307,6 +326,7 @@ export async function spawnDialogOuter(
       cwd: args.cwd,
       agentDir: args.agentDir,
       env: args.env,
+      ...hints,
       ...(args.stopAfterMs !== undefined ? { stopAfterMs: args.stopAfterMs } : {}),
     },
     deps,

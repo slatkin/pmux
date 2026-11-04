@@ -53,6 +53,7 @@ import {
   readReportLog,
 } from "../pi-extension/pmux/report-receipt.ts";
 import { DIALOG_STATE_ENV, writeDialogDone } from "../pi-extension/pmux/dialog-host.ts";
+import { rolesSizeHints } from "../pi-extension/pmux/dialog-roles.ts";
 import {
   initListState,
   reduceListKey,
@@ -2419,8 +2420,11 @@ describe("cli.ts roles", () => {
       } finally {
         restorePaneFake();
       }
-      assert.equal(calls.length, 1);
-      const argv = calls[0]!;
+      // The pane-size read precedes the popup; the fake's read fails, so
+      // the popup keeps the percent argv.
+      const popups = calls.filter((args) => args[0] === "display-popup");
+      assert.equal(popups.length, 1);
+      const argv = popups[0]!;
       const statePath = popupEnvValue(argv, DIALOG_STATE_ENV);
       assert.ok(statePath, "expected the state path in the popup env");
       assert.deepEqual(argv, [
@@ -2462,6 +2466,77 @@ describe("cli.ts roles", () => {
     });
   });
 
+  it("opens the popup at the role list's size", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "model: prov/very-long-model-name-here", "Worker body.");
+      const calls: string[][] = [];
+      __setTmuxExecForTests__((args) => {
+        calls.push(args);
+        if (args[0] === "display-message" && args.at(-1) === "#{pane_width} #{pane_height}") {
+          return "200 60";
+        }
+        if (args[0] === "display-popup") {
+          writeDialogDone(`${popupEnvValue(args, DIALOG_STATE_ENV)}`, { line: "done" });
+        }
+        return "";
+      });
+      try {
+        const res = await runCli(["roles", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv());
+        assert.equal(res.code, 0);
+      } finally {
+        restorePaneFake();
+      }
+      const argv = calls.find((args) => args[0] === "display-popup");
+      assert.ok(argv, "expected a display-popup call");
+      // The width covers the widest known line plus the host's margin; the
+      // height covers the role's two lines plus the chrome.
+      const hints = rolesSizeHints(cwd, agentDir);
+      const w = argv.indexOf("-w");
+      const h = argv.indexOf("-h");
+      assert.equal(argv[w + 1], String(hints.width + 4));
+      assert.equal(argv[h + 1], String(hints.height));
+    });
+  });
+
+  it("opens the spawn popup at the editor floor when a role is named", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "scout", "model: m", "Scout body.");
+      const calls: string[][] = [];
+      __setTmuxExecForTests__((args) => {
+        calls.push(args);
+        if (args[0] === "display-message" && args.at(-1) === "#{pane_width} #{pane_height}") {
+          return "200 60";
+        }
+        if (args[0] === "display-popup") {
+          writeDialogDone(`${popupEnvValue(args, DIALOG_STATE_ENV)}`, { state: "cancel" });
+        }
+        return "";
+      });
+      try {
+        const res = await runCli(
+          ["spawn-dialog", "--cwd", cwd, "--agent-dir", agentDir, "--args", "scout"],
+          tmuxEnv(),
+        );
+        assert.equal(res.code, 0);
+        assert.equal(res.stdout, "nothing started\n");
+      } finally {
+        restorePaneFake();
+      }
+      const argv = calls.find((args) => args[0] === "display-popup");
+      assert.ok(argv, "expected a display-popup call");
+      // The brief step runs in the same popup, so the width keeps the
+      // editor's floor and the height keeps the `80%` share.
+      const w = argv.indexOf("-w");
+      const h = argv.indexOf("-h");
+      assert.equal(argv[w + 1], "80");
+      assert.equal(argv[h + 1], "80%");
+    });
+  });
+
   it("leaves VISUAL, EDITOR and PAGER out of the popup env when the caller lacks them", async () => {
     await withTempDirAsync(async (dir) => {
       const cwd = join(dir, "work");
@@ -2475,7 +2550,7 @@ describe("cli.ts roles", () => {
       } finally {
         restorePaneFake();
       }
-      const argv = calls[0]!;
+      const argv = calls.find((args) => args[0] === "display-popup")!;
       assert.equal(popupEnvValue(argv, "VISUAL"), undefined);
       assert.equal(popupEnvValue(argv, "EDITOR"), undefined);
       assert.equal(popupEnvValue(argv, "PAGER"), undefined);
@@ -2734,9 +2809,10 @@ describe("cli.ts spawn-dialog", () => {
       assert.equal(run.stderr, "");
       assert.equal(run.state?.state, "done");
       assert.equal(run.state?.line, "started scout in %24");
-      // The role step listed the same rows the role editor shows.
+      // The role step listed the same rows the role editor shows, divided
+      // onto the identity line and the values line.
       assert.equal(run.seen.length, 1);
-      assert.ok(run.seen[0]?.items.some((item) => /scout {2}\[project\] {2}model: m/.test(item)));
+      assert.ok(run.seen[0]?.items.some((item) => /scout {2}\[project\]\n {2}model: m/.test(item)));
       // The editor ran once on a brief under <scratch>/briefs/.
       assert.equal(run.editorCalls.length, 1);
       const brief = run.editorCalls[0]!;
@@ -2910,8 +2986,9 @@ describe("cli.ts spawn-dialog", () => {
       } finally {
         restorePaneFake();
       }
-      assert.equal(calls.length, 1);
-      const argv = calls[0]!;
+      const popups = calls.filter((args) => args[0] === "display-popup");
+      assert.equal(popups.length, 1);
+      const argv = popups[0]!;
       const statePath = popupEnvValue(argv, DIALOG_STATE_ENV);
       assert.ok(statePath, "expected the state path in the popup env");
       assert.deepEqual(argv.slice(argv.indexOf(CLI)), [
@@ -2946,7 +3023,9 @@ describe("cli.ts spawn-dialog", () => {
       } finally {
         restorePaneFake();
       }
-      const inner = calls[0]!.slice(calls[0]!.indexOf("--inner"));
+      const inner = calls
+        .find((args) => args[0] === "display-popup")!
+        .slice(calls[0]!.indexOf("--inner"));
       assert.equal(inner.includes("--role"), false);
       assert.equal(inner.includes("--start"), true);
     });
@@ -3021,7 +3100,7 @@ describe("cli.ts spawn-dialog", () => {
       } finally {
         restorePaneFake();
       }
-      assert.equal(calls.length, 1);
+      assert.equal(calls.filter((args) => args[0] === "display-popup").length, 1);
     });
   });
 
@@ -3278,24 +3357,104 @@ describe("cli.ts reports", () => {
     });
   });
 
-  it("sends the inner argv to display-popup and prints the result line", async () => {
+  it("answers no reports without opening a popup for an empty history", async () => {
     await withTempDirAsync(async (dir) => {
-      const cwd = join(dir, "work");
-      const agentDir = join(dir, "agent");
-      mkdirSync(cwd, { recursive: true });
       const { calls } = usePopupExec({ line: "no reports" });
       try {
-        const res = await runCli(["reports", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv());
+        const res = await runCli(
+          ["reports", "--cwd", dir, "--agent-dir", join(dir, "agent")],
+          tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "xdg") }),
+        );
         assert.equal(res.code, 0);
         assert.equal(res.stderr, "");
         assert.equal(res.stdout, "no reports\n");
       } finally {
         restorePaneFake();
       }
-      assert.equal(calls.length, 1);
-      const argv = calls[0]!;
+      // The pre-check read the history and answered; no popup opened.
+      assert.equal(calls.length, 0);
+    });
+  });
+
+  it("sends the inner argv to display-popup and prints the result line", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "xdg") });
+      const history = historyDirPath({ env, targetPane: "%21" });
+      assert.ok(history, "expected a history dir under the test tmux env");
+      const report = join(dir, "b.report.md");
+      writeFileSync(report, "report body");
+      writeHistoryRecord(history, {
+        v: 1,
+        id: "b".padEnd(32, "0"),
+        from: "worker",
+        session: join(dir, "b.jsonl"),
+        report,
+        at: "2026-11-03T21:30:00.000Z",
+      });
+      const { calls } = usePopupExec({ line: "no reports" });
+      try {
+        const res = await runCli(["reports", "--cwd", cwd, "--agent-dir", agentDir], env);
+        assert.equal(res.code, 0);
+        assert.equal(res.stderr, "");
+        assert.equal(res.stdout, "no reports\n");
+      } finally {
+        restorePaneFake();
+      }
+      // The pane-size read precedes the popup; only one popup opens.
+      const popups = calls.filter((args) => args[0] === "display-popup");
+      assert.equal(popups.length, 1);
+      const argv = popups[0]!;
       assert.equal(argv[argv.indexOf("-T") + 1], "pmux reports");
       assert.deepEqual(argv.slice(argv.indexOf(CLI)), [CLI, "reports", "--inner", "--pane", "%21"]);
+    });
+  });
+
+  it("opens the popup at the history's size", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      mkdirSync(cwd, { recursive: true });
+      const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "xdg") });
+      const history = historyDirPath({ env, targetPane: "%21" });
+      assert.ok(history, "expected a history dir under the test tmux env");
+      const report = join(dir, "b.report.md");
+      writeFileSync(report, "report body");
+      writeHistoryRecord(history, {
+        v: 1,
+        id: "b".padEnd(32, "0"),
+        from: "worker",
+        session: join(dir, "b.jsonl"),
+        report,
+        at: "2026-11-03T21:30:00.000Z",
+      });
+      const calls: string[][] = [];
+      __setTmuxExecForTests__((args) => {
+        calls.push(args);
+        if (args[0] === "display-message" && args.at(-1) === "#{pane_width} #{pane_height}") {
+          return "200 60";
+        }
+        if (args[0] === "display-popup") {
+          writeDialogDone(`${popupEnvValue(args, DIALOG_STATE_ENV)}`, { line: "read one" });
+        }
+        return "";
+      });
+      try {
+        const res = await runCli(["reports", "--cwd", cwd, "--agent-dir", join(dir, "agent")], env);
+        assert.equal(res.code, 0);
+        assert.equal(res.stdout, "read one\n");
+      } finally {
+        restorePaneFake();
+      }
+      const argv = calls.find((args) => args[0] === "display-popup");
+      assert.ok(argv, "expected a display-popup call");
+      // One row plus the chrome; the width covers the widest row plus the
+      // host's margin, capped at four fifths of the fake pane's size.
+      const w = argv.indexOf("-w");
+      const h = argv.indexOf("-h");
+      assert.equal(argv[w + 1], "48");
+      assert.equal(argv[h + 1], "3");
     });
   });
 
@@ -3304,6 +3463,19 @@ describe("cli.ts reports", () => {
       const cwd = join(dir, "work");
       const agentDir = join(dir, "agent");
       mkdirSync(cwd, { recursive: true });
+      const env = tmuxEnv({ XDG_RUNTIME_DIR: join(dir, "xdg") });
+      const history = historyDirPath({ env, targetPane: "%21" });
+      assert.ok(history, "expected a history dir under the test tmux env");
+      const report = join(dir, "b.report.md");
+      writeFileSync(report, "report body");
+      writeHistoryRecord(history, {
+        v: 1,
+        id: "b".padEnd(32, "0"),
+        from: "worker",
+        session: join(dir, "b.jsonl"),
+        report,
+        at: "2026-11-03T21:30:00.000Z",
+      });
       const calls: string[][] = [];
       __setTmuxExecForTests__((args) => {
         calls.push(args);
@@ -3316,13 +3488,13 @@ describe("cli.ts reports", () => {
         return "";
       });
       try {
-        const res = await runCli(["reports", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv());
+        const res = await runCli(["reports", "--cwd", cwd, "--agent-dir", agentDir], env);
         assert.equal(res.code, 0);
         assert.equal(res.stdout, "report viewer closed\n");
       } finally {
         restorePaneFake();
       }
-      assert.equal(calls.length, 1);
+      assert.equal(calls.filter((args) => args[0] === "display-popup").length, 1);
     });
   });
 

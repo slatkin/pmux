@@ -13,6 +13,7 @@ import {
   DIALOG_STATE_ENV,
   DIALOG_STILL_OPEN_LINE,
   markDialogOpen,
+  popupSizeArgs,
   runDialog,
   writeDialogDone,
   type RunDialogArgs,
@@ -355,6 +356,69 @@ describe("dialog host", () => {
       assert.deepEqual(outcome, { kind: "still-open", line: DIALOG_STILL_OPEN_LINE });
       assert.equal(popup.unrefs, 1);
       assert.equal(existsSync(dir), true);
+    });
+  });
+
+  describe("popup size", () => {
+    const sizeArgs = { width: 40, height: 20 };
+
+    it("keeps the percent argv when no hints are set", () => {
+      assert.deepEqual(popupSizeArgs({}, {}, ENV), ["-w", "80%", "-h", "80%"]);
+    });
+
+    it("opens a hinted axis at cells inside the pane's cap", () => {
+      const deps = { paneSize: () => ({ width: 200, height: 60 }) };
+      assert.deepEqual(popupSizeArgs(sizeArgs, deps, ENV), ["-w", "44", "-h", "20"]);
+      // One hint set: the other axis keeps its share.
+      assert.deepEqual(popupSizeArgs({ width: 40 }, deps, ENV), ["-w", "44", "-h", "80%"]);
+      assert.deepEqual(popupSizeArgs({ height: 20 }, deps, ENV), ["-w", "80%", "-h", "20"]);
+    });
+
+    it("caps both axes at four fifths of the pane's size", () => {
+      const deps = { paneSize: () => ({ width: 200, height: 60 }) };
+      assert.deepEqual(popupSizeArgs({ width: 500, height: 100 }, deps, ENV), [
+        "-w",
+        "160",
+        "-h",
+        "48",
+      ]);
+    });
+
+    it("falls back to the percent argv when the size read fails", () => {
+      const deps = {
+        paneSize: () => {
+          throw new Error("no pane");
+        },
+      };
+      assert.deepEqual(popupSizeArgs(sizeArgs, deps, ENV), ["-w", "80%", "-h", "80%"]);
+    });
+
+    it("passes the clamped cells into the popup argv", async () => {
+      await withTempDirAsync(async (dir) => {
+        const clock = fakeClock();
+        const popup = fakePopup({ markOpen: true });
+        await runDialog(
+          { ...dialogArgs(), width: 40, height: 20 },
+          {
+            openPopup: popup.openPopup,
+            now: clock.now,
+            sleep: async (ms) => {
+              await clock.sleep(ms);
+              writeDialogDone(popup.statePath(), {});
+            },
+            pidAlive: () => true,
+            makeDir: () => dir,
+            paneSize: () => ({ width: 200, height: 60 }),
+          },
+        );
+        const argv = popup.calls[0]!;
+        const w = argv.indexOf("-w");
+        const h = argv.indexOf("-h");
+        assert.notEqual(w, -1);
+        assert.notEqual(h, -1);
+        assert.equal(argv[w + 1], "44");
+        assert.equal(argv[h + 1], "20");
+      });
     });
   });
 });

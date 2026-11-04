@@ -73,12 +73,28 @@ export function errorMessage(error: unknown): string {
 }
 
 /**
- * One row of the role list: name, source and the three editable values.
- * The spawn dialog's role step shows the same rows (spec: "Role step").
+ * One row of the role list, divided onto two lines: the identity (name and
+ * source) on the first, the three editable values on the second. The spawn
+ * dialog's role step shows the same rows (spec: "Role step").
  */
 export function roleRow(role: RoleInfo): string {
   const mark = (value: string | undefined): string => value ?? ABSENT_MARK;
-  return `${role.name}  [${role.source}]  model: ${mark(role.model)}  model-fallback: ${mark(role.modelFallback)}  thinking: ${mark(role.thinking)}`;
+  return `${role.name}  [${role.source}]\n  model: ${mark(role.model)}  model-fallback: ${mark(role.modelFallback)}  thinking: ${mark(role.thinking)}`;
+}
+
+/**
+ * The size hints the role editor's outer side computes from the content it
+ * knows: the width covers the title, the role rows' divided lines and the
+ * fixed choices (the keys, the thinking levels, the remove choice); the
+ * height covers the role list plus the list chrome. The model id lists and
+ * the footer lines are unknown here and wrap inside the popup instead.
+ */
+export function rolesSizeHints(cwd: string, agentDir: string): { width: number; height: number } {
+  const rows = listRoles(cwd, agentDir).map(roleRow);
+  const lines = rows.flatMap((row) => row.split("\n"));
+  const fixed = [ROLES_DIALOG_TITLE, ...ROLE_KEYS, ...THINKING_LEVELS, REMOVE_CHOICE];
+  const width = Math.max(...fixed.map((line) => line.length), ...lines.map((line) => line.length));
+  return { width, height: 2 + lines.length };
 }
 
 /**
@@ -203,6 +219,7 @@ export async function rolesDialogOuter(
   args: RolesOuterArgs,
   deps: RunDialogDeps = {},
 ): Promise<string> {
+  const { width, height } = rolesSizeHints(args.cwd, args.agentDir);
   const outcome = await runDialog(
     {
       title: ROLES_DIALOG_TITLE,
@@ -219,6 +236,8 @@ export async function rolesDialogOuter(
       cwd: args.cwd,
       agentDir: args.agentDir,
       env: args.env,
+      width,
+      height,
       ...(args.stopAfterMs !== undefined ? { stopAfterMs: args.stopAfterMs } : {}),
     },
     deps,

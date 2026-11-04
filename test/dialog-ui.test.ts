@@ -1,6 +1,7 @@
 /**
- * Unit tests for the dialog list reducer (design D3). The renderer is a
- * thin draw loop over the reducer, so the tests drive the reducer only.
+ * Unit tests for the dialog list reducer (design D3) and the renderer's
+ * wrapping, divided rows and windowing (popup-dialogs, "List rows divide
+ * and wrap"). The renderer is a thin draw loop over the reducer.
  */
 import "./host-env.ts";
 import { describe, it } from "node:test";
@@ -8,7 +9,10 @@ import assert from "node:assert/strict";
 import {
   filteredItems,
   initListState,
+  itemLines,
   reduceListKey,
+  renderListLines,
+  wrapLine,
   type ListState,
 } from "../pi-extension/pmux/dialog-ui.ts";
 
@@ -110,5 +114,82 @@ describe("dialog list reducer", () => {
     const state = initListState(ROLES);
     assert.equal(reduceListKey(state, { name: "x", sequence: "x", meta: true }), state);
     assert.equal(reduceListKey(state, { name: "tab", sequence: "\t" }), state);
+  });
+});
+
+describe("dialog list rendering", () => {
+  it("keeps a line that fits the width whole", () => {
+    assert.deepEqual(wrapLine("scout", 20), ["scout"]);
+  });
+
+  it("wraps a long line greedily on spaces", () => {
+    assert.deepEqual(wrapLine("alpha beta gamma", 10), ["alpha beta", "gamma"]);
+  });
+
+  it("hard-splits a word longer than the width", () => {
+    assert.deepEqual(wrapLine("abcdefghijkl", 5), ["abcde", "fghij", "kl"]);
+  });
+
+  it("splits a divided item on its embedded newlines and wraps each line", () => {
+    assert.deepEqual(itemLines("scout  [built-in]\n  model: a very long model name here", 20), [
+      "scout  [built-in]",
+      "  model: a very long",
+      "model name here",
+    ]);
+  });
+
+  it("draws every line of the selected item in inverse video", () => {
+    const state = initListState(["scout  [built-in]\n  model: a/x"]);
+    const lines = renderListLines(state, { rows: 24, columns: 80 }, {});
+    assert.deepEqual(lines, [
+      "> ",
+      "\x1b[7mscout  [built-in]\x1b[0m",
+      "\x1b[7m  model: a/x\x1b[0m",
+    ]);
+  });
+
+  it("wraps the title and footer lines", () => {
+    const state = initListState(["a"]);
+    const lines = renderListLines(
+      state,
+      { rows: 24, columns: 10 },
+      {
+        title: "pmux roles editor",
+        footer: "edits create a user copy here",
+      },
+    );
+    assert.deepEqual(lines, [
+      "pmux roles",
+      "editor",
+      "> ",
+      "\x1b[7ma\x1b[0m",
+      "edits",
+      "create a",
+      "user copy",
+      "here",
+    ]);
+  });
+
+  it("shows only the whole items that fit the row budget", () => {
+    const state = initListState(["one\nx", "two\nx", "three\nx"]);
+    const lines = renderListLines(state, { rows: 6, columns: 80 }, { title: "t" });
+    // Chrome: title plus filter leaves 4 rows; the first two items fit.
+    assert.deepEqual(lines, ["t", "> ", "\x1b[7mone\x1b[0m", "\x1b[7mx\x1b[0m", "two", "x"]);
+  });
+
+  it("moves the window so a newly selected divided item shows whole", () => {
+    let state = initListState(["one\nx", "two\nx", "three\nx"]);
+    state = reduceListKey(state, { name: "down", sequence: "\x1b[B" });
+    const lines = renderListLines(state, { rows: 6, columns: 80 }, { title: "t" });
+    assert.deepEqual(lines, ["t", "> ", "one", "x", "\x1b[7mtwo\x1b[0m", "\x1b[7mx\x1b[0m"]);
+    state = reduceListKey(state, { name: "down", sequence: "\x1b[B" });
+    const last = renderListLines(state, { rows: 6, columns: 80 }, { title: "t" });
+    assert.deepEqual(last, ["t", "> ", "two", "x", "\x1b[7mthree\x1b[0m", "\x1b[7mx\x1b[0m"]);
+  });
+
+  it("clips a lone item taller than the window", () => {
+    const state = initListState(["a\nb\nc\nd\ne"]);
+    const lines = renderListLines(state, { rows: 3, columns: 80 }, {});
+    assert.deepEqual(lines, ["> ", "\x1b[7ma\x1b[0m", "\x1b[7mb\x1b[0m"]);
   });
 });
