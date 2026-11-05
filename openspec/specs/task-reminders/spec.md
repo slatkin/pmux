@@ -16,9 +16,9 @@ from `src/task_reminders.rs` in the pmux-explorer repository.
 The extension SHALL NOT inject the reminder while the pane's task store has
 been written within a quiet period of five minutes, or when fewer than
 three turn ends have passed since the store's last write. An injection
-resets the turn count and the quiet period from that point. The open-set
-guard remains: an identical open set to the last injection does not
-re-fire.
+resets the turn count and the quiet period from that point. The buffer is
+the only gate on repeats: the reminder fires again once the buffer expires,
+even when the store's open set is unchanged since the last injection.
 
 #### Scenario: open items at turn end
 - **WHEN** the turn ends and the pane's store holds pending or in-progress items, the store was last written more than five minutes ago, and at least three turn ends have passed since that write
@@ -26,7 +26,7 @@ re-fire.
 
 #### Scenario: nothing open at turn end
 - **WHEN** the turn ends and no item is open
-- **THEN** no reminder is injected and the next turn start starts clean
+- **THEN** no reminder is injected
 
 #### Scenario: a failed turn gets no steer
 - **WHEN** a turn ends in `error`, or the user aborted it
@@ -50,7 +50,11 @@ re-fire.
 
 #### Scenario: an injection restarts the buffer
 - **WHEN** a reminder has just been injected
-- **THEN** the turn count and the five-minute clock restart from that point, and a later turn end with the same open set does not re-fire until the buffer expires again
+- **THEN** the turn count and the five-minute clock restart from that point, and a later turn end does not re-fire until the buffer expires again
+
+#### Scenario: an unchanged open set re-fires after the buffer expires
+- **WHEN** a reminder was injected, the store's open set is unchanged since that injection, and five minutes and three turn ends have passed since it
+- **THEN** the reminder is injected again
 
 ### Requirement: an empty store is never nudged
 

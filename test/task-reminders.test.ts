@@ -2,7 +2,7 @@
  * The sidebar-task-reminders module, driven without pi: the handlers are
  * registered on a fake ExtensionAPI and fired with fake events, and the store
  * reader and the steer send are injected, so the wording, the firing
- * condition, the guard and the never-disturbs rule are all pinned without a
+ * condition, the buffer and the never-disturbs rule are all pinned without a
  * sidebar, without tmux and without a store on disk.
  *
  * The one test that uses the real reader end to end writes the store file the
@@ -22,7 +22,6 @@ import {
   MIN_TURNS_SINCE_WRITE,
   QUIET_PERIOD_MS,
   createTaskReminders,
-  openTaskKey,
   openTasks,
   parseSidebarTaskStore,
   readSidebarTaskStore,
@@ -212,15 +211,6 @@ describe("the store reader (D2)", () => {
   it("keeps only the open statuses in the open set", () => {
     const items = [item("1", "pending"), item("2", "in_progress"), item("3", "completed")];
     assert.deepEqual(openTasks(items), [item("1"), item("2", "in_progress")]);
-    assert.equal(openTaskKey(items), '["1","2"]');
-    assert.equal(openTaskKey([item("2"), item("1")]), '["1","2"]', "the key is order-independent");
-  });
-
-  it("cannot encode two different open sets as one key", () => {
-    // A comma-joined key would make ["1","2"] and the single id "1,2"
-    // collide, hiding a changed set from the guard; the JSON encoding keeps
-    // every shape its own key.
-    assert.notEqual(openTaskKey([item("1"), item("2")]), openTaskKey([item("1,2")]));
   });
 
   it("reads a readable, missing and unreadable file at a path", () => {
@@ -346,7 +336,7 @@ describe("the settlement anchor", () => {
     );
   });
 
-  it("a store with nothing open is silent, and the next boundary starts clean", () => {
+  it("a store with nothing open is silent", () => {
     const { fire, reads, sent } = makeHarness({
       readStore: () => [item("1", "completed"), item("2", "completed")],
     });
@@ -358,61 +348,24 @@ describe("the settlement anchor", () => {
     assert.deepEqual(sent, []);
   });
 
-  it("does not re-fire until the store's open set changes (D5, once the buffer allows a fire)", () => {
-    // A set change marches with an mtime change in production — the
-    // sidebar rewrites the store file on every `task-set` and
-    // `task-update` — so the model moves both. Every write here is already
-    // older than the quiet period, leaving the count as the only gate, and
-    // each write restarts it: the reminder fires on the third turn end
-    // that follows a write, for whatever set that write left open.
-    let msSeq = 0;
-    const oldWrite = () => Date.now() - (QUIET_PERIOD_MS + 60_000) - msSeq++ * 1000;
-    let store = [item("1", "in_progress"), item("2", "pending")];
-    let writeAt: number | null = oldWrite();
+  it("an unchanged open set does not re-fire inside the restarted buffer", () => {
+    // The stale-board case the reminder exists for: the agent never touches
+    // the list, so the store's open set and its mtime never change. The
+    // write here is already older than the quiet period, so the count alone
+    // gates the first fire; the injection restarts both clocks, and the
+    // same board stays silent while that fresh buffer holds.
+    const writeAt = Date.now() - (QUIET_PERIOD_MS + 60_000);
     const { fire, sent } = makeHarness({
-      readStore: () => store,
+      readStore: () => [item("1")],
       readStoreMtime: () => writeAt,
     });
     armTurnCount({ fire });
     fire("turn_end", STOP);
     assert.deepEqual(sent, delivered());
-
     fire("turn_end", STOP);
-    assert.equal(sent.length, 1, "the same open set does not re-fire, however long it sits");
-
-    // A real write: one item completes, the set drops to ["2"], the file's
-    // mtime moves — and the write is once more already six minutes old,
-    // so the count is what the next two turn ends pay.
-    store = [item("1", "completed"), item("2", "pending")];
-    writeAt = oldWrite();
-    fire("turn_end", STOP); // one turn end since the write
-    assert.equal(sent.length, 1, "one turn since the write: still buffered");
-    fire("turn_end", STOP); // two
-    assert.equal(sent.length, 1, "two turns since the write: still buffered");
-    fire("turn_end", STOP); // three: the reminder fires for the changed set
-    assert.equal(sent.length, 2, "the open set changed, so the reminder fires again");
     fire("turn_end", STOP);
-    assert.equal(sent.length, 2, "the changed set does not re-fire either");
-
-    // An emptied store: its completing write is old the same way, so three
-    // turn ends arm the guard with the empty set — and stay silent.
-    store = [];
-    writeAt = oldWrite();
-    armTurnCount({ fire });
     fire("turn_end", STOP);
-    assert.equal(sent.length, 2, "an emptied store is silent");
-
-    // A later recording is a changed set against a long-untouched store,
-    // and its write too has aged: it fires on its third turn end.
-    store = [item("4")];
-    writeAt = oldWrite();
-    armTurnCount({ fire });
-    fire("turn_end", STOP);
-    assert.equal(
-      sent.length,
-      3,
-      "a later recording is a changed set, so the reminder fires for it",
-    );
+    assert.equal(sent.length, 1, "the same open set waits out the restarted buffer");
   });
 
   it("a subagent child stays quiet, whatever the store holds (D4)", () => {
@@ -702,6 +655,32 @@ describe("the buffer's clocks (the store's mtime and the turn count)", () => {
     fire("turn_end", STOP);
     assert.equal(sent.length, 2, "the changed set fires after its own write aged out");
     fire("turn_end", STOP);
-    assert.equal(sent.length, 2, "and that set does not re-fire either (guard)");
+    assert.equal(sent.length, 2, "and that set stays inside the restarted buffer's count");
+  });
+
+  it("an unchanged open set re-fires after the buffer expires again: five minutes and three turn ends after the injection", () => {
+    // The stale-board case: the agent never touches the list, so the open
+    // set and its mtime never change. The buffer alone spaces the repeats —
+    // each injection restarts both clocks, and the next fire comes five
+    // minutes and three turn ends after the last one, unchanged set and all.
+    const writeAt = startMs - (QUIET_PERIOD_MS + 60_000);
+    const { fire, sent } = makeHarness({
+      readStore: () => [item("1")],
+      readStoreMtime: () => writeAt,
+    });
+    armTurnCount({ fire });
+    fire("turn_end", STOP);
+    assert.deepEqual(sent, delivered());
+    // The injection restarted both clocks: three turn ends pass, but the
+    // five minutes since the injection have not.
+    fire("turn_end", STOP);
+    fire("turn_end", STOP);
+    fire("turn_end", STOP);
+    assert.equal(sent.length, 1, "the same open set stays inside the restarted buffer");
+    // Five minutes pass since the injection; its three turn ends already
+    // went by, so the next turn end fires for the unchanged set again.
+    advance(QUIET_PERIOD_MS + 1_000);
+    fire("turn_end", STOP);
+    assert.equal(sent.length, 2, "the unchanged open set re-fires once the buffer expires again");
   });
 });

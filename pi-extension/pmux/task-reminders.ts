@@ -17,18 +17,23 @@
  * successful `task-set` and `task-update`, so the file's mtime is the
  * moment the agent last touched the list, and the reminder stays silent
  * until the file has been untouched for five minutes and three turn ends
- * have passed since that write. An injection restarts both clocks. The
- * open-set guard rides on top of the buffer: the buffer stops the
- * rapid-fire during active maintenance, the guard stops identical repeats
- * once it has expired. Decision numbers in parentheses cite the archived
+ * have passed since that write. An injection restarts both clocks. No other
+ * gate exists: an earlier version also held the reminder until the store's
+ * open set changed since the last injection, but that guard silenced the
+ * very case the reminder exists for — a stale board the agent never touches
+ * keeps one open set, so it got one reminder and then hours of silence, and
+ * a compaction that dropped the earlier reminder left the agent with none.
+ * The buffer alone spaces repeats: each injection restarts both clocks, so
+ * an unchanged board is reminded again only after five quiet minutes and
+ * three more turn ends. Decision numbers in parentheses cite the archived
  * 2026-10-22-sidebar-task-reminders design; the buffer's own decisions are
  * named in prose, since that design's D1–D7 mean other things. An empty
  * store is silent at every boundary: no
  * `before_agent_start` anchor is registered, because recording tasks is a
  * human-prompted action, not a default tag (D3). The injection is one steer
  * message and never spawns a turn of its own (D6). Per registration there are
- * no timers and no global state beyond the guard and the buffer's three
- * closure values, and every failure of the store read or the injection is
+ * no timers and no global state beyond the buffer's three closure values, and
+ * every failure of the store read or the injection is
  * swallowed (D7): a reminder is never worth a turn's interruption.
  *
  * The store is `/tmp/pmux-explorer-tasks<PANE>.json`, the file the sidebar's
@@ -128,28 +133,6 @@ export function openTasks(items: SidebarTaskItem[]): SidebarTaskItem[] {
   return items.filter((item) => item.status === "pending" || item.status === "in_progress");
 }
 
-/** Lexicographic id order, spelled out so the key's stability is explicit. */
-function byId(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-}
-
-/**
- * The store's open set as one stable key: the sorted open ids, JSON-encoded —
- * encoding, not joining, is what keeps `"1,2"` and `["1", "2"]` different
- * keys. The D5 guard compares this key per turn end, so a reminder fires
- * again only after the store's open set changed — the store updates the
- * reminder asks for.
- */
-export function openTaskKey(items: SidebarTaskItem[]): string {
-  return JSON.stringify(
-    openTasks(items)
-      .map((item) => item.id)
-      .sort(byId),
-  );
-}
-
 /**
  * Read a store file at a path. A missing, unreadable or malformed file reads
  * as empty, never as an error — exactly like the sidebar's own reader.
@@ -223,15 +206,8 @@ export function createTaskReminders(
 ): {
   register(pi: ExtensionAPI): void;
 } {
-  // The D5 guard: the open-set key at the last injection. An injection sets
-  // it; a later turn end with a changed open set resets it. Nothing else
-  // writes it, and it lives only in this closure, like the sidebar events'
-  // run-scoped captures — no timers, no global state, so `/reload` safety is
-  // unchanged (D7).
-  let remindedOpenKey: string | null = null;
-
-  // The buffer's state, in this closure next to the guard — no timers, no
-  // global state, so `/reload` safety is unchanged (D7). Three values: the
+  // The buffer's state, in this closure — no timers, no global state, so
+  // `/reload` safety is unchanged (D7). Three values: the
   // anchor the quiet period counts from (the store's last write as the
   // module observed it, or the last injection, which restarts the clock),
   // the turn ends observed since that anchor, and the mtime the stat last
@@ -285,30 +261,17 @@ export function createTaskReminders(
           return;
         }
 
-        const openKey = openTaskKey(items);
-
         // The buffer, quiet period first, then the turn count, both
         // required (the buffer-task-reminders design's D3): the mtime check
         // is cheap and is enough in the common case, the count catches the
-        // turns where wall-clock time misleads. A turn end the buffer holds
-        // out returns here without re-arming the guard below, so an open
-        // set that changed under the buffer still fires for it at expiry —
-        // arming from a buffered turn end would silence the reminder for
-        // that set forever.
+        // turns where wall-clock time misleads. The buffer is the only gate
+        // on repeats — no open-set guard, whose identical-repeat silence
+        // starved the stale board the reminder exists for.
         if (lastStoreWriteMs !== 0 && Date.now() - lastStoreWriteMs < QUIET_PERIOD_MS) return;
         if (turnsSinceWrite < MIN_TURNS_SINCE_WRITE) return;
 
-        // The guard (D5): an identical open set to the last injection means
-        // the reminder is already before the agent, so it does not re-fire
-        // until the store's open set changes. Every change — including a
-        // set that drops to empty — resets the guard.
-        if (openKey === remindedOpenKey) return;
-        remindedOpenKey = openKey;
-
-        // An open set that is empty is the "empty" condition: silent, with
-        // the guard now reset for the next turn start (D3). The JSON key of
-        // an empty set is `"[]"`.
-        if (openKey === "[]") return;
+        // An empty open set is the "empty" condition: silent (D3).
+        if (openTasks(items).length === 0) return;
 
         // D6: one steer, queued to the turn the agent next runs; no run is
         // started for it. A thrown or rejected send is swallowed (D7).
@@ -324,8 +287,7 @@ export function createTaskReminders(
         // injection resets the turn count and the quiet period"): the
         // quiet period counts from now, the count from this turn end. The
         // restart is unconditional — a delivery failure is swallowed, not
-        // retried from here, and the guard is already armed for the same
-        // open set either way.
+        // retried from here.
         lastStoreWriteMs = Date.now();
         turnsSinceWrite = 0;
       });
