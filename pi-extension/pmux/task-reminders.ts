@@ -54,7 +54,8 @@ import { isSubagentChild } from "./child-env.ts";
  * pmux-explorer's `src/task_reminders.rs`; the module header and the
  * wording test carry the drift mechanism (D1).
  */
-export const UPDATE_BEFORE_FINISH_REMINDER = "Reminder: make sure the task board is up to date.";
+export const UPDATE_BEFORE_FINISH_REMINDER =
+  "Automated reminder: make sure the task board is up to date.";
 
 /**
  * The buffer's quiet period (the buffer-task-reminders design's D1): how

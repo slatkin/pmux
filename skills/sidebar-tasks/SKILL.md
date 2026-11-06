@@ -105,7 +105,10 @@ sidebar's `src/task_reminders.rs`:
 - A turn that starts while the pane's todo list is empty may receive:
   `No tasks recorded yet: describe the work with task-describe <text>, then record tasks with task-set <subject>.`
 - A turn that ends while items are still open receives:
-  `Reminder: make sure the task board is up to date.`
+  `Automated reminder: make sure the task board is up to date.`
+
+The "Automated reminder:" prefix tells the pane's agent the text is a
+machine-generated nudge, not a message from the user.
 
 The update reminder points at the whole board, not at a command form —
 bring it in step with the `task-update` forms above. Which reminders reach
