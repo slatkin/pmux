@@ -15,9 +15,10 @@
  * Otherwise the only success-path exits are the explicit `pmux_done` /
  * `caller_ping` tools, and an agent that finishes without calling either is
  * nudged. Provider-error turns write the error `.exit` sidecar so the parent
- * learns about failures promptly. A user-aborted turn writes the `cancelled`
- * sidecar and leaves the session open, so a cancel is not mistaken for a
- * failure (report-user-cancel D1).
+ * learns about failures promptly. A user-aborted turn, and a session the user
+ * quits (Ctrl-C twice, Ctrl-D, `/quit`), writes the `cancelled` sidecar, so a
+ * cancel is neither mistaken for a failure nor for a crash
+ * (report-user-cancel D1, quit-is-a-cancel D1).
  */
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
@@ -343,9 +344,12 @@ export default function (pi: ExtensionAPI) {
   let userTookOver = false;
   let agentStarted = false;
   /** Set from `agent_settled.aborted`: the run-level abort flag the
-   * message-level `didUserAbortTurn` check can miss. Read again at
-   * `session_shutdown` to restore a consumed cancel notice. */
+   * message-level `didUserAbortTurn` check can miss. */
   let lastRunAborted = false;
+  /** The terminal payload this session wrote (`done`, `handoff`, `ping`,
+   * `error` or `cancelled`). A quit keeps that meaning; a quit with no payload
+   * of its own ends the session as `cancelled` (quit-is-a-cancel D1). */
+  let terminalPayload: "done" | "handoff" | "ping" | "error" | "cancelled" | null = null;
   /** Set at `agent_end` when the parent's interrupt marker was there: the
    * abort came from `pmux_interrupt`, so the session stays open (D3). */
   let parentInterrupted = false;
@@ -360,6 +364,7 @@ export default function (pi: ExtensionAPI) {
     clearNudgeTimer();
     writeStatus("done", "cancelled");
     writeExitSidecar(sessionFile, { type: "cancelled" });
+    terminalPayload = "cancelled";
     ctx.shutdown();
   }
 
@@ -370,6 +375,7 @@ export default function (pi: ExtensionAPI) {
     userInputAfterAgentEnd = false;
     userTookOver = false;
     lastRunAborted = false;
+    terminalPayload = null;
     alertFired = false;
     clearNudgeTimer();
     const tools = pi.getAllTools();
@@ -429,6 +435,9 @@ export default function (pi: ExtensionAPI) {
     // written for (D3).
     parentInterrupted = sessionFile ? takeInterruptMarker(sessionFile) : false;
     if (errorInfo && sessionFile) {
+      // The status write is payload evidence even if the sidecar write fails: a
+      // later quit must not relabel a provider error as a user cancel.
+      terminalPayload = "error";
       writeStatus("blocked", errorInfo.errorMessage);
       try {
         writeFileSync(
@@ -469,6 +478,9 @@ export default function (pi: ExtensionAPI) {
     if (autoExit && !userTookOver && shouldAutoExitOnAgentEnd(messages)) {
       recorder.agentEndDone();
       if (sessionFile) {
+        // The status write stands even if the sidecar write fails, so a later
+        // quit keeps the run as done instead of relabelling it cancelled.
+        terminalPayload = "done";
         writeStatus("done");
         try {
           writeFileSync(exitSidecarPath(sessionFile), JSON.stringify({ type: "done" }));
@@ -552,15 +564,23 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", (event) => {
     clearNudgeTimer();
     recorder.sessionShutdown((event as any).reason);
-    // A quit that races the parent's poll: the settle wrote `cancelled`,
-    // the poll may already have consumed it, and the run wrapper would
-    // otherwise read no sidecar and report the exit as a crash. Rewrite the
-    // notification when the last run was aborted and nothing terminal was
-    // left behind.
+    // A quit — Ctrl-C twice, Ctrl-D, `/quit`, or a signal — is the user
+    // stopping the child, the same act as an Escape abort. Without a sidecar
+    // of its own the run wrapper reports the exit as a crash (`error`,
+    // source `wrapper`), so the child ends a quit as `cancelled`
+    // (quit-is-a-cancel D1, quiet-cancel-exit D2). A payload this session wrote
+    // keeps its meaning; only `cancelled` is rewritten, because the parent's
+    // poll may already have consumed it and the wrapper would then read no
+    // sidecar. A session that switches sessions (`reload`, `new`, `resume`,
+    // `fork`) writes nothing: the run continues on the new session.
+    const reason = (event as { reason?: string } | undefined)?.reason;
     const sessionFile = childEnv.sessionFile;
-    if (sessionFile && lastRunAborted && readExitSidecar(sessionFile) === null) {
-      writeExitSidecar(sessionFile, { type: "cancelled" });
-    }
+    if (reason !== "quit" || !sessionFile) return;
+    if (readExitSidecar(sessionFile) !== null) return;
+    if (terminalPayload !== null && terminalPayload !== "cancelled") return;
+    writeStatus("done", "cancelled");
+    writeExitSidecar(sessionFile, { type: "cancelled" });
+    terminalPayload = "cancelled";
   });
 
   // Toggle expand/collapse with Ctrl+H (ctrl+j is the built-in new-line binding)
@@ -600,6 +620,7 @@ export default function (pi: ExtensionAPI) {
       };
       writeStatus("blocked", params.message);
       writeFileSync(exitSidecarPath(sessionFile), JSON.stringify(exitData));
+      terminalPayload = "ping";
 
       ctx.shutdown();
       return {
@@ -654,6 +675,7 @@ export default function (pi: ExtensionAPI) {
               : { type: "done" },
           ),
         );
+        terminalPayload = typeof params.handoff === "string" ? "handoff" : "done";
       }
       // Only a handoff exit logs the `handoff` row; a plain done does not.
       // The token count comes from the usage at the exit itself (D6).

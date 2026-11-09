@@ -2,11 +2,12 @@
  * The `.exit` sidecar protocol — host independent.
  *
  * A child writes `<session file>.exit` when it finishes (done, ping, handoff
- * or error). A child whose turn the user aborted writes a `cancelled` sidecar
- * and exits; no parent is woken for it (quiet-cancel-exit D1, D2). The parent
- * polls that file, so the
- * completion channel does not depend on the terminal host. Both backends read
- * it through this module so they decode a payload the same way.
+ * or error). A child the user stopped — an aborted turn, or a session the user
+ * quit with Ctrl-C, Ctrl-D or `/quit` — writes a `cancelled` sidecar and
+ * exits; no parent is woken for it (quiet-cancel-exit D1, D2, quit-is-a-cancel
+ * D1). The parent polls that file, so the completion channel does not depend
+ * on the terminal host. Both backends read it through this module so they
+ * decode a payload the same way.
  */
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 

@@ -145,7 +145,7 @@ Placement has two sources: the role's `surface:` frontmatter applies when it nam
 
 For the report cross-check, run `node <skill-dir>/launch.ts last-message --session <file>`. It prints the last assistant message of the session, or `(no assistant message)`.
 
-Completion signal: a child that finishes, pings, or errors writes its status to `<session>.status` before it exits — `done`, or `blocked` with the ping question or error text as the message. A user cancel (Escape) writes `done` with the message `cancelled`, and the child exits. In the default `last` mode, wait for the status with the CLI's `wait` command. Do not poll the pane:
+Completion signal: a child that finishes, pings, or errors writes its status to `<session>.status` before it exits — `done`, or `blocked` with the ping question or error text as the message. A user cancel (Escape, or a quit with Ctrl-C twice, Ctrl-D or `/quit`) writes `done` with the message `cancelled`, and the child exits. In the default `last` mode, wait for the status with the CLI's `wait` command. Do not poll the pane:
 
 ```bash
 node <skill-dir>/launch.ts wait --session <file> --status done,blocked --timeout <seconds>
@@ -161,7 +161,7 @@ node <skill-dir>/launch.ts wait --session <file> --signal sidecar
 
 The sidecar wait polls the `<session>.exit` file and never removes it — the run wrapper reads the same file after the child exits. It exits 0 when the sidecar appears, printing the decoded sidecar plus the sidecar's absolute path on one JSON line: `reason` is `done` (finished), `handoff` (handed off, with the continuation text as `handoff.message`), `ping` (the question as `ping.message`), `error`, or `cancelled` (the user stopped the child), with `errorSource` at `"wrapper"` when the wrapper wrote the sidecar. It exits 2 when the timeout passes first, printing `{"sidecar":null}` on stdout. The status file is the wake-up signal; the `.exit` sidecar stays the authoritative lifecycle record.
 
-A `cancelled` sidecar means the user stopped the child with Escape. The child has exited, and no one is woken: in `send` mode the wrapper sends no wake-up. Do not resume or replace the child unless the user asks.
+A `cancelled` sidecar means the user stopped the child with Escape, or quit it with Ctrl-C twice, Ctrl-D or `/quit`. The child has exited, and no one is woken: in `send` mode the wrapper sends no wake-up. Do not resume or replace the child unless the user asks.
 
 A child started with `--report send` is different: its `send` command writes the report to an immutable `<session>.<report-id>.report.md` file next to the session file before any pane call, and the orchestrator's pane receives a one-line pointer — the report ID, the file path, an embedded `node <cli> ack --session <file> --id <report-id>` command and a `[pmux-eom-…]` visibility token. The orchestrator reads the named file and then runs the embedded `ack` command; the ack record is the only read receipt, and only an unacknowledged report is re-delivered at the child's exit — same report ID, fresh token, one last pass that can itself fail to land in the pane. The line `send` prints in the child's own pane proves only that tmux accepted the pointer input, not that the text was consumed; the orchestrator's `ack` is the arrival proof. You still wait for the `.exit` sidecar with `node <skill-dir>/launch.ts wait --session <file> --signal sidecar [--timeout <seconds>]`. That mode is documented in the skill's "External orchestrators (Claude Code)" section (`skills/pmux/SKILL.md`).
 
@@ -281,7 +281,7 @@ Completion messages render with a colored background and are expandable with `Ct
 
 ### Decision model
 
-Each child run has one of three outcomes: `done`, `ping`, or `error`. The `.exit` sidecar records the outcome. The orchestrator delivers it as a steer message. A user cancel (Escape) is not one of them: it ends the run quietly. The pane closes and the parent gets no message.
+Each child run has one of three outcomes: `done`, `ping`, or `error`. The `.exit` sidecar records the outcome. The orchestrator delivers it as a steer message. A user cancel (Escape, or a quit with Ctrl-C twice, Ctrl-D or `/quit`) is not one of them: it ends the run quietly. The pane closes and the parent gets no message.
 
 ```mermaid
 flowchart LR
@@ -563,7 +563,7 @@ surface: float
 
 ### `auto-exit` and the completion nudge
 
-Agents with `auto-exit: true` exit themselves. When the agent finishes a turn normally and the user has not taken over the pane, the child writes the `done` `.exit` sidecar and the session ends, with no `pmux_done` call. The last assistant message becomes the result for the parent. A user Escape writes the `cancelled` `.exit` sidecar and ends the session, and the parent gets no message. Error stops still exit at once with the error sidecar reported to the parent. An aborted turn schedules no nudge.
+Agents with `auto-exit: true` exit themselves. When the agent finishes a turn normally and the user has not taken over the pane, the child writes the `done` `.exit` sidecar and the session ends, with no `pmux_done` call. The last assistant message becomes the result for the parent. A user Escape writes the `cancelled` `.exit` sidecar and ends the session, and the parent gets no message; so does a quit of the child (Ctrl-C twice, Ctrl-D, `/quit`), which is the same act. Error stops still exit at once with the error sidecar reported to the parent. An aborted turn schedules no nudge.
 
 If the user types into an auto-exit agent pane after its first run, the session becomes user-owned. Auto-exit is disabled from that point. The nudge below takes over.
 

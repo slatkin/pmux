@@ -36,7 +36,8 @@ reach you — see [External orchestrators (Claude Code)](#external-orchestrators
 - **The completion signal** = the `<session>.exit` sidecar file, written by
   `pmux_done` when the child ends: `{"type":"done"}`,
   `{"type":"handoff","message":...}`, `{"type":"ping",...}` or
-  `{"type":"error",...}`. A user who stops the child with Escape
+  `{"type":"error",...}`. A user who stops the child with Escape, or
+  quits it with Ctrl-C twice, Ctrl-D or `/quit`,
   writes `{"type":"cancelled"}` instead: the child exits, its pane closes,
   and no one is woken (see the sidecar wait). The pane-side
   wrapper also writes an `error` sidecar
@@ -157,7 +158,8 @@ with user consent).
      beside its session file (one from an older version) cannot be
      resumed — `resume` exits 1 and its message names `start`, so run
      `start` again. The pane stays open until you close it.
-   - `cancelled` → the user stopped the child in its pane (Escape). The
+   - `cancelled` → the user stopped the child in its pane (Escape, or a
+     quit with Ctrl-C twice, Ctrl-D or `/quit`). The
      child has exited and its pane closes after the grace period; there is
      no result. A `wait --signal status` returns `done` with the message
      `cancelled`. Do not resume or replace the child unless the user asks.
@@ -266,7 +268,8 @@ It carries no report body,
      the wake-up text the wrapper sent you. Answer it with a `resume`
      (see [While it runs / after](#while-it-runs--after)). The pane stays
      open until you close it.
-   - `cancelled` → the user stopped the child in its pane (Escape). The
+   - `cancelled` → the user stopped the child in its pane (Escape, or a
+     quit with Ctrl-C twice, Ctrl-D or `/quit`). The
      child has exited, its pane closes, no report is coming, and the
      wrapper does not wake you. Do not resume or replace the child unless
      the user asks; to continue it, use a `resume` (see

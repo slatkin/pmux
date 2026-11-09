@@ -2250,7 +2250,7 @@ describe("pmux-done nudge", () => {
         fire(handlers, "agent_settled", { aborted: true }, { shutdown: () => {} });
         // The parent's poll consumed the notification before pi exited.
         rmSync(`${sessionFile}.exit`, { force: true });
-        fire(handlers, "session_shutdown", { reason: "user" });
+        fire(handlers, "session_shutdown", { reason: "quit" });
         assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
           type: "cancelled",
         });
@@ -2260,7 +2260,7 @@ describe("pmux-done nudge", () => {
     });
   });
 
-  it("session_shutdown writes nothing after a clean settle or over a terminal sidecar", async () => {
+  it("a user quit ends the child as cancelled, not as the wrapper's crash", async () => {
     await withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
       const { handlers, restoreEnv } = loadChildExtension({
@@ -2269,8 +2269,84 @@ describe("pmux-done nudge", () => {
       });
       try {
         fire(handlers, "agent_start");
-        fire(handlers, "agent_settled", { aborted: false });
-        fire(handlers, "session_shutdown", { reason: "user" });
+        // Ctrl-C twice, Ctrl-D and /quit all arrive as a `quit` shutdown with
+        // no sidecar of the child's own; the wrapper would call that a crash.
+        fire(handlers, "session_shutdown", { reason: "quit" });
+        assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
+          type: "cancelled",
+        });
+        const status = readChildStatus(sessionFile);
+        assert.equal(status?.status, "done");
+        assert.equal(status?.message, "cancelled");
+      } finally {
+        restoreEnv();
+      }
+    });
+  });
+
+  it("a quit keeps the payload the session already wrote", async () => {
+    await withTempDir(async (dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const { handlers, tools, restoreEnv } = loadChildExtension({
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DISABLE: "1",
+      });
+      try {
+        const doneTool = tools.find((t) => t.name === "pmux_done");
+        await doneTool.execute("t1", {}, undefined, undefined, { shutdown: () => {} });
+        // The parent's poll consumed the `done` sidecar before pi exited: the
+        // quit must not turn a completed run into a cancel.
+        rmSync(`${sessionFile}.exit`, { force: true });
+        fire(handlers, "session_shutdown", { reason: "quit" });
+        assert.equal(existsSync(`${sessionFile}.exit`), false);
+      } finally {
+        restoreEnv();
+      }
+    });
+  });
+
+  it("a failed error-sidecar write does not let a quit relabel the run", async () => {
+    await withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      // A directory where the sidecar belongs fails the error sidecar's write;
+      // removing it lets a later, wrong `cancelled` write be observed.
+      mkdirSync(`${sessionFile}.exit`);
+      const { handlers, restoreEnv } = loadChildExtension({
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DISABLE: "1",
+      });
+      try {
+        fire(handlers, "agent_start");
+        fire(
+          handlers,
+          "agent_end",
+          { messages: [{ role: "assistant", stopReason: "error" }] },
+          { shutdown: () => {} },
+        );
+        // The sidecar write failed, so the quit finds no sidecar on disk. The
+        // provider error still stands: its status write is the evidence.
+        assert.equal(readChildStatus(sessionFile)?.status, "blocked");
+        rmSync(`${sessionFile}.exit`, { recursive: true, force: true });
+        fire(handlers, "session_shutdown", { reason: "quit" });
+        assert.equal(existsSync(`${sessionFile}.exit`), false);
+        assert.equal(readChildStatus(sessionFile)?.status, "blocked");
+      } finally {
+        restoreEnv();
+      }
+    });
+  });
+
+  it("session_shutdown writes nothing on a session switch or over a terminal sidecar", async () => {
+    await withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const { handlers, restoreEnv } = loadChildExtension({
+        PI_PMUX_SESSION: sessionFile,
+        PI_PMUX_NUDGE_DISABLE: "1",
+      });
+      try {
+        fire(handlers, "agent_start");
+        // A session switch leaves the run on the new session file.
+        fire(handlers, "session_shutdown", { reason: "reload" });
         assert.equal(existsSync(`${sessionFile}.exit`), false);
       } finally {
         restoreEnv();
@@ -2287,7 +2363,7 @@ describe("pmux-done nudge", () => {
         fire(handlers, "agent_start");
         writeFileSync(`${sessionFile}.exit`, JSON.stringify({ type: "done" }));
         fire(handlers, "agent_settled", { aborted: true });
-        fire(handlers, "session_shutdown", { reason: "user" });
+        fire(handlers, "session_shutdown", { reason: "quit" });
         assert.deepEqual(JSON.parse(readFileSync(`${sessionFile}.exit`, "utf8")), {
           type: "done",
         });
