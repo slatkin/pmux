@@ -239,6 +239,66 @@ describe("publisher", () => {
     exitOneSidebarChild();
   });
 
+  it("publishAfter reserves its slot before the payload loads, so the order holds", async () => {
+    const { spawn, calls } = makeSidebarSpawn();
+    const publisher = createSidebarPublisher({
+      env: { ...ENV, PMUX_EXPLORER_BIN: BIN },
+      exists: binaryThere,
+      spawn,
+    });
+    let release!: (payload: Record<string, unknown>) => void;
+    const loaded = new Promise<Record<string, unknown>>((resolve) => {
+      release = resolve;
+    });
+    publisher.publishAfter("session-start", () => loaded);
+    publisher.publish("user-prompt-submit", { prompt: "task" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, [], "the loaded payload holds the head of the queue");
+    release({ cwd: "/w", worktree: { path: "/wt", branch: "agent/x" } });
+    await flushSidebarQueue();
+    assert.deepEqual(
+      calls.map((call) => call.args[2]),
+      ["session-start", "user-prompt-submit"],
+    );
+    assert.deepEqual(JSON.parse(calls[0].stdin), {
+      cwd: "/w",
+      worktree: { path: "/wt", branch: "agent/x" },
+    });
+  });
+
+  it("a payload that fails to load publishes nothing and the queue moves on", async () => {
+    const { spawn, calls } = makeSidebarSpawn();
+    const publisher = createSidebarPublisher({
+      env: { ...ENV, PMUX_EXPLORER_BIN: BIN },
+      exists: binaryThere,
+      spawn,
+    });
+    publisher.publishAfter("session-start", () => Promise.reject(new Error("tmux is gone")));
+    publisher.publish("activity-log", { tool_name: "bash" });
+    await flushSidebarQueue();
+    assert.deepEqual(
+      calls.map((call) => call.args[2]),
+      ["activity-log"],
+      "one failed read does not poison the chain",
+    );
+  });
+
+  it("publishAfter publishes nothing when a guard fails", async () => {
+    let loads = 0;
+    const { spawn, calls } = makeSidebarSpawn();
+    createSidebarPublisher({
+      env: { ...ENV, PMUX_EXPLORER: "0" },
+      exists: binaryThere,
+      spawn,
+    }).publishAfter("session-start", () => {
+      loads++;
+      return Promise.resolve({ cwd: "/w" });
+    });
+    await flushSidebarQueue();
+    assert.equal(loads, 0);
+    assert.deepEqual(calls, []);
+  });
+
   it("moves the queue on when a hook stalls past the stall bound", async () => {
     const { spawn, calls } = makeSidebarSpawn();
     const publisher = createSidebarPublisher({

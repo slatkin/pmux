@@ -109,9 +109,9 @@ Set `notify.enabled` to `false` in `config.json` to turn these notifications off
 
 If the [pmux-explorer](https://github.com/slatkin/pmux-explorer) sidebar is installed, the extension publishes the activity of every pi session it runs in to it, so a pi pane is listed with its status, its prompt, its last response and its tool activity — whether pmux started that session or not. A blocking extension prompt (for example a permission dialog) marks the pane as waiting for you.
 
-The publishing is fire and forget: it never delays a turn, raises an error or writes to the session output. It needs the sidebar binary, looked up in this order: the `PMUX_EXPLORER_BIN` environment variable, `~/.tmux/plugins/pmux-explorer/bin/pmux-explorer`, `~/.tmux/plugins/pmux-explorer/target/release/pmux-explorer`, then `pmux-explorer` on `PATH`. When none is found, the session publishes nothing and stays quiet.
+The publishing is fire and forget: it never delays a turn, never blocks the session's own thread, raises an error or writes to the session output. It needs the sidebar binary, looked up in this order: the `PMUX_EXPLORER_BIN` environment variable, `~/.tmux/plugins/pmux-explorer/bin/pmux-explorer`, `~/.tmux/plugins/pmux-explorer/target/release/pmux-explorer`, then `pmux-explorer` on `PATH`. When none is found, the session publishes nothing and stays quiet.
 
-The pane's worktree comes from the sidebar's own window options, so a pi pane the sidebar spawned into a worktree shows the worktree and its branch.
+The pane's worktree comes from the sidebar's own window options, so a pi pane the sidebar spawned into a worktree shows the worktree and its branch. That read is a tmux call, and the only one publishing makes on the session's behalf: it runs in the background, behind the publish queue, so a busy or wedged tmux server cannot freeze the session — its startup and its input box do not wait for it.
 
 Set `PMUX_EXPLORER=0` in the environment to turn the publishing off for a session that does have the sidebar.
 

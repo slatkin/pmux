@@ -20,7 +20,7 @@ import {
   runInPane,
   agentPrompt,
   listPaneTargets,
-  readWindowOptions,
+  readWindowOptionsAsync,
   type PaneTargetRow,
 } from "./tmux.ts";
 import { parseSurfaceDefault, type SurfaceDefault } from "./placement.ts";
@@ -110,19 +110,19 @@ function getSupervisor(): Supervisor | undefined {
 
 // ── Sidebar worktree markers (design D7) ──
 
-/** The pane's sidebar worktree, or undefined when the pane has none. */
-function readSidebarWorktree(pane: string | undefined): SidebarWorktree | undefined {
-  if (!pane) return undefined;
-  try {
-    const [worktree, branch] = readWindowOptions(pane, [
-      SIDEBAR_WORKTREE_OPTION,
-      SIDEBAR_BRANCH_OPTION,
-    ]);
-    return worktreeFromOptions({ worktree, branch });
-  } catch {
+/**
+ * The pane's sidebar worktree, or undefined when the pane has none. The tmux
+ * call is async on purpose: `session_start` runs before pi enables its input,
+ * and a synchronous tmux client call there freezes the pane for as long as
+ * the server takes to answer.
+ */
+function readSidebarWorktree(pane: string | undefined): Promise<SidebarWorktree | undefined> {
+  if (!pane) return Promise.resolve(undefined);
+  return readWindowOptionsAsync(pane, [SIDEBAR_WORKTREE_OPTION, SIDEBAR_BRANCH_OPTION]).then(
+    ([worktree, branch]) => worktreeFromOptions({ worktree, branch }),
     // A missing or wedged tmux server must not break the session start.
-    return undefined;
-  }
+    () => undefined,
+  );
 }
 
 function createSupervisorInstance(): Supervisor {

@@ -23,6 +23,7 @@ import {
   pollForExit,
   readPaneOption,
   readScreen,
+  readWindowOptionsAsync,
   runInPane,
   sendEscape,
   splitPane,
@@ -566,6 +567,24 @@ describe("tmux backend", () => {
     });
     assert.equal(readPaneOption("%3", "@pane_session_id"), null);
     assert.equal(calls.length, 1);
+  });
+
+  it("reads window options asynchronously, in the order asked", async () => {
+    const calls: string[][] = [];
+    __setTmuxExecForTests__(async (args) => {
+      calls.push(args);
+      return "/repo/.wt/x\nagent/x";
+    });
+    assert.deepEqual(await readWindowOptionsAsync("%3", ["@wt", "@branch"]), [
+      "/repo/.wt/x",
+      "agent/x",
+    ]);
+    assert.deepEqual(calls, [["display-message", "-p", "-t", "%3", "#{@wt}\n#{@branch}"]]);
+  });
+
+  it("reads an unset window option as an empty string", async () => {
+    __setTmuxExecForTests__(async () => "/repo/.wt/x");
+    assert.deepEqual(await readWindowOptionsAsync("%3", ["@wt", "@branch"]), ["/repo/.wt/x", ""]);
   });
 
   it("reports whether a pane still exists", () => {

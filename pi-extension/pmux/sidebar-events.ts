@@ -30,9 +30,11 @@ export interface SidebarEventsDeps {
   /**
    * The pane's sidebar worktree, or `undefined` when the pane has none.
    * Called only when the publisher can actually publish, so a session with
-   * publishing off never pays the tmux round trip.
+   * publishing off never pays the tmux round trip. It must not block the
+   * calling thread: the read is a tmux call, and the session enables its
+   * input only after this handler returns.
    */
-  readWorktree(): SidebarWorktree | undefined;
+  readWorktree(): Promise<SidebarWorktree | undefined>;
 }
 
 /** The `active` flag of a herdr:blocked payload, or `undefined` when malformed. */
@@ -82,16 +84,19 @@ export function createSidebarEvents(deps: SidebarEventsDeps): { register(pi: Ext
   return {
     register(pi: ExtensionAPI): void {
       pi.on("session_start", (event, ctx) => {
-        // The worktree read is a blocking tmux call; pay it only when the
-        // publisher would actually use the payload.
-        const worktree = deps.publisher.canPublish() ? deps.readWorktree() : undefined;
-        deps.publisher.publish(
-          "session-start",
-          buildSessionStart({
-            source: event?.reason ?? "",
-            session: rememberSession(ctx),
-            worktree,
-          }),
+        const session = rememberSession(ctx);
+        const source = event?.reason ?? "";
+        // The worktree read is a tmux call. Pay it only when the publisher
+        // would use the payload, and never on this thread: pi enables the
+        // input box after this handler returns, so a synchronous tmux call
+        // here freezes the pane until the server answers, and the sidebar
+        // only shows the agent after the hook that call delays.
+        if (!deps.publisher.canPublish()) {
+          deps.publisher.publish("session-start", buildSessionStart({ source, session }));
+          return;
+        }
+        deps.publisher.publishAfter("session-start", async () =>
+          buildSessionStart({ source, session, worktree: await deps.readWorktree() }),
         );
       });
 

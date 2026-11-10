@@ -232,6 +232,18 @@ export interface SidebarPublisher {
    * spawns and writes now, without waiting for the deferred queue.
    */
   publishSync(event: SidebarEvent, payload: Record<string, unknown>): void;
+  /**
+   * Publish a payload that must be loaded asynchronously first.
+   *
+   * The one payload that needs this is `session-start`'s worktree: reading it
+   * is a tmux call, and a tmux call on the session's own thread freezes the
+   * session's event loop — during startup, before the input box accepts a
+   * key, for as long as the server takes to answer. The queue slot is
+   * reserved here and now, before the load starts, so the event still applies
+   * before anything published after it. A load that fails publishes nothing
+   * and lets the queue move on.
+   */
+  publishAfter(event: SidebarEvent, load: () => Promise<Record<string, unknown>>): void;
 }
 
 /**
@@ -318,6 +330,25 @@ export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): Sideba
     queue = queue.then(() => runHook(event, payload));
   };
 
+  // The same queue, with the payload loaded inside its own step: the slot is
+  // taken synchronously, so a later publish cannot overtake this event, and
+  // the load runs off the caller's thread. The step settles even when the
+  // load fails, so one failed read cannot poison the chain.
+  const enqueueLoaded = (
+    event: SidebarEvent,
+    load: () => Promise<Record<string, unknown>>,
+  ): void => {
+    queue = queue.then(async () => {
+      let payload: Record<string, unknown>;
+      try {
+        payload = await load();
+      } catch {
+        return;
+      }
+      await runHook(event, payload);
+    });
+  };
+
   return {
     canPublish(): boolean {
       try {
@@ -342,6 +373,15 @@ export function createSidebarPublisher(deps: SidebarDeps = DEFAULT_DEPS): Sideba
     publishSync(event: SidebarEvent, payload: Record<string, unknown>): void {
       if (!guardsPass()) return;
       emit(event, payload);
+    },
+
+    publishAfter(event: SidebarEvent, load: () => Promise<Record<string, unknown>>): void {
+      try {
+        if (!guardsPass()) return;
+        enqueueLoaded(event, load);
+      } catch {
+        // A missing, broken or slow sidebar never disturbs the session.
+      }
     },
   };
 }

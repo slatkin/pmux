@@ -15,7 +15,13 @@ const BIN = "/opt/sidebar/bin/pmux-explorer";
 const ENV = { TMUX: "/tmp/tmux-0/default", TMUX_PANE: "%7", PMUX_EXPLORER_BIN: BIN };
 const CTX = { cwd: "/work/app", sessionManager: { getSessionId: () => "s1" } };
 
-function makeHarness(options: { env?: NodeJS.ProcessEnv; worktree?: SidebarWorktree } = {}) {
+function makeHarness(
+  options: {
+    env?: NodeJS.ProcessEnv;
+    worktree?: SidebarWorktree;
+    worktreePending?: Promise<SidebarWorktree | undefined>;
+  } = {},
+) {
   const { spawn, calls } = makeSidebarSpawn();
   const worktreeReads = { count: 0 };
   const events = createSidebarEvents({
@@ -26,7 +32,7 @@ function makeHarness(options: { env?: NodeJS.ProcessEnv; worktree?: SidebarWorkt
     }),
     readWorktree: () => {
       worktreeReads.count++;
-      return options.worktree;
+      return options.worktreePending ?? Promise.resolve(options.worktree);
     },
   });
   const handlers = new Map<string, Array<(event?: unknown, ctx?: unknown) => void>>();
@@ -175,6 +181,38 @@ describe("the pi-event mapping", () => {
       cwd: "/work/app",
       session_id: "s1",
       source: "startup",
+    });
+  });
+
+  it("session-start returns before the worktree read resolves, and still holds its order", async () => {
+    // The regression: pi enables the input box after `session_start` returns,
+    // so a synchronous tmux read here froze the pane until the server
+    // answered — which is also when the sidebar finally showed the agent.
+    let release!: (worktree: SidebarWorktree | undefined) => void;
+    const pending = new Promise<SidebarWorktree | undefined>((resolve) => {
+      release = resolve;
+    });
+    const { calls, worktreeReads, fire } = makeHarness({ worktreePending: pending });
+    fire("session_start", { reason: "startup" });
+    // The handler has returned without a tmux call: the read starts on the
+    // queue's next step, off the session's thread, and the spawn waits for it.
+    assert.equal(worktreeReads.count, 0, "the handler returns before any tmux call");
+    fire("input", { text: "hi" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(worktreeReads.count, 1, "the read is out");
+    assert.deepEqual(calls, [], "nothing spawns while the worktree read is out");
+    release({ path: "/repo/.wt/x", branch: "agent/x" });
+    await flushSidebarQueue();
+    assert.deepEqual(
+      calls.map((call) => call.args[2]),
+      ["session-start", "user-prompt-submit"],
+      "the reserved slot keeps session-start ahead of the prompt",
+    );
+    assert.deepEqual(JSON.parse(calls[0].stdin), {
+      cwd: "/work/app",
+      session_id: "s1",
+      source: "startup",
+      worktree: { path: "/repo/.wt/x", branch: "agent/x" },
     });
   });
 

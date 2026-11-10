@@ -401,14 +401,18 @@ export function runInPane(surface: string, line: string): void {
 }
 
 /**
- * Read window options for a pane. `display-message` resolves an option on the
- * pane first and falls through to the pane's window, so window-scope options
- * (for example the sidebar's `@pmux-explorer-spawned-*` markers) are visible
- * from any pane of the window. Unset options come back as empty strings.
+ * Read window options for a pane without blocking the caller's thread: the
+ * startup path takes this one, and a tmux client round trip on the session's
+ * own thread stalls it for as long as the server takes to answer.
+ *
+ * `display-message` resolves an option on the pane first and falls through to
+ * the pane's window, so window-scope options (for example the sidebar's
+ * `@pmux-explorer-spawned-*` markers) are visible from any pane of the window.
+ * Unset options come back as empty strings.
  */
-export function readWindowOptions(pane: string, names: string[]): string[] {
+export async function readWindowOptionsAsync(pane: string, names: string[]): Promise<string[]> {
   const template = names.map((name) => `#{${name}}`).join("\n");
-  const out = tmux(["display-message", "-p", "-t", pane, template]);
+  const out = await tmuxAsync(["display-message", "-p", "-t", pane, template]);
   const values = out.split("\n");
   return names.map((_, i) => values[i] ?? "");
 }
