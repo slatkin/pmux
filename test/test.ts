@@ -1637,21 +1637,12 @@ describe("subagent discovery", () => {
     });
   });
 
-  it("buildPiPromptArgs inserts separator for artifact-backed launches with skills", () => {
+  it("buildPiPromptArgs sends no skill prompts for artifact-backed launches", () => {
+    // pi sends messages after the @file prompt only once the task run ends, so
+    // a /skill: prompt there would start a second run after the task.
     assert.deepEqual(
       testApi.buildPiPromptArgs({
         effectiveSkills: "review,lint",
-        taskDelivery: "artifact",
-        taskArg: "@artifact.md",
-      }),
-      ["", "/skill:review", "/skill:lint", "@artifact.md"],
-    );
-  });
-
-  it("buildPiPromptArgs omits separator for artifact-backed launches without skills", () => {
-    assert.deepEqual(
-      testApi.buildPiPromptArgs({
-        effectiveSkills: undefined,
         taskDelivery: "artifact",
         taskArg: "@artifact.md",
       }),
@@ -1659,7 +1650,7 @@ describe("subagent discovery", () => {
     );
   });
 
-  it("buildPiPromptArgs omits separator for direct launches with skills", () => {
+  it("buildPiPromptArgs puts skill prompts before the task for direct launches", () => {
     assert.deepEqual(
       testApi.buildPiPromptArgs({
         effectiveSkills: "review",

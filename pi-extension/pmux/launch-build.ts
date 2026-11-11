@@ -25,6 +25,7 @@ import {
 import { encodeChildEnv, resolveDenyTools, subagentMarkerEnv } from "./child-env.ts";
 import { LAUNCH_SPEC_VERSION, buildPaneTitle, type LaunchSpec, type ReportMode } from "./launch.ts";
 import { LAUNCH_RECORD_VERSION, type LaunchRecord } from "./launch-record.ts";
+import { buildInlineSkills, parseSkillNames, type SkillLookup } from "./skill-inline.ts";
 import { slugifyName } from "./slug.ts";
 
 /** Absolute path to `pi-extension/pmux`. https://github.com/nodejs/node/issues/37845 */
@@ -423,29 +424,31 @@ export function resolveModeHint(autoExit?: boolean): string {
 /**
  * Build the positional prompt args for a Pi CLI subagent launch.
  *
- * In artifact-backed launches (lineage-only, standalone), Pi's buildInitialMessage()
- * concatenates @file content with messages[0] into one initial prompt. That breaks
- * /skill: expansion because the message no longer starts with "/skill:". Only
- * messages[1..] are sent as separate follow-up prompts where /skill: is recognized.
- *
- * When there are skill prompts AND artifact-backed delivery, we prepend an empty
- * first positional message so that /skill: args land in messages[1..] and arrive
- * as standalone prompts in the child session.
+ * pi joins an `@file` argument with messages[0] into the first prompt and sends
+ * messages[1..] as separate prompts after that prompt ends. A direct launch
+ * keeps its `/skill:` prompts first, so they run before the task. An
+ * artifact-backed launch gets no `/skill:` prompts: they would run after the
+ * whole task, as a second agent run that collides with auto-exit. Its skills
+ * are inlined into the artifact instead (`skill-inline.ts`).
  */
 export function buildPiPromptArgs(params: {
   effectiveSkills?: string;
   taskDelivery: "direct" | "artifact";
   taskArg: string;
 }): string[] {
-  const skillPrompts = (params.effectiveSkills ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((skill) => `/skill:${skill}`);
+  if (params.taskDelivery === "artifact") return [params.taskArg];
+  const skillPrompts = parseSkillNames(params.effectiveSkills).map((skill) => `/skill:${skill}`);
+  return [...skillPrompts, params.taskArg];
+}
 
-  const needsSeparator = params.taskDelivery === "artifact" && skillPrompts.length > 0;
-
-  return [...(needsSeparator ? [""] : []), ...skillPrompts, params.taskArg];
+/** Put a launch's skills before an artifact-backed task, one prompt in all. */
+export function withInlineSkills(
+  task: string,
+  skills: string | undefined,
+  lookup: SkillLookup,
+): string {
+  const inline = buildInlineSkills(skills, lookup);
+  return inline ? `${inline}\n\n${task}` : task;
 }
 
 /** Env for a freshly spawned pi subagent, in launch-spec form. */
@@ -729,7 +732,13 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
         request.artifactDir,
         LAUNCH_CONTEXT_FOLDER,
         contextStem(record, "subagent"),
-        fullTask,
+        withInlineSkills(fullTask, request.skills, {
+          cwd: record.cwd ?? process.cwd(),
+          agentDir:
+            request.localAgentDir && existsSync(request.localAgentDir)
+              ? request.localAgentDir
+              : getAgentConfigDir(),
+        }),
       );
       taskArg = `@${artifactPath}`;
     }
