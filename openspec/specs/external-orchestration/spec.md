@@ -762,12 +762,19 @@ The CLI SHALL provide `ack --session <file> --id <report-id>` for the `file-ack-
 `start` SHALL accept an optional `--fallback` flag that takes no value. With the flag, the child SHALL run on the role's `model-fallback` instead of its `model`, and the launch record SHALL hold that model. Without the flag, `start` SHALL behave as before. All other role values SHALL apply as before.
 
 #### Scenario: Start with the flag
-- **WHEN** `start --fallback` runs for a role with `model: hyper/glm-5.3-flash` and `model-fallback: opencode-go/glm-5.3-flash`
+- **WHEN** the pmux config sets `"lockPinnedModel": false`, and `start --fallback` runs for a role with `model: hyper/glm-5.3-flash` and `model-fallback: opencode-go/glm-5.3-flash`
 - **THEN** the launch spec starts pi with the model `opencode-go/glm-5.3-flash`
 
 #### Scenario: Start without the flag
 - **WHEN** `start` runs for the same role without `--fallback`
 - **THEN** the launch spec starts pi with the model `hyper/glm-5.3-flash`
+
+### Requirement: A pinned model pair locks the start's model choice
+When a role's frontmatter sets both `model:` and `model-fallback:`, the role's model choice is complete. Unless the pmux config sets `"lockPinnedModel": false`, `start --fallback` for such a role MUST exit non-zero with a message on stderr that names the role and the `lockPinnedModel` key, before any file is written or any pane is split. A role that pins only one of the two keys SHALL take the flag as before.
+
+#### Scenario: Fallback refused for a pinned role
+- **WHEN** `start --fallback` runs for a role that sets `model:` and `model-fallback:`, and the config keeps the lock
+- **THEN** it exits non-zero naming the role and `lockPinnedModel`, writes no scratch file, and splits no pane
 
 ### Requirement: Fallback start errors
 `start --fallback` MUST exit non-zero with a message on stderr that names the role and `model-fallback`, before any file is written or any pane is split, when the role has no `model-fallback`. The empty-model check SHALL apply to the model that the flag selects: a role with a `model-fallback` and no `model` SHALL start with the flag.

@@ -225,6 +225,16 @@ async function withHarness(
   }
 }
 
+/** Lift the config's `lockPinnedModel` default (the lock refuses the model
+ * overrides of a role that pins both keys) for a test that spawns the
+ * fallback of such a role. The harness env's temp dir removes the config
+ * again. */
+function liftModelLock(agentRoot: string): void {
+  const configPath = join(agentRoot, "extensions", "pmux", "config.json");
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, JSON.stringify({ lockPinnedModel: false }));
+}
+
 async function waitFor(predicate: () => boolean, label = "condition"): Promise<void> {
   for (let i = 0; i < 200; i++) {
     if (predicate()) return;
@@ -1015,6 +1025,9 @@ describe("model fallback", () => {
 
   it("spawns the role on its model-fallback when fallback is true", async () => {
     await withHarness(async (h, env) => {
+      // The role pins both keys, so the test lifts the config's model lock
+      // (the default refuses the fallback); the env's cleanup removes it.
+      liftModelLock(join(env.dir, "agent"));
       writeAgentFile(
         agentsDir(env),
         "fb-role",
@@ -1037,6 +1050,33 @@ describe("model fallback", () => {
         flagValue(readLaunchSpec(running.launchScriptFile as string).args, "--model"),
         "opencode-go/glm-5.3-flash",
       );
+    });
+  });
+
+  it("refuses the model overrides of a role that pins both model keys, and writes nothing", async () => {
+    await withHarness(async (h, env) => {
+      writeAgentFile(
+        agentsDir(env),
+        "pinned-role",
+        "model: hyper/glm-5.1\nmodel-fallback: opencode-go/glm-5.3-flash",
+        "Your model choice is locked.",
+      );
+
+      // The lock is the default: both the call's `model` and its
+      // `fallback: true` refuse with the error that names the config key.
+      for (const params of [
+        { name: "Scout", task: "survey the repo", agent: "pinned-role", model: "other/model" },
+        { name: "Scout", task: "survey the repo", agent: "pinned-role", fallback: true },
+      ]) {
+        await assert.rejects(
+          h.supervisor.spawn(params, env.ctx),
+          /pins both model and model-fallback/,
+        );
+      }
+
+      // No pane and no record: the error throws before both.
+      assert.deepEqual(h.surfaces, []);
+      assert.deepEqual(allLaunchRecordFiles(env.dir), []);
     });
   });
 
@@ -1115,6 +1155,9 @@ describe("model fallback", () => {
 
   it("resumes a fallback spawn on the record's model, and takes no fallback parameter", async () => {
     await withHarness(async (h, env) => {
+      // The pinned pair would refuse the fallback under the default lock, so
+      // the test lifts it; the env's cleanup removes the config again.
+      liftModelLock(join(env.dir, "agent"));
       writeAgentFile(
         agentsDir(env),
         "fb-role",

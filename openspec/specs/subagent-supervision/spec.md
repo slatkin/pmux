@@ -209,6 +209,25 @@ When `pmux_spawn` is called with `fallback: true` and a `model` value, the call 
 - **WHEN** `pmux_spawn` is called with `fallback: true` and `model: "other/model"`
 - **THEN** the tool result is an error naming both parameters, and no pane is created
 
+### Requirement: A pinned model pair locks the model choice
+When a role's frontmatter sets both `model:` and `model-fallback:`, the role's model choice is complete, and every launch path (`pmux_spawn` and the external orchestrator's `start`) SHALL refuse the call's `model` value and `fallback: true` with an error that names the role and the config key. The refusal SHALL happen before any pane is created, any launch record is written or any scratch file exists. Other overrides (`tools`, `skills`, `cwd`, `name`, `systemPrompt`) SHALL apply as before. The extension config key `lockPinnedModel` (a boolean, default `true`) lifts the lock: when it is `false`, the launch paths keep today's precedence. A role that pins only one of the two keys SHALL stay overridable.
+
+#### Scenario: Model override refused
+- **WHEN** `pmux_spawn` starts a role that sets `model:` and `model-fallback:` with `model: "other/model"`
+- **THEN** the tool result is an error that names the role and `lockPinnedModel`, no pane is created, and no launch record is written
+
+#### Scenario: Fallback refused
+- **WHEN** `pmux_spawn` starts a role that sets `model:` and `model-fallback:` with `fallback: true`
+- **THEN** the tool result is an error that names the role and `lockPinnedModel`, no pane is created, and no launch record is written
+
+#### Scenario: Other overrides still apply
+- **WHEN** `pmux_spawn` starts a role that sets `model:` and `model-fallback:` with `tools: "read"`
+- **THEN** the child launches on the role's `model` with `tools: read`
+
+#### Scenario: The setting lifts the lock
+- **WHEN** the pmux config sets `"lockPinnedModel": false`, and a launch asks for the fallback of a role that pins both keys
+- **THEN** the child launches on the role's `model-fallback`
+
 ### Requirement: Listing shows the fallback model
 `pmux_list` SHALL show a role's `model-fallback` next to its `model`, so the parent can see which roles offer a fallback. A role without `model-fallback` SHALL show no fallback text.
 

@@ -1009,6 +1009,14 @@ async function runStart(options: StartCase): Promise<Started> {
   return runStartWith(main, options);
 }
 
+/** A config file with the `lockPinnedModel` default lifted: a role that
+ * pins both model keys accepts the launch's model overrides again. */
+function unlockedConfigPath(): string {
+  const path = join(mkdtempSync(join(workdir, "unlocked-config-")), "config.json");
+  writeFileSync(path, JSON.stringify({ status: { enabled: true }, lockPinnedModel: false }));
+  return path;
+}
+
 /** Run a failing start and return the error message. */
 async function startFailure(options: StartCase): Promise<string> {
   return startFailureWith(main, options);
@@ -1695,7 +1703,14 @@ describe("cli.ts start --fallback", () => {
       "Body.",
     );
 
-    const withFlag = await runStart({ cwd, role: "fbworker", child: "fb-1", fallback: true });
+    const unlocked = unlockedConfigPath();
+    const withFlag = await runStart({
+      cwd,
+      role: "fbworker",
+      child: "fb-1",
+      fallback: true,
+      configPath: unlocked,
+    });
     assert.equal(withFlag.code, 0);
     assert.equal(argValue(withFlag.spec.args, "--model"), "opencode-go/glm-5.3-flash");
     const record = readLaunchRecord(getLaunchRecordFile(withFlag.json.session));
@@ -1706,6 +1721,25 @@ describe("cli.ts start --fallback", () => {
     const withoutFlag = await runStart({ cwd, role: "fbworker", child: "fb-2" });
     assert.equal(withoutFlag.code, 0);
     assert.equal(argValue(withoutFlag.spec.args, "--model"), "hyper/glm-5.3-flash");
+  });
+
+  it("refuses --fallback for a role that pins both model keys, and creates nothing", async () => {
+    const dir = mkdtempSync(join(workdir, "fb-locked-"));
+    const cwd = mkdtempSync(join(dir, "cwd-"));
+    writeRole(
+      cwd,
+      "pinned",
+      "model: hyper/glm-5.3-flash\nmodel-fallback: opencode-go/glm-5.3-flash",
+      "Body.",
+    );
+    const scratch = join(dir, "scratch");
+    // The lock is the default: the empty agent config dir keeps it on.
+    const message = await startFailure({ cwd, role: "pinned", scratch, fallback: true });
+    assert.match(message, /pins both model and model-fallback/);
+    assert.match(message, /lockPinnedModel/);
+    // The refusal happens in the role resolution, before the scratch
+    // directory is created and before the pane is split.
+    assert.equal(existsSync(scratch), false);
   });
 
   it("fails with exit 1, no scratch file and no pane when the role has no model-fallback", async () => {
@@ -2062,7 +2096,14 @@ describe("cli.ts resume", () => {
       "model: hyper/glm-5.3-flash\nmodel-fallback: opencode-go/glm-5.3-flash",
       "Body.",
     );
-    const started = await runStart({ cwd, role: "fbworker", child: "fb-4", fallback: true });
+    const unlocked = unlockedConfigPath();
+    const started = await runStart({
+      cwd,
+      role: "fbworker",
+      child: "fb-4",
+      fallback: true,
+      configPath: unlocked,
+    });
     paneCalls.length = 0;
 
     // A resume of a fallback child takes no flag: the record's model is the

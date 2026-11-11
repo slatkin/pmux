@@ -62,6 +62,8 @@ import {
   parseSurfaceConfig,
   getDefaultConfigPath,
   loadSurfaceConfig,
+  loadLockPinnedModelConfig,
+  parseLockPinnedModelConfig,
   writeSurfaceConfig,
 } from "../pi-extension/pmux/status.ts";
 import {
@@ -628,6 +630,29 @@ describe("status.ts", () => {
     assert.equal(resolvePlacement("pane", "tab"), "pane");
     assert.equal(resolvePlacement(undefined, "tab"), "tab");
     assert.equal(resolvePlacement(parseSurfacePlacement("window"), "tab"), "tab");
+  });
+
+  it("parses the lockPinnedModel switch: absent or junk keeps the default on", () => {
+    assert.equal(parseLockPinnedModelConfig({ lockPinnedModel: false }), false);
+    assert.equal(parseLockPinnedModelConfig({ lockPinnedModel: true }), true);
+    assert.equal(parseLockPinnedModelConfig({}), true);
+    assert.equal(parseLockPinnedModelConfig({ lockPinnedModel: "no" }), true);
+  });
+
+  it("loads the lockPinnedModel switch from a temp config file, defaulting on", () => {
+    withTempDir((dir) => {
+      const configPath = join(dir, "config.json");
+      const examplePath = join(dir, "config.json.example");
+      writeFileSync(configPath, JSON.stringify({ lockPinnedModel: false }));
+      assert.equal(loadLockPinnedModelConfig(configPath), false);
+
+      writeFileSync(configPath, JSON.stringify({ lockPinnedModel: true }));
+      assert.equal(loadLockPinnedModelConfig(configPath), true);
+
+      // A missing file is not fatal: the default keeps the lock on.
+      assert.equal(loadLockPinnedModelConfig(join(dir, "missing.json")), true);
+      void examplePath;
+    });
   });
 
   it("loads the surface placement from a temp config file", () => {

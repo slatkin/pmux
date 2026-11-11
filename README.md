@@ -88,7 +88,10 @@ A `pmux_spawn` call with `fallback: true` runs that role on its
 hits API limits or errors, or when the user asks for the fallback or alternate
 model. The call fails at once, before any pane opens or any file is written,
 when the role sets no `model-fallback` or when the same call also sets
-`model`. Nothing switches models automatically: pmux never retries a child
+`model`. A role that sets both `model:` and `model-fallback:` also refuses the
+call's `model` value and `fallback: true` while the pmux config keeps
+`"lockPinnedModel": true` (the default): its model choice is locked. Nothing
+switches models automatically: pmux never retries a child
 that failed on its model, so running the role again on its fallback is the
 parent's decision. `pmux_list` shows a role's fallback model next to its
 primary one, and the skill launcher's `start` command takes the same choice as

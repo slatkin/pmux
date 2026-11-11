@@ -611,11 +611,13 @@ describe("resolveLaunchRecord (design D6)", () => {
       );
 
       // The fallback model lands in the record's one `model` field: resume,
-      // the spec builder and the pane title read it without new code.
+      // the spec builder and the pane title read it without new code. The
+      // role pins both keys, so the resolution lifts the config's lock.
       const resolved = resolveLaunchRecord({
         role: "fb-worker",
         anchor: dir,
         overrides: { name: "FB", fallback: true },
+        lockPinnedModel: false,
       });
       assert.equal(resolved.record.model, "opencode-go/glm-5.3-flash");
 
@@ -639,6 +641,69 @@ describe("resolveLaunchRecord (design D6)", () => {
           }),
         (error: Error) => error.message === "fallback conflicts with model: pass one",
       );
+    });
+  });
+
+  it("a role that pins model and model-fallback refuses the call's model overrides", () => {
+    withTempDir((dir) => {
+      writeRoleFile(
+        join(dir, ".pi", "agents"),
+        "pinned-worker",
+        ["model: hyper/glm-5.3-flash", "model-fallback: opencode-go/glm-5.3-flash"].join("\n"),
+        "Body.",
+      );
+
+      // The lock is the default: an undefined switch keeps it on, and both
+      // model overrides — the call's `model` and its `fallback: true` —
+      // refuse with an error that names the role and the config key.
+      for (const overrides of [
+        { name: "P", model: "other/model" },
+        { name: "P", fallback: true },
+      ] as const) {
+        assert.throws(
+          () => resolveLaunchRecord({ role: "pinned-worker", anchor: dir, overrides }),
+          (error: Error) =>
+            error.message ===
+            "role 'pinned-worker' pins both model and model-fallback; the model choice is locked " +
+              '(set "lockPinnedModel": false in the pmux config to allow overrides)',
+        );
+      }
+
+      // The lock covers the model choice only: the other overrides still
+      // apply, and the role's own model resolves untouched.
+      const unlocked = resolveLaunchRecord({
+        role: "pinned-worker",
+        anchor: dir,
+        overrides: { name: "P", tools: "read" },
+      });
+      assert.equal(unlocked.record.model, "hyper/glm-5.3-flash");
+      assert.equal(unlocked.record.tools, "read");
+
+      // The config lifts the lock: both overrides resolve as before.
+      const lifted = resolveLaunchRecord({
+        role: "pinned-worker",
+        anchor: dir,
+        overrides: { name: "P", fallback: true },
+        lockPinnedModel: false,
+      });
+      assert.equal(lifted.record.model, "opencode-go/glm-5.3-flash");
+      const overridden = resolveLaunchRecord({
+        role: "pinned-worker",
+        anchor: dir,
+        overrides: { name: "P", model: "other/model" },
+        lockPinnedModel: false,
+      });
+      assert.equal(overridden.record.model, "other/model");
+
+      // A role that pins only one of the two keys stays overridable: the
+      // lock needs the complete pair.
+      writeRoleFile(join(dir, ".pi", "agents"), "model-only", "model: hyper/glm-5.3-flash");
+      const modelOnly = resolveLaunchRecord({
+        role: "model-only",
+        anchor: dir,
+        overrides: { name: "M", model: "other/model" },
+      });
+      assert.equal(modelOnly.record.model, "other/model");
     });
   });
 
@@ -742,6 +807,8 @@ describe("resolveLaunchRecord (design D6)", () => {
         role: "fb-thinking",
         anchor: dir,
         overrides: { name: "FT", fallback: true },
+        // The role pins both keys; the test lifts the config's lock.
+        lockPinnedModel: false,
       });
       assert.equal(fallback.record.thinking, "medium");
       assert.equal(fallback.record.tools, "read");

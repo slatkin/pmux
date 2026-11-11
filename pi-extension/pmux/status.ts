@@ -235,6 +235,36 @@ export function parseSurfaceConfig(rawConfig: unknown, source = "config.json"): 
   return parseSurfaceDefault(surface) ?? DEFAULT_SURFACE_PLACEMENT;
 }
 
+/** Default for `lockPinnedModel`: a role that pins both `model:` and
+ * `model-fallback:` refuses the call's model overrides. */
+export const DEFAULT_LOCK_PINNED_MODEL = true;
+
+/** Read the optional `lockPinnedModel` switch from parsed config JSON. A
+ * missing or invalid value keeps the default (the lock on). */
+export function parseLockPinnedModelConfig(rawConfig: unknown, source = "config.json"): boolean {
+  if (rawConfig == null || typeof rawConfig !== "object" || Array.isArray(rawConfig)) {
+    invalidStatusConfig(source, "root must be an object");
+  }
+  const value = (rawConfig as Record<string, unknown>).lockPinnedModel;
+  return typeof value === "boolean" ? value : DEFAULT_LOCK_PINNED_MODEL;
+}
+
+/** Load the `lockPinnedModel` switch from the extension config. Like the
+ * surface default, a missing or unreadable file is not fatal — it keeps the
+ * default. */
+export function loadLockPinnedModelConfig(configPath?: string): boolean {
+  try {
+    const { sourcePath, rawConfig } = readStatusConfigFile(
+      configPath ?? getDefaultConfigPath(),
+      STATUS_CONFIG_EXAMPLE_PATH,
+      legacyConfigPaths(configPath, undefined),
+    );
+    return parseLockPinnedModelConfig(JSON.parse(rawConfig), sourcePath);
+  } catch {
+    return DEFAULT_LOCK_PINNED_MODEL;
+  }
+}
+
 /**
  * Legacy config path tried after the resolved config path: config.json at
  * the package root.

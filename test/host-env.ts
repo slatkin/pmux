@@ -38,3 +38,10 @@ process.env.PI_CODING_AGENT_DIR = agentConfigDir;
 process.on("exit", () => {
   rmSync(agentConfigDir, { recursive: true, force: true });
 });
+
+/** The per-process agent config dir, for tests that write extension config
+ * (e.g. `extensions/pmux/config.json`) into it. Removed when the process
+ * ends. */
+export function getTestAgentConfigDir(): string {
+  return agentConfigDir;
+}

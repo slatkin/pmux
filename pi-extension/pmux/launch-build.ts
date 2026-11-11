@@ -238,6 +238,10 @@ export function resolveLaunchRecord(params: {
    * empty-model check (design D1: the spawn requires the role to exist
    * only). */
   requireRole?: boolean;
+  /** The `lockPinnedModel` config switch. Undefined keeps the default: the
+   * lock is on and a role that pins both `model:` and `model-fallback:`
+   * refuses the call's model overrides. */
+  lockPinnedModel?: boolean;
 }): ResolvedLaunchRole {
   const overrides = params.overrides;
   // The conflict is caller input, not role state: it reads before the role
@@ -246,6 +250,22 @@ export function resolveLaunchRecord(params: {
     throw new Error("fallback conflicts with model: pass one");
   }
   const definition = params.role ? loadAgentDefaults(params.role, params.anchor) : null;
+
+  // A role that pins both `model:` and `model-fallback:` has made its model
+  // choice complete, so the call may not split the pair: every launch path
+  // refuses the call's `model` and `fallback` overrides unless the config
+  // lifted the lock (`"lockPinnedModel": false`).
+  if (
+    params.lockPinnedModel !== false &&
+    definition?.model &&
+    definition?.modelFallback &&
+    (overrides.model !== undefined || overrides.fallback === true)
+  ) {
+    throw new Error(
+      `role '${params.role}' pins both model and model-fallback; the model choice is locked ` +
+        `(set "lockPinnedModel": false in the pmux config to allow overrides)`,
+    );
+  }
 
   const fallback = overrides.fallback === true;
   // The model that applies (designs D1 and D2): a fallback launch runs the

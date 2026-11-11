@@ -96,7 +96,10 @@ with user consent).
    primary model hits API limits or errors, or when the user asks for the
    fallback or alternate model. The role must set `model-fallback:`: a
    launch with `--fallback` fails naming the role and `model-fallback`,
-   before any pane opens or any file is written. Nothing switches models
+   before any pane opens or any file is written. A role that sets both
+   `model:` and `model-fallback:` refuses `--fallback` while the pmux
+   config keeps `"lockPinnedModel": true` (the default): its model choice
+   is locked. Nothing switches models
    automatically — nobody retries a child that failed on its model, so
    running it again with `--fallback` is your decision. And `resume` takes
    no `--fallback`: the launch record holds the model launch time chose,

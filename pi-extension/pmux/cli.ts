@@ -79,7 +79,7 @@ import {
   type SpawnStart,
 } from "./dialog-spawn.ts";
 import { findLastAssistantMessage, getNewEntries } from "./session.ts";
-import { loadSurfaceConfig } from "./status.ts";
+import { loadLockPinnedModelConfig, loadSurfaceConfig } from "./status.ts";
 import {
   CHILD_STATUSES,
   isChildStatus,
@@ -319,6 +319,10 @@ function startCommand(values: CliValues, deps: CliDeps, report: ReportMode): num
   const { record, definition } = resolveLaunchRecord({
     role,
     anchor: targetCwd,
+    // The config's `lockPinnedModel` switch (default on) makes a role that
+    // pins both `model:` and `model-fallback:` refuse the call's model
+    // overrides, so the start fails before any scratch file or pane exists.
+    lockPinnedModel: loadLockPinnedModelConfig(deps.configPath),
     overrides: { name, cwd: targetCwd, fallback: values.fallback === true },
     strict: true,
   });

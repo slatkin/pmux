@@ -71,6 +71,7 @@ import {
   forceStatusAfterInterrupt,
   formatStatusAggregate,
   formatTransitionLine,
+  loadLockPinnedModelConfig,
   observeStatus,
   toStatusObservation,
 } from "./status.ts";
@@ -112,11 +113,16 @@ export const SubagentParams = Type.Object({
   systemPrompt: Type.Optional(
     Type.String({ description: "Role instructions to append to the system prompt." }),
   ),
-  model: Type.Optional(Type.String({ description: "Model. Overrides the agent default." })),
+  model: Type.Optional(
+    Type.String({
+      description:
+        "Model. Overrides the agent default. Refused when the role pins both model and model-fallback.",
+    }),
+  ),
   fallback: Type.Optional(
     Type.Boolean({
       description:
-        "true: run the role on its `model-fallback`. Use it when your model hits API limits or errors, or when the user asks for the fallback or alternate model.",
+        "true: run the role on its `model-fallback`. Use it when your model hits API limits or errors, or when the user asks for the fallback or alternate model. Refused when the role pins both model and model-fallback.",
     }),
   ),
   skills: Type.Optional(
@@ -1356,8 +1362,12 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
       // of another cwd, and the tool context does not verify it.
       anchor: process.cwd(),
       // The schema requires `agent`, so the role must exist (design D1); a
-      // role with no `model:` still launches on pi's default model.
+      // role with no `model:` still launches on pi's default model. The
+      // config's `lockPinnedModel` switch (default on) makes a role that
+      // pins both `model:` and `model-fallback:` refuse the call's model
+      // overrides here, so no pane or record exists when it does.
       requireRole: true,
+      lockPinnedModel: loadLockPinnedModelConfig(),
       overrides: {
         name: params.name,
         model: params.model,

@@ -9,5 +9,6 @@
     "enabled": false,
     "threshold": 200000
   },
+  "lockPinnedModel": true,
   "surface": "pane"
 }
