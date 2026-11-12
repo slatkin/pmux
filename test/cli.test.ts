@@ -1085,6 +1085,10 @@ describe("cli.ts start", () => {
     assert.equal(spec.env.PI_PMUX_EXTERNAL_PARENT, "1");
     // A last-mode spec carries no report-protocol marker (design D1).
     assert.equal(spec.env.PI_PMUX_REPORT_PROTOCOL, undefined);
+    // The external child is non-interactive, so the vendored guard runs yolo
+    // and loads next to the done tool (command-hang-guard).
+    assert.equal(spec.env.PI_PMUX_GUARD_MODE, "yolo");
+    assert.match(String(spec.args[spec.args.lastIndexOf("-e") + 1]), /hang-guard\.ts$/);
     assert.equal(spec.env.PI_PMUX_AGENT, "doer");
     assert.equal(spec.env.PI_PMUX_SESSION, res.json.session);
     assert.equal(spec.env.PI_PMUX_SURFACE, undefined);
@@ -4525,6 +4529,26 @@ describe("skills/pmux/launch.ts", () => {
       `send-keys -t %24 -l ${paneCommandLine(SHIM_CLI, started.json.launch)}`,
       "send-keys -t %24 Enter",
     ]);
+  });
+
+  it("fails the lookup when a root holds the CLI and done tool but no hang guard", async () => {
+    const caseDir = mkdtempSync(join(workdir, "shim-no-guard-"));
+    const copy = copyShim(caseDir);
+    const shim = await importShim(copy);
+    const home = mkdtempSync(join(caseDir, "home-"));
+    // The candidate root holds the older pair of files but not hang-guard.ts.
+    const partial = join(caseDir, "partial");
+    mkdirSync(join(partial, "pi-extension", "pmux"), { recursive: true });
+    copyFileSync(SHIM_CLI, join(partial, "pi-extension", "pmux", "cli.ts"));
+    copyFileSync(SHIM_DONE, join(partial, "pi-extension", "pmux", "pmux-done.ts"));
+
+    const message = await startFailureWith(shim.main, {
+      cwd: startCwd(caseDir),
+      env: { HOME: home, PI_PMUX_DIR: partial },
+    });
+    assert.match(message, /pi install git:github\.com\/slatkin\/pmux/);
+    assert.match(message, /hang-guard\.ts/);
+    assert.deepEqual(paneCalls, []);
   });
 
   it("fails naming pi install and the candidates, and records no pane call", async () => {

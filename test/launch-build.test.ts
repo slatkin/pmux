@@ -18,6 +18,7 @@ import {
   SUBAGENTS_CLI_PATH,
   UnknownRoleError,
   buildPiLaunch,
+  detectInstalledHangGuard,
   parentFooter,
   reportFooter,
   resolveLaunchRecord,
@@ -36,6 +37,7 @@ const REPO_ROOT = resolve(TEST_DIR, "..");
 /** The CLI path the send footer must name. */
 const CLI_PATH = join(REPO_ROOT, "pi-extension", "pmux", "cli.ts");
 const PMUX_DONE = join(REPO_ROOT, "pi-extension", "pmux", "pmux-done.ts");
+const PMUX_GUARD = join(REPO_ROOT, "pi-extension", "pmux", "hang-guard.ts");
 
 const TASK = "Collect the shape of the module and report it.";
 const MESSAGE = "Address the review findings.";
@@ -188,6 +190,7 @@ describe("external parent contact (design D3)", () => {
         PI_DENY_TOOLS: "claude",
         PI_SUBAGENT_DEPTH: "1",
         PI_BLACKHOLE_SUBAGENT_MARKERS: "PI_PMUX_SESSION",
+        PI_PMUX_GUARD_MODE: "yolo",
       };
       assert.deepEqual(last.env, sharedEnv);
       // A send-mode spec alone carries the report-protocol marker (design
@@ -301,6 +304,8 @@ describe("external parent contact (design D3)", () => {
         SESSION_FILE,
         "-e",
         PMUX_DONE,
+        "-e",
+        PMUX_GUARD,
         "--model",
         "test-model:high",
         "--append-system-prompt",
@@ -349,6 +354,7 @@ describe("pi parent contact (design D3)", () => {
         PI_CODING_AGENT_DIR: localAgentDir,
         PI_SUBAGENT_DEPTH: "1",
         PI_BLACKHOLE_SUBAGENT_MARKERS: "PI_PMUX_SESSION",
+        PI_PMUX_GUARD_MODE: "yolo",
       });
       assert.equal(spec.parent, undefined);
       assert.equal(spec.report, undefined);
@@ -984,6 +990,88 @@ describe("resolveLaunchRecord (design D6)", () => {
         assert.equal(rooted.definition, null);
       } finally {
         cleanup();
+      }
+    });
+  });
+});
+
+describe("vendored hang guard (2026-11-12-vendor-hang-guard)", () => {
+  it("every pi child loads the guard and a non-interactive child runs yolo", () => {
+    withTempDir((dir) => {
+      const spec = buildPiLaunch(baseRequest(join(dir, "artifacts", "abc"), externalContact()));
+
+      assert.ok(spec.args.includes("-e"));
+      assert.equal(spec.args[spec.args.indexOf("-e", spec.args.indexOf("-e") + 1) + 1], PMUX_GUARD);
+      assert.equal(spec.env.PI_PMUX_GUARD_MODE, "yolo");
+    });
+  });
+
+  it("an interactive child runs observe", () => {
+    withTempDir((dir) => {
+      const spec = buildPiLaunch(
+        baseRequest(join(dir, "artifacts", "abc"), externalContact(), {
+          record: roleRecord({ interactive: true }),
+        }),
+      );
+      assert.equal(spec.env.PI_PMUX_GUARD_MODE, "observe");
+    });
+  });
+
+  it("detects an installed pi-hang-guard package entry in settings", () => {
+    const match = (entry: unknown) =>
+      detectInstalledHangGuard(["/settings.json"], () => JSON.stringify({ packages: [entry] }));
+
+    assert.equal(match("pi-hang-guard"), true, "bare name");
+    assert.equal(match("npm:pi-hang-guard"), true, "npm: prefix");
+    assert.equal(match("npm:pi-hang-guard@0.3.6"), true, "npm: prefix with version");
+    assert.equal(match("/home/me/checkouts/pi-hang-guard"), true, "path basename");
+    assert.equal(
+      match("/home/me/checkouts/pi-hang-guard@0.3.6"),
+      true,
+      "path basename with version",
+    );
+
+    assert.equal(match("pi-something-else"), false, "an unrelated package is no match");
+    assert.equal(
+      match({ name: "pi-hang-guard" }),
+      false,
+      "non-string entries are skipped, not a crash",
+    );
+    assert.equal(
+      detectInstalledHangGuard(["/settings.json"], () => "{}"),
+      false,
+      "no packages array is no match",
+    );
+    assert.equal(
+      detectInstalledHangGuard(["/settings.json"], () => {
+        throw new Error("ENOENT");
+      }),
+      false,
+      "an unreadable settings file is not an error",
+    );
+  });
+
+  it("passes --no-guard only when the child's pi config lists the installed package", () => {
+    withTempDir((dir) => {
+      const agentDir = join(dir, "agent");
+      mkdirSync(agentDir, { recursive: true });
+      writeFileSync(
+        join(agentDir, "settings.json"),
+        JSON.stringify({ packages: ["npm:pi-hang-guard"] }),
+      );
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      try {
+        const spec = buildPiLaunch(baseRequest(join(dir, "artifacts", "abc"), externalContact()));
+        assert.ok(spec.args.includes("--no-guard"), "the installed copy stands down");
+
+        writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [] }));
+        const without = buildPiLaunch(
+          baseRequest(join(dir, "artifacts", "none"), externalContact()),
+        );
+        assert.ok(!without.args.includes("--no-guard"), "no match, no flag");
+      } finally {
+        delete process.env.PI_CODING_AGENT_DIR;
+        rmSync(dir, { recursive: true, force: true });
       }
     });
   });

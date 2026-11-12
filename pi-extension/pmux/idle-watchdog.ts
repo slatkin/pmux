@@ -41,16 +41,18 @@ export const IDLE_NUDGE_TEXT = COMPLETION_NUDGE_TEXT;
  * pane for arbitrarily long, and a reloaded session is theirs to restart.
  *
  * `readOk`/`activity` describe the most recent watch tick: a valid read carries
- * the snapshot (its `updatedAt` is what freshness is measured against); a
- * failed read keeps the last valid snapshot for the age check. If no snapshot
- * has ever been read (a brand-new child that has not written its first one
- * yet), the silence is measured from the first failed read instead, so it is
- * only declared gone after `IDLE_GONE_MS` of continuous failed reads.
+ * the snapshot (its `aliveAt ?? updatedAt` is what freshness is measured
+ * against — a child that heartbeats stays alive however old its last event is,
+ * and one that writes no `aliveAt` falls back to the event clock); a failed
+ * read keeps the last valid snapshot for the age check. If no snapshot has
+ * ever been read (a brand-new child that has not written its first one yet),
+ * the silence is measured from the first failed read instead, so it is only
+ * declared gone after `IDLE_GONE_MS` of continuous failed reads.
  */
 export function decideGoneAction(params: {
   interactive: boolean;
   readOk: boolean;
-  activity: { updatedAt: number } | undefined;
+  activity: { updatedAt: number; aliveAt?: number } | undefined;
   now: number;
   state: IdleWatchState;
 }): "none" | "gone" {
@@ -62,7 +64,7 @@ export function decideGoneAction(params: {
   const staleMs =
     params.activity === undefined
       ? Math.max(0, params.now - (params.state.failedReadSince ?? params.now))
-      : Math.max(0, params.now - params.activity.updatedAt);
+      : Math.max(0, params.now - (params.activity.aliveAt ?? params.activity.updatedAt));
   if (staleMs < IDLE_GONE_MS) {
     params.state.gone = false;
     return "none";

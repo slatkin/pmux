@@ -729,15 +729,19 @@ function runIdleWatchdog(
   const goneAction = decideGoneAction({
     interactive: running.interactive,
     readOk: running.activityRead?.ok === true,
-    activity: running.activity ? { updatedAt: running.activity.updatedAt } : undefined,
+    activity: running.activity
+      ? { updatedAt: running.activity.updatedAt, aliveAt: running.activity.aliveAt }
+      : undefined,
     now,
     state,
   });
   if (goneAction === "gone") {
+    const lastAliveAt = running.activity?.aliveAt;
     const detail =
       running.activity != null && running.activityRead?.ok === true
-        ? `last snapshot ${Math.round((now - running.activity.updatedAt) / 1000)}s old ` +
-          `(phase ${running.activity.phase}, last event ${running.activity.latestEvent})`
+        ? `last liveness ${Math.round((now - (lastAliveAt ?? running.activity.updatedAt)) / 1000)}s old ` +
+          `(last snapshot ${Math.round((now - running.activity.updatedAt) / 1000)}s old, ` +
+          `phase ${running.activity.phase}, last event ${running.activity.latestEvent})`
         : `no valid snapshot for ${Math.round((now - (state.failedReadSince ?? now)) / 1000)}s ` +
           `(${running.activityRead?.reason ?? "missing"}${running.activityRead?.error ? ": " + running.activityRead.error : ""})`;
     try {

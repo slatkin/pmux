@@ -61,6 +61,8 @@ export type StatusObservation =
       waitingSince?: number;
       latestEvent?: string;
       activityLabel?: string;
+      /** The activity file's `hang` block, rendered for the status detail. */
+      hangDetail?: string;
     }
   | {
       snapshot: "missing" | "invalid" | "wrong-id";
@@ -86,6 +88,7 @@ export function toStatusObservation(read: ActivityReadResult): StatusObservation
     waitingSince: activity.waitingSince,
     latestEvent: activity.latestEvent,
     activityLabel: buildActivityLabel(activity),
+    hangDetail: buildHangDetail(activity),
   };
 }
 
@@ -96,6 +99,18 @@ export function buildActivityLabel(activity: SubagentActivityState): string | un
   if (activity.activeScope === "provider") return "provider";
   if (activity.activeScope === "streaming") return "streaming";
   return activity.activeScope;
+}
+
+/**
+ * The activity file's `hang` block as one status detail: the tool, the
+ * measurement, the command class and the level (subagent-supervision spec).
+ * A file without a hang block has no detail.
+ */
+export function buildHangDetail(activity: SubagentActivityState): string | undefined {
+  const hang = activity.hang;
+  if (!hang) return undefined;
+  const tool = activity.toolCallId === hang.toolCallId ? (activity.toolName ?? "tool") : "tool";
+  return `${tool} ${Math.round(hang.observedMs / 1000)}s ${hang.basis} · ${hang.kind} · level ${hang.level}`;
 }
 
 export interface SubagentStatusState {
@@ -113,6 +128,7 @@ export interface SubagentStatusState {
   phase: SubagentActivityPhase | null;
   latestEvent: string | null;
   activityLabel: string | null;
+  hangDetail: string | null;
   snapshotState: StatusSnapshotState;
   snapshotProblemSinceMs: number | null;
   snapshotError: string | null;
@@ -130,6 +146,7 @@ export interface StatusSnapshot {
   waitingDurationText: string | null;
   latestEvent: string | null;
   activityLabel: string | null;
+  hangDetail: string | null;
   snapshotState: StatusSnapshotState;
   snapshotError: string | null;
   snapshotProblemText: string | null;
@@ -430,6 +447,7 @@ export function createStatusState(params: {
     phase: null,
     latestEvent: null,
     activityLabel: null,
+    hangDetail: null,
     snapshotState: params.source === "claude" ? "unseen" : "unseen",
     snapshotProblemSinceMs: null,
     snapshotError: null,
@@ -494,6 +512,7 @@ export function observeStatus(
     phase,
     latestEvent: observation.latestEvent ?? null,
     activityLabel: observation.activityLabel ?? null,
+    hangDetail: observation.hangDetail ?? null,
     snapshotState: "present",
     snapshotProblemSinceMs: null,
     snapshotError: null,
@@ -573,6 +592,7 @@ export function classifyStatus(state: SubagentStatusState, now: number): StatusS
       waitingDurationText: null,
       latestEvent: null,
       activityLabel: null,
+      hangDetail: null,
       snapshotState: state.snapshotState,
       snapshotError: null,
       snapshotProblemText: null,
@@ -623,6 +643,7 @@ export function classifyStatus(state: SubagentStatusState, now: number): StatusS
     waitingDurationText,
     latestEvent: state.latestEvent,
     activityLabel: state.activityLabel,
+    hangDetail: state.hangDetail,
     snapshotState: state.snapshotState,
     snapshotError: state.snapshotError,
     snapshotProblemText,
@@ -659,9 +680,10 @@ export function advanceStatusState(
 
 function formatActiveDetail(snapshot: StatusSnapshot): string {
   const label = displayActivityLabel(snapshot);
-  if (!label) return "active";
+  const hung = snapshot.hangDetail ? `; hung: ${snapshot.hangDetail}` : "";
+  if (!label) return `active${hung}`;
   const duration = snapshot.activeDurationText ? ` ${snapshot.activeDurationText}` : "";
-  return `active (${label}${duration})`;
+  return `active (${label}${duration}${hung})`;
 }
 
 function formatWaitingDetail(snapshot: StatusSnapshot): string {

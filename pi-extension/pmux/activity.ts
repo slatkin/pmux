@@ -11,6 +11,23 @@ import { dirname, join } from "node:path";
 export type SubagentActivityPhase = "starting" | "active" | "waiting" | "done";
 export type SubagentActivityScope = "agent" | "turn" | "provider" | "streaming" | "tool";
 
+/** The command class the vendored hang guard classifies a watched tool call into. */
+export type SubagentActivityHangKind = "interactive" | "watcher" | "one-shot";
+
+/**
+ * The hang state the vendored guard publishes while a watched execution sits
+ * at warning or critical level (command-hang-guard spec). Cleared when the
+ * execution ends or produces output.
+ */
+export interface SubagentActivityHang {
+  toolCallId: string;
+  /** What the measurement counts: output silence, or wall-clock runtime. */
+  basis: "idle" | "runtime";
+  observedMs: number;
+  kind: SubagentActivityHangKind;
+  level: 1 | 2;
+}
+
 export type SubagentActivityEvent =
   | "session_start"
   | "input"
@@ -52,6 +69,13 @@ export interface SubagentActivityState {
   toolName?: string;
   toolStartedAt?: number;
   toolEndedAt?: number;
+  /** Liveness timestamp: refreshed by the heartbeat and by every event write
+   * (command-hang-guard D2). Stale means dead or wedged, never quiet. */
+  aliveAt?: number;
+  /** The running tool's command text, truncated to the activity string limit. */
+  toolCommand?: string;
+  /** The vendored guard's hang state for the running tool, when flagged. */
+  hang?: SubagentActivityHang;
 }
 
 export type ActivityReadResult =
@@ -72,7 +96,7 @@ export interface SubagentActivityRecorder {
   beforeProviderRequest(): void;
   afterProviderResponse(): void;
   messageUpdate(messageEventType?: string): void;
-  toolExecutionStart(toolCallId?: string, toolName?: string): void;
+  toolExecutionStart(toolCallId?: string, toolName?: string, command?: string): void;
   toolCall(toolCallId?: string, toolName?: string): void;
   toolExecutionUpdate(toolCallId?: string, toolName?: string): void;
   toolResult(toolCallId?: string, toolName?: string): void;
@@ -80,6 +104,12 @@ export interface SubagentActivityRecorder {
   callerPing(): void;
   subagentDone(): void;
   sessionShutdown(reason: SubagentShutdownReason): void;
+  /** Refresh `aliveAt` without recording an event: the liveness heartbeat
+   * (command-hang-guard D3). A write failure disables as usual. */
+  heartbeat(): void;
+  /** Add or clear the guard's `hang` block. Not an event: `latestEvent`,
+   * `updatedAt` and the sequence keep meaning "last session event" (D2). */
+  hangUpdate(hang: SubagentActivityHang | undefined): void;
 }
 
 const ACTIVITY_UPDATE_THROTTLE_MS = 500;
@@ -92,6 +122,8 @@ const KNOWN_SCOPES = new Set<SubagentActivityScope>([
   "streaming",
   "tool",
 ]);
+const KNOWN_HANG_KINDS = new Set<SubagentActivityHangKind>(["interactive", "watcher", "one-shot"]);
+const KNOWN_HANG_BASES = new Set<SubagentActivityHang["basis"]>(["idle", "runtime"]);
 const KNOWN_EVENTS = new Set<SubagentActivityEvent>([
   "session_start",
   "input",
@@ -113,6 +145,19 @@ const KNOWN_EVENTS = new Set<SubagentActivityEvent>([
   "session_shutdown",
 ]);
 const MAX_ACTIVITY_STRING_LENGTH = 200;
+
+/**
+ * The `globalThis` key `pmux-done.ts` publishes its recorder under, so a
+ * second child extension (`hang-guard.ts`) shares one writer for the activity
+ * file (command-hang-guard D6). Both extensions load from the same package
+ * root, so one fixed key cannot mix versions.
+ */
+export const ACTIVITY_RECORDER_KEY: symbol = Symbol.for("pmux/activity-recorder");
+
+/** One activity line: no newlines, at most `MAX_ACTIVITY_STRING_LENGTH` chars. */
+function toActivityLine(value: string): string {
+  return value.replace(/\r?\n/g, " ").trim().slice(0, MAX_ACTIVITY_STRING_LENGTH);
+}
 
 export function getSubagentActivityFile(artifactDir: string, runningChildId: string): string {
   return join(artifactDir, "pmux-activity", `${runningChildId}.json`);
@@ -166,6 +211,23 @@ function validateOptionalActivityString(
   return value.length <= MAX_ACTIVITY_STRING_LENGTH ? null : `${fieldName} is too long`;
 }
 
+function validateOptionalHang(object: Record<string, unknown>, fieldName: string): string | null {
+  const value = object[fieldName];
+  if (value == null) return null;
+  if (typeof value !== "object" || Array.isArray(value))
+    return `${fieldName} must be an object when present`;
+  const hang = value as Record<string, unknown>;
+  if (typeof hang.toolCallId !== "string" || hang.toolCallId === "")
+    return `${fieldName}.toolCallId must be a string`;
+  if (typeof hang.basis !== "string" || !KNOWN_HANG_BASES.has(hang.basis as never))
+    return `${fieldName}.basis must be idle or runtime`;
+  if (!Number.isFinite(hang.observedMs)) return `${fieldName}.observedMs must be finite`;
+  if (typeof hang.kind !== "string" || !KNOWN_HANG_KINDS.has(hang.kind as never))
+    return `${fieldName}.kind must be interactive, watcher or one-shot`;
+  if (hang.level !== 1 && hang.level !== 2) return `${fieldName}.level must be 1 or 2`;
+  return null;
+}
+
 function invalidActivity(error: string): ActivityReadResult {
   return { ok: false, reason: "invalid", error };
 }
@@ -210,9 +272,12 @@ function validateActivity(value: unknown, expectedRunningChildId: string): Activ
     validateOptionalInteger(object, "turnIndex"),
     validateOptionalFiniteNumber(object, "toolStartedAt"),
     validateOptionalFiniteNumber(object, "toolEndedAt"),
+    validateOptionalFiniteNumber(object, "aliveAt"),
     validateOptionalActivityString(object, "messageEventType"),
     validateOptionalActivityString(object, "toolCallId"),
     validateOptionalActivityString(object, "toolName"),
+    validateOptionalActivityString(object, "toolCommand"),
+    validateOptionalHang(object, "hang"),
   ].find((error) => error != null);
   if (validationError) return invalidActivity(validationError);
 
@@ -282,6 +347,8 @@ function createNoopRecorder(): SubagentActivityRecorder {
     callerPing() {},
     subagentDone() {},
     sessionShutdown() {},
+    heartbeat() {},
+    hangUpdate() {},
   };
 }
 
@@ -410,6 +477,9 @@ export function createSubagentActivityRecorder(params: {
     const observedAt = now();
     activity.latestEvent = latestEvent;
     activity.updatedAt = observedAt;
+    // Liveness is refreshed by every event write; the heartbeat refreshes it
+    // between events (command-hang-guard D2).
+    activity.aliveAt = observedAt;
     activity.sequence += 1;
     update(activity, observedAt);
 
@@ -540,7 +610,7 @@ export function createSubagentActivityRecorder(params: {
         "throttled",
       );
     },
-    toolExecutionStart(toolCallId, toolName) {
+    toolExecutionStart(toolCallId, toolName, command) {
       record(
         "tool_execution_start",
         (current, observedAt) => {
@@ -548,6 +618,7 @@ export function createSubagentActivityRecorder(params: {
           current.toolCallId = toolCallId;
           current.toolName = toolName;
           current.toolStartedAt = observedAt;
+          current.toolCommand = command ? toActivityLine(command) : undefined;
           markActive(current, "tool", observedAt, true);
         },
         "immediate",
@@ -596,6 +667,7 @@ export function createSubagentActivityRecorder(params: {
           current.toolCallId = toolCallId ?? current.toolCallId;
           current.toolName = toolName ?? current.toolName;
           current.toolEndedAt = observedAt;
+          current.toolCommand = undefined;
           refreshActiveScope(current);
         },
         "immediate",
@@ -610,6 +682,24 @@ export function createSubagentActivityRecorder(params: {
     sessionShutdown(reason) {
       if (reason === "quit") markDone("session_shutdown");
       else disable();
+    },
+    heartbeat() {
+      if (disabled) return;
+      // Liveness only: the heartbeat is not a session event, so `latestEvent`,
+      // `updatedAt` and the sequence stay at the last event (command-hang-guard
+      // D2). An immediate flush keeps a fresh-alive write from racing the
+      // throttle timer.
+      clearPendingFlush();
+      activity.aliveAt = now();
+      flushNow();
+    },
+    hangUpdate(hang) {
+      if (disabled) return;
+      activity.hang = hang;
+      // Immediate: a published or retracted hang block must land on the next
+      // read (command-hang-guard spec), and the guard's sync only sends state
+      // that actually changed.
+      flushNow();
     },
   };
 }

@@ -10,6 +10,14 @@ import {
   type IdleWatchState,
 } from "../pi-extension/pmux/idle-watchdog.ts";
 import { COMPLETION_NUDGE_TEXT } from "../pi-extension/pmux/nudge.ts";
+import {
+  createSubagentActivityRecorder,
+  getSubagentActivityFile,
+  readSubagentActivityFile,
+} from "../pi-extension/pmux/activity.ts";
+import { tempDirHelpers } from "./temp-dir.ts";
+
+const { withTempDir } = tempDirHelpers("idle-watchdog-");
 
 const T0 = 1_000_000;
 
@@ -56,6 +64,73 @@ describe("idle-watchdog decideGoneAction", () => {
         readOk: true,
         activity: { updatedAt: T0 },
         now: T0 + IDLE_GONE_MS + 1,
+        state,
+      }),
+      "none",
+    );
+  });
+
+  it("a fresh aliveAt with an ancient event is not gone", () => {
+    const state: IdleWatchState = { nudges: 0 };
+    // The incident shape: one quiet tool call, heartbeats flowing.
+    assert.equal(
+      decideGoneAction({
+        interactive: false,
+        readOk: true,
+        activity: { updatedAt: T0, aliveAt: T0 + IDLE_GONE_MS - 1 },
+        now: T0 + IDLE_GONE_MS,
+        state,
+      }),
+      "none",
+    );
+  });
+
+  it("a stale aliveAt is gone even when the event clock disagrees", () => {
+    const state: IdleWatchState = { nudges: 0 };
+    assert.equal(
+      decideGoneAction({
+        interactive: false,
+        readOk: true,
+        activity: { updatedAt: T0 + 1_000, aliveAt: T0 },
+        now: T0 + IDLE_GONE_MS,
+        state,
+      }),
+      "gone",
+    );
+  });
+
+  it("a child without aliveAt falls back to updatedAt", () => {
+    const state: IdleWatchState = { nudges: 0 };
+    assert.equal(
+      decideGoneAction({
+        interactive: false,
+        readOk: true,
+        activity: { updatedAt: T0 },
+        now: T0 + IDLE_GONE_MS - 1,
+        state,
+      }),
+      "none",
+    );
+    assert.equal(
+      decideGoneAction({
+        interactive: false,
+        readOk: true,
+        activity: { updatedAt: T0 },
+        now: T0 + IDLE_GONE_MS,
+        state,
+      }),
+      "gone",
+    );
+  });
+
+  it("an interactive child is never declared gone", () => {
+    const state: IdleWatchState = { nudges: 0 };
+    assert.equal(
+      decideGoneAction({
+        interactive: true,
+        readOk: true,
+        activity: { updatedAt: T0, aliveAt: T0 },
+        now: T0 + 10 * IDLE_GONE_MS,
         state,
       }),
       "none",
@@ -293,5 +368,62 @@ describe("the completion reminder", () => {
     // One reminder, one home: the watchdog types into the child's pane the
     // text the child's own extension delivers, so the two cannot drift.
     assert.equal(IDLE_NUDGE_TEXT, COMPLETION_NUDGE_TEXT);
+  });
+});
+
+describe("idle-watchdog incident replay (2026-11-12-vendor-hang-guard)", () => {
+  it("a quiet tool call with flowing heartbeats never goes gone; a frozen aliveAt does", () => {
+    withTempDir((dir) => {
+      let now = T0;
+      const activityFile = getSubagentActivityFile(dir, "child-incident");
+      const recorder = createSubagentActivityRecorder({
+        runningChildId: "child-incident",
+        activityFile,
+        now: () => now,
+      });
+
+      // The incident shape: one tool_execution_start, then silence — but the
+      // child heartbeats every 15 s while it sits inside the quiet call.
+      recorder.sessionStart();
+      recorder.toolExecutionStart("tool-1", "bash", "cargo bench");
+      const state: IdleWatchState = { nudges: 0 };
+      for (now = T0 + 15_000; now <= T0 + 200_000; now += 15_000) {
+        recorder.heartbeat();
+        const read = readSubagentActivityFile(activityFile, "child-incident");
+        assert.ok(read.ok);
+        assert.equal(
+          decideGoneAction({
+            interactive: false,
+            readOk: true,
+            activity: {
+              updatedAt: read.activity.updatedAt,
+              aliveAt: read.activity.aliveAt,
+            },
+            now,
+            state,
+          }),
+          "none",
+          `a live child was declared gone at +${now - T0} ms`,
+        );
+      }
+
+      // The same child with aliveAt frozen for the gone bound is gone: the
+      // supervisor writes the error sidecar and the run finishes as before.
+      const frozenAt = now;
+      for (;;) {
+        now += 15_000;
+        if (now - frozenAt >= IDLE_GONE_MS) break;
+      }
+      assert.equal(
+        decideGoneAction({
+          interactive: false,
+          readOk: true,
+          activity: { updatedAt: T0 + 15_000, aliveAt: frozenAt },
+          now,
+          state,
+        }),
+        "gone",
+      );
+    });
   });
 });

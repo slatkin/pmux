@@ -81,6 +81,7 @@ import {
   shouldAutoExitOnAgentEnd,
   shouldScheduleAgentEndNudge,
   findLatestAssistantError,
+  startActivityHeartbeat,
 } from "../pi-extension/pmux/pmux-done.ts";
 import {
   DEFAULT_SUBAGENT_TOOLS,
@@ -1180,6 +1181,7 @@ describe("status.ts", () => {
       waitingSince: 1_500,
       latestEvent: "tool_execution_start",
       activityLabel: "bash",
+      hangDetail: undefined,
     });
     assert.equal(
       buildActivityLabel({
@@ -1198,6 +1200,46 @@ describe("status.ts", () => {
       }),
       "tool",
     );
+  });
+
+  it("renders the activity file's hang block as the child's status detail", () => {
+    const read = toStatusObservation({
+      ok: true,
+      activity: {
+        version: 1,
+        runningChildId: "child-1",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+        sequence: 7,
+        latestEvent: "tool_execution_start",
+        phase: "active",
+        agentActive: true,
+        turnActive: true,
+        providerActive: false,
+        toolActive: true,
+        activeScope: "tool",
+        activeSince: 2_000,
+        toolCallId: "tool-9",
+        toolName: "bash",
+        hang: {
+          toolCallId: "tool-9",
+          basis: "idle",
+          observedMs: 150_000,
+          kind: "one-shot",
+          level: 2,
+        },
+      },
+    });
+    assert.ok(read.snapshot === "present");
+    assert.equal(read.hangDetail, "bash 150s idle · one-shot · level 2");
+
+    // The status line carries the hang detail, and the snapshot stays a live
+    // active run: surfaced, not punished.
+    let state = createStatusState({ source: "pi", startTimeMs: 0 });
+    state = observeStatus(state, read, 2_000);
+    const snapshot = classifyStatus(state, 10_000);
+    assert.equal(snapshot.kind, "active");
+    assert.match(formatStatusLine("Worker", snapshot), /hung: bash 150s idle · one-shot · level 2/);
   });
 
   it("gives a non-active phase no activity label", () => {
@@ -3276,6 +3318,12 @@ describe("subagent activity snapshots", () => {
         { runningChildId: 42 },
         { toolActive: "yes" },
         { toolName: "bad\nname" },
+        { aliveAt: "bad" },
+        { toolCommand: "bad\nname" },
+        { toolCommand: "x".repeat(201) },
+        { hang: { toolCallId: "t", basis: "sideways", observedMs: 1, kind: "one-shot", level: 1 } },
+        { hang: { toolCallId: "t", basis: "idle", observedMs: 1, kind: "one-shot", level: 3 } },
+        { hang: "hung" },
       ];
 
       for (const [index, overrides] of cases.entries()) {
@@ -3314,6 +3362,126 @@ describe("subagent activity snapshots", () => {
       assert.ok(read.ok);
       assert.equal(read.activity.toolActive, false);
       assert.equal(read.activity.activeScope, "turn");
+    });
+  });
+
+  it("carries the optional hang-guard fields through a write and a read", () => {
+    withTempDir((dir) => {
+      const currentNow = 1_000;
+      const activityFile = getSubagentActivityFile(dir, "child-hang");
+      const recorder = createSubagentActivityRecorder({
+        runningChildId: "child-hang",
+        activityFile,
+        now: () => currentNow,
+      });
+
+      recorder.sessionStart();
+      // A command with a newline is flattened and a long one truncated to the
+      // activity string limit, so the write can never produce an invalid file.
+      recorder.toolExecutionStart("tool-9", "bash", `cargo build\n--release ${"x".repeat(300)}`);
+      let read = readSubagentActivityFile(activityFile, "child-hang");
+      assert.ok(read.ok);
+      assert.equal(read.activity.toolCommand?.length, 200);
+      assert.ok(!read.activity.toolCommand?.includes("\n"));
+      assert.equal(read.activity.aliveAt, 1_000);
+
+      recorder.hangUpdate({
+        toolCallId: "tool-9",
+        basis: "idle",
+        observedMs: 90_000,
+        kind: "one-shot",
+        level: 1,
+      });
+      read = readSubagentActivityFile(activityFile, "child-hang");
+      assert.ok(read.ok);
+      assert.deepEqual(read.activity.hang, {
+        toolCallId: "tool-9",
+        basis: "idle",
+        observedMs: 90_000,
+        kind: "one-shot",
+        level: 1,
+      });
+
+      // Clearing the hang block lands on the next write.
+      recorder.hangUpdate(undefined);
+      read = readSubagentActivityFile(activityFile, "child-hang");
+      assert.ok(read.ok);
+      assert.equal(read.activity.hang, undefined);
+
+      recorder.toolExecutionEnd("tool-9", "bash");
+      read = readSubagentActivityFile(activityFile, "child-hang");
+      assert.ok(read.ok);
+      assert.equal(read.activity.toolCommand, undefined);
+    });
+  });
+
+  it("reads an activity file that carries none of the new hang-guard fields", () => {
+    withTempDir((dir) => {
+      mkdirSync(join(dir, "pmux-activity"), { recursive: true });
+      const activityFile = getSubagentActivityFile(dir, "child-legacy");
+      const legacy = validActivity({ runningChildId: "child-legacy" });
+      assert.equal("aliveAt" in legacy, false);
+      assert.equal("toolCommand" in legacy, false);
+      assert.equal("hang" in legacy, false);
+      writeFileSync(activityFile, `${JSON.stringify(legacy)}\n`);
+
+      const read = readSubagentActivityFile(activityFile, "child-legacy");
+      assert.ok(read.ok);
+    });
+  });
+
+  it("heartbeat refreshes aliveAt without turning it into an event", () => {
+    withTempDir((dir) => {
+      let currentNow = 1_000;
+      const activityFile = getSubagentActivityFile(dir, "child-beat");
+      const recorder = createSubagentActivityRecorder({
+        runningChildId: "child-beat",
+        activityFile,
+        now: () => currentNow,
+      });
+
+      recorder.sessionStart();
+      currentNow = 16_000;
+      recorder.heartbeat();
+
+      const read = readSubagentActivityFile(activityFile, "child-beat");
+      assert.ok(read.ok);
+      assert.equal(read.activity.aliveAt, 16_000, "the heartbeat freshens liveness");
+      assert.equal(read.activity.updatedAt, 1_000, "the heartbeat is not a session event");
+      assert.equal(read.activity.latestEvent, "session_start");
+    });
+  });
+
+  it("a recorder with no events still refreshes aliveAt on the heartbeat interval", async () => {
+    await withTempDir(async (dir) => {
+      let currentNow = 1_000;
+      const activityFile = getSubagentActivityFile(dir, "child-interval");
+      const recorder = createSubagentActivityRecorder({
+        runningChildId: "child-interval",
+        activityFile,
+        now: () => currentNow,
+      });
+
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const stop = startActivityHeartbeat(recorder, 10);
+      try {
+        currentNow = 16_000;
+        await sleep(50);
+        let read = readSubagentActivityFile(activityFile, "child-interval");
+        assert.ok(read.ok);
+        assert.equal(read.activity.aliveAt, 16_000, "the interval writes without any event");
+
+        // Shutdown stops the writes: after stop(), a later clock advance lands
+        // nowhere.
+        stop();
+        currentNow = 60_000;
+        await sleep(50);
+        read = readSubagentActivityFile(activityFile, "child-interval");
+        assert.ok(read.ok);
+        assert.equal(read.activity.aliveAt, 16_000, "a stopped heartbeat writes nothing");
+      } finally {
+        stop();
+      }
     });
   });
 
@@ -3377,6 +3545,28 @@ describe("subagent interruption", () => {
       registeredTools.some((tool) => tool.name === "pmux_interrupt"),
       true,
     );
+  });
+
+  it("registers the hang guard for the parent session and keeps one ticker across loads", () => {
+    const timerKey = Symbol.for("pmux/hang-guard-timer");
+    delete (globalThis as unknown as Record<symbol, unknown>)[timerKey];
+    try {
+      const { api } = createMockExtensionApi();
+      (subagentsModule as any).default(api);
+      const firstStop = (globalThis as unknown as Record<symbol, unknown>)[timerKey];
+      assert.equal(typeof firstStop, "function", "the guard registered a ticker stop");
+
+      // A second module load retires the first load's ticker per the
+      // Symbol.for pattern, leaving exactly one ticker standing.
+      (subagentsModule as any).default(api);
+      const secondStop = (globalThis as unknown as Record<symbol, unknown>)[timerKey];
+      assert.equal(typeof secondStop, "function");
+      assert.notEqual(secondStop, firstStop);
+    } finally {
+      const stop = (globalThis as unknown as Record<symbol, unknown>)[timerKey] as
+        (() => void) | undefined;
+      stop?.();
+    }
   });
 
   it("formats exit code 130 as an ordinary failure", () => {
@@ -4650,6 +4840,10 @@ describe("pmux_spawn role resolution (required-role spec)", () => {
         assert.equal(record.agent, "no-model-role");
         assert.equal("model" in record, false);
         assert.equal(spec.env.PI_PMUX_AGENT, "no-model-role");
+        // The pi-parent launch loads the vendored guard too; this role has no
+        // auto-exit, so it is interactive and the resolved mode is observe.
+        assert.match(String(spec.args[spec.args.lastIndexOf("-e") + 1]), /hang-guard\.ts$/);
+        assert.equal(spec.env.PI_PMUX_GUARD_MODE, "observe");
 
         // End the run through the sidecar so no watcher outlives the test.
         writeFileSync(`${result.details.sessionFile}.exit`, JSON.stringify({ type: "done" }));

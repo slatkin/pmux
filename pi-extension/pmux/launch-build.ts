@@ -12,7 +12,7 @@
  * record a resume reads, so the pi parent and the external orchestrator
  * cannot resolve a role differently.
  */
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -41,6 +41,19 @@ export const SUBAGENTS_CLI_PATH = join(SUBAGENTS_DIR, "cli.ts");
 /** The completion tool every pi child loads. */
 const SUBAGENTS_DONE_PATH = join(SUBAGENTS_DIR, "pmux-done.ts");
 
+/** The vendored command-hang guard every pi child loads next to the done tool. */
+const SUBAGENTS_GUARD_PATH = join(SUBAGENTS_DIR, "hang-guard.ts");
+
+/**
+ * The vendored hang-guard mode the launch resolves for a child (command-hang-guard
+ * spec): a non-interactive child defaults to `yolo`, an interactive one to
+ * `observe`. The child's guard honours the same rule, but the env key makes the
+ * resolved mode visible to the spec and to `--no-guard`-deconflicted children.
+ */
+export function resolveGuardModeEnv(interactive: boolean): string {
+  return interactive ? "observe" : "yolo";
+}
+
 /**
  * The report protocol a send-mode launch selects (design D1): the spec-env
  * marker every `file-ack-v1` behaviour reads — `send` from its process env,
@@ -49,6 +62,41 @@ const SUBAGENTS_DONE_PATH = join(SUBAGENTS_DIR, "pmux-done.ts");
  * legacy raw-text behaviour even when the package's CLI changes under it.
  */
 export const REPORT_PROTOCOL = "file-ack-v1";
+
+/**
+ * Detect an installed `pi-hang-guard` package in the pi settings the child
+ * will load (command-hang-guard D7): a `packages` entry naming the package —
+ * bare, `npm:`-prefixed, or a path whose basename matches — means the launch
+ * passes `--no-guard` so the installed copy stands down and the child runs
+ * exactly one watchdog. Best-effort by design: a miss means two engines warn
+ * twice, never corruption. An absent or unreadable settings file is not an
+ * error.
+ */
+export function detectInstalledHangGuard(
+  settingsPaths: readonly string[],
+  readFile: (path: string) => string = (path) => readFileSync(path, "utf8"),
+): boolean {
+  for (const path of settingsPaths) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFile(path));
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
+    const packages = (parsed as { packages?: unknown }).packages;
+    if (!Array.isArray(packages)) continue;
+    for (const entry of packages) {
+      const name = typeof entry === "string" ? entry : undefined;
+      if (name === undefined) continue;
+      if (name === "pi-hang-guard" || name.startsWith("npm:pi-hang-guard")) return true;
+      const segments = name.replace(/^npm:/, "").split("/");
+      const last = segments[segments.length - 1] ?? "";
+      if (/^pi-hang-guard(?:@|$)/.test(last)) return true;
+    }
+  }
+  return false;
+}
 
 /**
  * How the launch reaches its parent (design D3): one tagged input, so the pi
@@ -495,6 +543,9 @@ export function buildSpawnEnvParts(params: {
   return env;
 }
 
+/** The child-env key the vendored guard reads its mode from. */
+export const GUARD_MODE_ENV = "PI_PMUX_GUARD_MODE";
+
 /**
  * The parent-contact footer appended to the brief. There is no send channel
  * back to the parent, so the report is the child's last assistant message.
@@ -608,6 +659,21 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
   const piArgs: string[] = ["--session", run.sessionFile];
 
   piArgs.push("-e", SUBAGENTS_DONE_PATH);
+  // The vendored command-hang guard runs next to the done tool (command-hang-guard
+  // D1): one argv change here covers the pi parent and the external orchestrator.
+  piArgs.push("-e", SUBAGENTS_GUARD_PATH);
+
+  // The child's pi config may also list an installed pi-hang-guard package;
+  // then the installed copy stands down via --no-guard, so the child runs
+  // exactly one watchdog (command-hang-guard D7). A missing settings file is
+  // not an error: the detection is best-effort.
+  const guardSettingsPaths = [
+    join(getAgentConfigDir(), "settings.json"),
+    join(record.cwd ?? process.cwd(), ".pi", "settings.json"),
+  ];
+  if (detectInstalledHangGuard(guardSettingsPaths)) {
+    piArgs.push("--no-guard");
+  }
 
   if (record.model) {
     const model = record.thinking ? `${record.model}:${record.thinking}` : record.model;
@@ -668,6 +734,9 @@ export function buildPiLaunch(request: PiLaunchRequest): LaunchSpec {
         }
       : { externalParent: true }),
   });
+  // The launch resolves the guard mode once from run interactivity (the same
+  // rule the child's guard applies), so the spec carries it (command-hang-guard).
+  spawnEnv[GUARD_MODE_ENV] = resolveGuardModeEnv(record.interactive);
 
   if (parentContact.kind === "external") {
     // Today's external bytes (design D3): the follow-up text or the brief, the

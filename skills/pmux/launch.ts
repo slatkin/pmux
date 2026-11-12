@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 /** Paths that mark a package root, relative to it. */
 const CLI_RELATIVE = join("pi-extension", "pmux", "cli.ts");
 const DONE_RELATIVE = join("pi-extension", "pmux", "pmux-done.ts");
+const GUARD_RELATIVE = join("pi-extension", "pmux", "hang-guard.ts");
 
 /** Install command named by the not-found error. */
 const INSTALL_COMMAND = "pi install git:github.com/slatkin/pmux";
@@ -54,16 +55,20 @@ export function packageRootCandidates(shimPath: string, env: NodeJS.ProcessEnv):
   return candidates;
 }
 
-/** First candidate holding both extension entry points; throws otherwise. */
+/** First candidate holding the extension entry points; throws otherwise. */
 export function findPackageRoot(shimPath: string, env: NodeJS.ProcessEnv): string {
   const candidates = packageRootCandidates(shimPath, env);
   for (const candidate of candidates) {
-    if (existsSync(join(candidate, CLI_RELATIVE)) && existsSync(join(candidate, DONE_RELATIVE))) {
+    if (
+      existsSync(join(candidate, CLI_RELATIVE)) &&
+      existsSync(join(candidate, DONE_RELATIVE)) &&
+      existsSync(join(candidate, GUARD_RELATIVE))
+    ) {
       return candidate;
     }
   }
   throw new Error(
-    `Cannot find the pmux extension (no ${CLI_RELATIVE} and ${DONE_RELATIVE} in: ` +
+    `Cannot find the pmux extension (no ${CLI_RELATIVE}, ${DONE_RELATIVE} and ${GUARD_RELATIVE} in: ` +
       `${candidates.join(", ")}). Install it with: ${INSTALL_COMMAND}`,
   );
 }

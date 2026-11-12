@@ -24,7 +24,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Box, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { writeFileSync } from "node:fs";
-import { createSubagentActivityRecorder } from "./activity.ts";
+import {
+  ACTIVITY_RECORDER_KEY,
+  createSubagentActivityRecorder,
+  type SubagentActivityRecorder,
+} from "./activity.ts";
 import { decodeChildEnv } from "./child-env.ts";
 import {
   alertText,
@@ -110,6 +114,31 @@ export function shouldAutoExitOnAgentEnd(messages: any[] | undefined): boolean {
 export interface SubagentErrorInfo {
   errorMessage: string;
   stopReason: "error";
+}
+
+/** How often the child refreshes `aliveAt` without an event (D3). Well under
+ * the parent's 180 s gone bound, so a stale file means dead-or-wedged. */
+export const HEARTBEAT_INTERVAL_MS = 15_000;
+
+/**
+ * The always-on liveness heartbeat (command-hang-guard D3): one `unref`'d
+ * interval that calls `recorder.heartbeat()`, so `aliveAt` stays fresh even
+ * inside one quiet tool call. Returns the stop function `session_shutdown`
+ * calls; the heartbeat must survive `PI_PMUX_GUARD_DISABLED`, which is why it
+ * lives here and not in the guard.
+ */
+export function startActivityHeartbeat(
+  recorder: SubagentActivityRecorder,
+  intervalMs: number = HEARTBEAT_INTERVAL_MS,
+): () => void {
+  const timer = setInterval(() => recorder.heartbeat(), intervalMs);
+  timer.unref();
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(timer);
+  };
 }
 
 /**
@@ -198,6 +227,14 @@ export default function (pi: ExtensionAPI) {
     runningChildId: childEnv.id,
     activityFile: childEnv.activityFile,
   });
+
+  // Publish the recorder for sibling child extensions (command-hang-guard D6):
+  // `hang-guard.ts` fetches it from `globalThis` and no-ops when absent, so
+  // two extensions never race writes to the same activity file.
+  (globalThis as unknown as Record<symbol, unknown>)[ACTIVITY_RECORDER_KEY] = recorder;
+
+  // The liveness heartbeat (D3): started with the session, stopped at shutdown.
+  let stopHeartbeat: (() => void) | null = null;
 
   // ── Agent completion nudge configuration ──
   /** Delay (ms) before sending a nudge after agent_end. Configurable via env var. */
@@ -383,6 +420,7 @@ export default function (pi: ExtensionAPI) {
     denied = childEnv.denyTools;
 
     renderWidget(ctx, null);
+    stopHeartbeat ??= startActivityHeartbeat(recorder);
   });
 
   pi.on("input", () => {
@@ -542,7 +580,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_execution_start", (event) => {
-    recorder.toolExecutionStart((event as any).toolCallId, (event as any).toolName);
+    const toolEvent = event as { toolCallId?: string; toolName?: string; args?: unknown };
+    const command =
+      typeof (toolEvent.args as { command?: unknown } | undefined)?.command === "string"
+        ? (toolEvent.args as { command: string }).command
+        : undefined;
+    recorder.toolExecutionStart(toolEvent.toolCallId, toolEvent.toolName, command);
   });
 
   pi.on("tool_call", (event) => {
@@ -563,6 +606,8 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (event) => {
     clearNudgeTimer();
+    stopHeartbeat?.();
+    stopHeartbeat = null;
     recorder.sessionShutdown((event as any).reason);
     // A quit — Ctrl-C twice, Ctrl-D, `/quit`, or a signal — is the user
     // stopping the child, the same act as an Escape abort. Without a sidecar

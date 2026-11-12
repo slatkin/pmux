@@ -24,6 +24,7 @@ import {
   type PaneTargetRow,
 } from "./tmux.ts";
 import { parseSurfaceDefault, type SurfaceDefault } from "./placement.ts";
+import hangGuardExtension from "./hang-guard.ts";
 import {
   createSupervisor,
   SubagentParams,
@@ -732,6 +733,14 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     publisher: sidebar,
     readWorktree: () => readSidebarWorktree(process.env.TMUX_PANE),
   }).register(pi);
+
+  // ── Command hang guard (openspec/changes/2026-11-12-vendor-hang-guard) ──
+  //
+  // The parent session runs the vendored watchdog in its observe default: a
+  // human is there to see the warnings. Children load the same guard through
+  // their own `-e` file; its registration retires a previous load's ticker
+  // through the Symbol.for key, so a /reload leaves one ticker standing.
+  hangGuardExtension(pi);
 
   // ── Thinking feed (openspec/changes/archive/2026-10-27-thinking-feed) ──
   //

@@ -508,6 +508,8 @@ describe("supervisor launch", () => {
           running.sessionFile,
           "-e",
           join(SUBAGENTS_DIR, "pmux-done.ts"),
+          "-e",
+          join(SUBAGENTS_DIR, "hang-guard.ts"),
           "--model",
           "test-model",
           "--append-system-prompt",
@@ -530,6 +532,8 @@ describe("supervisor launch", () => {
           ),
           PI_SUBAGENT_DEPTH: "1",
           PI_BLACKHOLE_SUBAGENT_MARKERS: "PI_PMUX_SESSION",
+          // Interactive role (no auto-exit): the resolved guard mode.
+          PI_PMUX_GUARD_MODE: "observe",
         });
         assert.equal("PI_PMUX_AUTO_EXIT" in spec.env, false);
 
