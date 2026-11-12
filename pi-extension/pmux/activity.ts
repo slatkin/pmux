@@ -402,12 +402,19 @@ export function createSubagentActivityRecorder(params: {
   runningChildId?: string;
   activityFile?: string;
   now?: () => number;
+  /** Called on every `hangUpdate` with the new hang state, so the status
+   * writer in `pmux-done.ts` can mirror the guard's hang into
+   * `<session>.status` (orchestrator-notification spec). No tool events fire
+   * during a quiet hang, so this callback is the only trigger a status
+   * refresh gets. */
+  onHangUpdate?: (hang: SubagentActivityHang | undefined) => void;
 }): SubagentActivityRecorder {
   const runningChildId = params.runningChildId?.trim();
   const activityFile = params.activityFile?.trim();
   if (!runningChildId || !activityFile) return createNoopRecorder();
 
   const now = params.now ?? (() => Date.now());
+  const onHangUpdate = params.onHangUpdate;
   const createdAt = now();
   const activity: SubagentActivityState = {
     version: 1,
@@ -697,9 +704,10 @@ export function createSubagentActivityRecorder(params: {
       if (disabled) return;
       activity.hang = hang;
       // Immediate: a published or retracted hang block must land on the next
-      // read (command-hang-guard spec), and the guard's sync only sends state
-      // that actually changed.
+      // read (command-hang-guard spec). The guard re-sends the live hang each
+      // tick so `observedMs` stays current.
       flushNow();
+      onHangUpdate?.(hang);
     },
   };
 }

@@ -130,6 +130,10 @@ Warnings SHALL be reported in the pane in every session. In a pmux child with a 
 - **WHEN** the same tool call stays at critical level across later ticks
 - **THEN** no further parent message is appended for that level
 
+#### Scenario: External orchestrator status file
+- **WHEN** a watched execution sits at warning or critical level in a pmux child whose parent is an external orchestrator
+- **THEN** the child's status record carries the same optional `hang` block as the activity file while the hang lasts, and drops it when the execution ends or produces output
+
 ### Requirement: Single watchdog per session
 
 A pmux child SHALL run exactly one command watchdog. When the pi configuration that the child will load lists an installed `pi-hang-guard` package, the launch SHALL pass `--no-guard` to the child so the installed copy stands down; when no such package is configured the flag SHALL NOT be passed.

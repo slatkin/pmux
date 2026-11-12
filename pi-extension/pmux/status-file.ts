@@ -3,8 +3,9 @@
  *
  * A child that runs this extension (a session with `PI_PMUX_SESSION` set)
  * writes its live status next to its session file: one JSON object with
- * `status` (`working`, `idle`, `done`, `blocked`), `at` and an optional
- * `message`. Each write replaces the whole file (a temp file renamed over
+ * `status` (`working`, `idle`, `done`, `blocked`), `at`, an optional `message`
+ * and an optional `hang` block while a watched tool call sits at warning or
+ * critical level (orchestrator-notification spec). Each write replaces the whole file (a temp file renamed over
  * the target), so a reader never sees a partial object. A terminal `done` or
  * `blocked` write latches for the rest of the child process: later writes are
  * skipped. A failed write never throws — it cannot delay a turn, the sidecar
@@ -12,6 +13,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import type { SubagentActivityHang } from "./activity.ts";
 
 export type ChildStatus = "working" | "idle" | "done" | "blocked";
 
@@ -37,6 +39,10 @@ export interface ChildStatusRecord {
   at?: string;
   /** The ping question or the provider error text; absent for `working`/`idle`. */
   message?: string;
+  /** The guard's hang for the running tool call, while it lasts (orchestrator
+   * notification spec). Absent when no watched call sits at warning/critical,
+   * and never present on a terminal record. */
+  hang?: SubagentActivityHang;
 }
 
 /** Session files that already hold a terminal status in this process. */
@@ -55,12 +61,14 @@ export function writeChildStatus(
   sessionFile: string,
   status: ChildStatus,
   message?: string,
+  hang?: SubagentActivityHang,
 ): boolean {
   if (terminalWrites.has(sessionFile)) return false;
   const record: ChildStatusRecord = {
     status,
     at: new Date().toISOString(),
     ...(message !== undefined ? { message } : {}),
+    ...(hang !== undefined ? { hang } : {}),
   };
   try {
     // A unique temp name keeps concurrent writers from clobbering each other's

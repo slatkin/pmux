@@ -46,6 +46,35 @@ describe("cli wait", () => {
     });
   });
 
+  it("prints the hang block of a status record with the wanted status", async () => {
+    await withTempDir(async (dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      writeChildStatus(sessionFile, "working", undefined, {
+        toolCallId: "t1",
+        basis: "idle",
+        observedMs: 90_000,
+        kind: "one-shot",
+        level: 2,
+      });
+      const raw = readFileSync(statusFilePath(sessionFile), "utf8");
+      const result = await runWait([
+        "--session",
+        sessionFile,
+        "--status",
+        "working",
+        "--timeout",
+        "5",
+      ]);
+      assert.equal(result.code, 0);
+      // The command prints what the file holds, hang included: the wait line
+      // is the surface an external orchestrator reads (orchestrator-
+      // notification spec).
+      assert.equal(result.stdout, `${raw}\n`);
+      const printed = JSON.parse(result.stdout) as { hang?: { toolCallId?: string } };
+      assert.equal(printed.hang?.toolCallId, "t1");
+    });
+  });
+
   it('times out with the last status seen, or {"status":null}', async () => {
     await withTempDir(async (dir) => {
       const sessionFile = join(dir, "child.jsonl");

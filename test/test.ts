@@ -1,4 +1,4 @@
-import { describe, it, before, after, mock } from "node:test";
+import { describe, it, before, after, mock, type MockTimers } from "node:test";
 import assert from "node:assert/strict";
 
 // The whole suite drives the tmux backend through its own seam. An ambient
@@ -70,6 +70,7 @@ import {
   createSubagentActivityRecorder,
   getSubagentActivityFile,
   readSubagentActivityFile,
+  type SubagentActivityHang,
 } from "../pi-extension/pmux/activity.ts";
 import {
   parseSurfaceDefault,
@@ -2081,6 +2082,64 @@ describe("pmux-done nudge", () => {
     });
   });
 
+  it("a second registration retires the first registration's heartbeat", async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval"] });
+    await withTempDir((dir) => {
+      const recorderKey = Symbol.for("pmux/activity-recorder");
+      const heartbeatKey = Symbol.for("pmux/activity-heartbeat");
+      const savedRecorder = (globalThis as unknown as Record<symbol, unknown>)[recorderKey];
+      const savedHeartbeat = (globalThis as unknown as Record<symbol, unknown>)[heartbeatKey];
+      const env = {
+        PI_PMUX_SESSION: join(dir, "child.jsonl"),
+        PI_PMUX_ACTIVITY_FILE: join(dir, "pmux-activity", "worker.json"),
+        PI_PMUX_NUDGE_DISABLE: "1",
+      };
+      const sessionCtx = { ui: { setWidget() {} } };
+      let firstRestoreEnv: (() => void) | undefined;
+      let secondRestoreEnv: (() => void) | undefined;
+      try {
+        const first = loadChildExtension(env);
+        firstRestoreEnv = first.restoreEnv;
+        fire(first.handlers, "session_start", {}, sessionCtx);
+        const firstRecorder = (globalThis as unknown as Record<symbol, unknown>)[recorderKey] as {
+          heartbeat: () => void;
+        };
+        let firstBeats = 0;
+        const originalHeartbeat = firstRecorder.heartbeat.bind(firstRecorder);
+        firstRecorder.heartbeat = () => {
+          firstBeats += 1;
+          originalHeartbeat();
+        };
+
+        // The first registration's interval fires on the tick.
+        (t.mock.timers as MockTimers).tick(16_000);
+        assert.equal(firstBeats, 1);
+
+        // A /reload re-runs the registration; the new one retires the old
+        // interval before arming its own, so the old recorder stops being
+        // driven (reload-safety rule).
+        const second = loadChildExtension(env);
+        secondRestoreEnv = second.restoreEnv;
+        fire(second.handlers, "session_start", {}, sessionCtx);
+        (t.mock.timers as MockTimers).tick(32_000);
+        assert.equal(firstBeats, 1, "the retired heartbeat writes nothing");
+
+        // Shutdown stops the live heartbeat and clears the globalThis key.
+        fire(second.handlers, "session_shutdown", { reason: "quit" });
+        assert.equal((globalThis as unknown as Record<symbol, unknown>)[heartbeatKey], undefined);
+      } finally {
+        // The second registration captured the first one's modified env, so
+        // restore it first and the first registration's pristine copy last.
+        secondRestoreEnv?.();
+        firstRestoreEnv?.();
+        if (savedRecorder === undefined) delete (globalThis as any)[recorderKey];
+        else (globalThis as any)[recorderKey] = savedRecorder;
+        if (savedHeartbeat === undefined) delete (globalThis as any)[heartbeatKey];
+        else (globalThis as any)[heartbeatKey] = savedHeartbeat;
+      }
+    });
+  });
+
   it("auto-exit agent_end on an aborted stop ends the session as cancelled", async () => {
     await withTempDir((dir) => {
       const sessionFile = join(dir, "child.jsonl");
@@ -3412,6 +3471,37 @@ describe("subagent activity snapshots", () => {
       read = readSubagentActivityFile(activityFile, "child-hang");
       assert.ok(read.ok);
       assert.equal(read.activity.toolCommand, undefined);
+    });
+  });
+
+  it("calls the onHangUpdate hook on every hangUpdate", () => {
+    withTempDir((dir) => {
+      const currentNow = 1_000;
+      const activityFile = getSubagentActivityFile(dir, "child-hook");
+      const seen: Array<SubagentActivityHang | undefined> = [];
+      const recorder = createSubagentActivityRecorder({
+        runningChildId: "child-hook",
+        activityFile,
+        now: () => currentNow,
+        onHangUpdate: (hang) => seen.push(hang),
+      });
+
+      recorder.sessionStart();
+      const hang: SubagentActivityHang = {
+        toolCallId: "tool-1",
+        basis: "idle",
+        observedMs: 60_000,
+        kind: "one-shot",
+        level: 1,
+      };
+      recorder.hangUpdate(hang);
+      recorder.hangUpdate({ ...hang, level: 2, observedMs: 120_000 });
+      recorder.hangUpdate(undefined);
+
+      // One callback per hangUpdate, in order: the status writer in
+      // `pmux-done.ts` refreshes `<session>.status` through this hook, and no
+      // tool event fires during a quiet hang to do it for it.
+      assert.deepEqual(seen, [hang, { ...hang, level: 2, observedMs: 120_000 }, undefined]);
     });
   });
 

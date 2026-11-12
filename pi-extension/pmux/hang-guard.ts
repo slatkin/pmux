@@ -249,18 +249,9 @@ export default function hangGuardExtension(pi: ExtensionAPI) {
         kind: entry.kind,
         level: entry.level === 2 ? 2 : 1,
       };
-      // Send only state that actually changed: the tick runs every second and
-      // each send is an activity-file write.
-      const previous = publishedHangs.get(entry.toolCallId);
-      if (
-        previous &&
-        previous.basis === hang.basis &&
-        previous.kind === hang.kind &&
-        previous.level === hang.level &&
-        previous.observedMs === hang.observedMs
-      ) {
-        continue;
-      }
+      // Every tick republishes the hang with the current measurement: the
+      // parent reads `observedMs` live (status.ts `buildHangDetail`), so the
+      // tick's activity-file write is what keeps the shown measurement fresh.
       publishedHangs.set(entry.toolCallId, hang);
       recorder.hangUpdate(hang);
 
@@ -309,8 +300,21 @@ export default function hangGuardExtension(pi: ExtensionAPI) {
 
   const ticker = setInterval(() => {
     if (stale) return;
-    syncHangs();
-    engine.tick();
+    // Contain a throw inside the tick: pi's emit wraps handler failures, but a
+    // future edit here must not crash the child — the watchdog keeps running.
+    try {
+      syncHangs();
+      engine.tick();
+    } catch (error) {
+      try {
+        activeCtx?.ui.notify(
+          `hang guard tick failed: ${error instanceof Error ? error.message : String(error)}`,
+          "error",
+        );
+      } catch {
+        // A stale UI context must not break the watchdog.
+      }
+    }
   }, settings.tickIntervalMs);
   ticker.unref();
   const stop: () => void = () => {

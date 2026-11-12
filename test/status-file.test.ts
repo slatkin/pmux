@@ -1,5 +1,5 @@
 import "./host-env.ts";
-import { describe, it, before, after } from "node:test";
+import { describe, it, before, after, type MockTimers } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,6 +11,7 @@ import {
   writeChildStatus,
 } from "../pi-extension/pmux/status-file.ts";
 import subagentDoneExtension from "../pi-extension/pmux/pmux-done.ts";
+import hangGuardExtension from "../pi-extension/pmux/hang-guard.ts";
 import { exitSidecarPath, readExitSidecar } from "../pi-extension/pmux/exit-sidecar.ts";
 import { runSpec } from "../pi-extension/pmux/run.ts";
 import { main } from "../pi-extension/pmux/cli.ts";
@@ -59,6 +60,31 @@ describe("status file module", () => {
       writeChildStatus(sessionFile, "idle");
       const raw = JSON.parse(readFileSync(statusFilePath(sessionFile), "utf8"));
       assert.deepEqual(Object.keys(raw).sort(), ["at", "status"]);
+    });
+  });
+
+  it("carries the guard's hang block when one is given, and round-trips it", () => {
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const hang = {
+        toolCallId: "t1",
+        basis: "idle",
+        observedMs: 90_000,
+        kind: "one-shot",
+        level: 2,
+      } as const;
+      assert.equal(writeChildStatus(sessionFile, "working", undefined, hang), true);
+      const record = readChildStatus(sessionFile);
+      assert.ok(record);
+      assert.deepEqual(record.hang, hang);
+      assert.deepEqual(JSON.parse(readFileSync(statusFilePath(sessionFile), "utf8")), record);
+
+      // A write without a hang drops the field again: the record always
+      // describes the whole live state, not a history of it.
+      writeChildStatus(sessionFile, "working");
+      const cleared = readChildStatus(sessionFile);
+      assert.ok(cleared);
+      assert.equal(cleared.hang, undefined);
     });
   });
 
@@ -118,8 +144,14 @@ describe("status latch", () => {
   });
 });
 
-/** Load the child extension with a mock pi API under the given env. */
-function loadChildExtension(env: Record<string, string | undefined>) {
+/** Load the child extension with a mock pi API under the given env. With
+ * `withGuard`, the vendored hang guard registers on the same mock API against
+ * the recorder `pmux-done` publishes, so tests can drive the real wiring
+ * from the tool events through the guard to the status file. */
+function loadChildExtension(
+  env: Record<string, string | undefined>,
+  { withGuard = false }: { withGuard?: boolean } = {},
+) {
   const saved = new Map(Object.keys(env).map((k) => [k, process.env[k]]));
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) delete process.env[key];
@@ -143,6 +175,7 @@ function loadChildExtension(env: Record<string, string | undefined>) {
   };
   try {
     (subagentDoneExtension as any)(mockPi);
+    if (withGuard) (hangGuardExtension as any)(mockPi);
   } finally {
     for (const [key, value] of saved) {
       if (value === undefined) delete process.env[key];
@@ -164,6 +197,45 @@ describe("status writes from the child extension", () => {
       assert.equal(readChildStatus(sessionFile)?.status, "working");
       fire("turn_end", { turnIndex: 0 }, { shutdown() {} });
       assert.equal(readChildStatus(sessionFile)?.status, "idle");
+    });
+  });
+
+  it("carries the guard's hang in the status record while it lasts", (t) => {
+    t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+    withTempDir((dir) => {
+      const sessionFile = join(dir, "child.jsonl");
+      const { fire } = loadChildExtension(
+        {
+          PI_PMUX_SESSION: sessionFile,
+          PI_PMUX_ID: "worker",
+          PI_PMUX_ACTIVITY_FILE: join(dir, "pmux-activity", "worker.json"),
+          PI_PMUX_GUARD_MODE: "observe",
+          PI_PMUX_NAME: "Worker",
+        },
+        { withGuard: true },
+      );
+
+      fire("turn_start", { turnIndex: 0 });
+      fire("tool_execution_start", {
+        toolCallId: "t1",
+        toolName: "bash",
+        args: { command: "sleep 600" },
+      });
+      (t.mock.timers as MockTimers).tick(160_000);
+
+      let record = readChildStatus(sessionFile);
+      assert.ok(record);
+      assert.equal(record.status, "working");
+      assert.ok(record.hang, "the hang reaches the status record");
+      assert.equal(record.hang.toolCallId, "t1");
+
+      // Output resets the silence clock: the guard retracts the hang and the
+      // status record drops it with the next write.
+      fire("tool_execution_update", { toolCallId: "t1" });
+      record = readChildStatus(sessionFile);
+      assert.ok(record);
+      assert.equal(record.hang, undefined, "output clears the hang from the status record");
+      assert.equal(record.status, "working");
     });
   });
 

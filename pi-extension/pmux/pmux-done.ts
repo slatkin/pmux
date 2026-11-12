@@ -27,6 +27,7 @@ import { writeFileSync } from "node:fs";
 import {
   ACTIVITY_RECORDER_KEY,
   createSubagentActivityRecorder,
+  type SubagentActivityHang,
   type SubagentActivityRecorder,
 } from "./activity.ts";
 import { decodeChildEnv } from "./child-env.ts";
@@ -43,7 +44,7 @@ import {
   type HandoffLogRow,
 } from "./context-alert.ts";
 import { loadStatusConfig } from "./status.ts";
-import { writeChildStatus, type ChildStatus } from "./status-file.ts";
+import { writeChildStatus, isTerminalChildStatus, type ChildStatus } from "./status-file.ts";
 import {
   exitSidecarPath,
   readExitSidecar,
@@ -115,6 +116,12 @@ export interface SubagentErrorInfo {
   errorMessage: string;
   stopReason: "error";
 }
+
+/** The heartbeat-stop function of the registration alive in this process. A
+ * /reload re-registers the module; the new registration retires the old
+ * interval through this key, the same way `hang-guard.ts` retires its ticker
+ * and `index.ts` retires its supervisor. */
+const HEARTBEAT_STOP_KEY: symbol = Symbol.for("pmux/activity-heartbeat");
 
 /** How often the child refreshes `aliveAt` without an event (D3). Well under
  * the parent's 180 s gone bound, so a stale file means dead-or-wedged. */
@@ -226,12 +233,35 @@ export default function (pi: ExtensionAPI) {
   const recorder = createSubagentActivityRecorder({
     runningChildId: childEnv.id,
     activityFile: childEnv.activityFile,
+    // The guard publishes and retracts hangs through `hangUpdate`; no tool
+    // event fires during a quiet hang, so this callback is the trigger that
+    // mirrors the hang into `<session>.status` (orchestrator-notification
+    // spec). Rewriting the last live status keeps the status name and message
+    // the turn last wrote.
+    onHangUpdate: (hang) => {
+      currentHang = hang;
+      if (lastLiveStatus !== null) writeStatus(lastLiveStatus.status, lastLiveStatus.message);
+    },
   });
 
   // Publish the recorder for sibling child extensions (command-hang-guard D6):
   // `hang-guard.ts` fetches it from `globalThis` and no-ops when absent, so
   // two extensions never race writes to the same activity file.
   (globalThis as unknown as Record<symbol, unknown>)[ACTIVITY_RECORDER_KEY] = recorder;
+
+  // A /reload re-runs this registration; retire the previous registration's
+  // heartbeat before this one can arm its own (reload-safety rule).
+  const previousHeartbeatStop = (globalThis as unknown as Record<symbol, unknown>)[
+    HEARTBEAT_STOP_KEY
+  ] as (() => void) | undefined;
+  previousHeartbeatStop?.();
+
+  /** The hang block the guard last published through the shared recorder.
+   * Cleared from every write once the hang clears or the turn ends. */
+  let currentHang: SubagentActivityHang | undefined;
+  /** The last live (non-terminal) status this extension wrote, so a hang
+   * update can rewrite the status file without inventing a status of its own. */
+  let lastLiveStatus: { status: ChildStatus; message?: string } | null = null;
 
   // The liveness heartbeat (D3): started with the session, stopped at shutdown.
   let stopHeartbeat: (() => void) | null = null;
@@ -391,9 +421,15 @@ export default function (pi: ExtensionAPI) {
    * abort came from `pmux_interrupt`, so the session stays open (D3). */
   let parentInterrupted = false;
 
-  /** Best-effort status write; a failed write never blocks a turn or shutdown. */
+  /** Best-effort status write; a failed write never blocks a turn or shutdown.
+   * The record carries the guard's live hang while one is published, except
+   * on a terminal write, where a stale hang must not survive. */
   function writeStatus(status: ChildStatus, message?: string): void {
-    if (childEnv.sessionFile) writeChildStatus(childEnv.sessionFile, status, message);
+    const sessionFile = childEnv.sessionFile;
+    if (!sessionFile) return;
+    const hang = isTerminalChildStatus(status) ? undefined : currentHang;
+    writeChildStatus(sessionFile, status, message, hang);
+    if (!isTerminalChildStatus(status)) lastLiveStatus = { status, message };
   }
 
   /** A user abort ends the child; the parent is not woken for it (D1, D2). */
@@ -420,7 +456,10 @@ export default function (pi: ExtensionAPI) {
     denied = childEnv.denyTools;
 
     renderWidget(ctx, null);
-    stopHeartbeat ??= startActivityHeartbeat(recorder);
+    const heartbeatStop = startActivityHeartbeat(recorder);
+    stopHeartbeat?.();
+    stopHeartbeat = heartbeatStop;
+    (globalThis as unknown as Record<symbol, unknown>)[HEARTBEAT_STOP_KEY] = heartbeatStop;
   });
 
   pi.on("input", () => {
@@ -606,8 +645,15 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", (event) => {
     clearNudgeTimer();
+    const heartbeatStop = stopHeartbeat;
     stopHeartbeat?.();
     stopHeartbeat = null;
+    if (
+      heartbeatStop !== null &&
+      (globalThis as unknown as Record<symbol, unknown>)[HEARTBEAT_STOP_KEY] === heartbeatStop
+    ) {
+      delete (globalThis as unknown as Record<symbol, unknown>)[HEARTBEAT_STOP_KEY];
+    }
     recorder.sessionShutdown((event as any).reason);
     // A quit — Ctrl-C twice, Ctrl-D, `/quit`, or a signal — is the user
     // stopping the child, the same act as an Escape abort. Without a sidecar
