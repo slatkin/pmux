@@ -26,7 +26,10 @@ interface Harness {
 
 function createHarness(patch: Partial<HangGuardSettings> = {}): Harness {
   let clock = 0;
-  let settings: HangGuardSettings = { ...DEFAULT_GUARD_SETTINGS, ...patch };
+  // A harness is unparented by default: grace 0 makes the critical action fire
+  // at once, as it does in a session with no pmux parent. A test that wants the
+  // parent-response grace passes `parentAllowGraceSec` here.
+  let settings: HangGuardSettings = { ...DEFAULT_GUARD_SETTINGS, parentAllowGraceSec: 0, ...patch };
   const notifications: Array<{ message: string; level: NotifyLevel }> = [];
   const actions = {
     softKillCalls: 0,
@@ -326,6 +329,108 @@ describe("hang-engine (vendored pi-hang-guard engine)", () => {
     h.tick();
     assert.equal(h.actions.abortCalls, 0);
     assert.equal(h.actions.softKillCalls, 2);
+  });
+
+  it("a parented session notifies at critical and acts only after the grace", () => {
+    const h = createHarness({
+      mode: "yolo",
+      idleWarnSec: 10,
+      idleCriticalSec: 20,
+      parentAllowGraceSec: 90,
+    });
+    startBash(h, "t1", "sleep 600");
+
+    h.advance(25_000);
+    h.tick();
+    assert.equal(h.notifications.length, 1, "the critical alert fires at the threshold");
+    assert.equal(h.notifications[0].level, "error");
+    assert.equal(h.actions.softKillCalls, 0, "the action waits for the parent's answer");
+
+    h.advance(60_000);
+    h.tick();
+    assert.equal(h.actions.softKillCalls, 0, "still inside the grace");
+
+    h.advance(31_000);
+    h.tick();
+    assert.equal(
+      h.actions.softKillCalls,
+      1,
+      "the grace elapsed unanswered, so the mode's action fires",
+    );
+  });
+
+  it("a session with no parent grace acts at critical at once", () => {
+    const h = createHarness({ mode: "guard", idleWarnSec: 10, idleCriticalSec: 20 });
+    startBash(h, "t1", "sleep 600");
+    h.advance(25_000);
+    h.tick();
+    assert.equal(h.actions.abortCalls, 1, "no deferral without a parent to answer");
+  });
+
+  it("an allowed entry never acts and holds no level until the call ends", () => {
+    const h = createHarness({
+      mode: "yolo",
+      idleWarnSec: 10,
+      idleCriticalSec: 20,
+      parentAllowGraceSec: 90,
+    });
+    startBash(h, "t1", "sleep 600");
+    h.advance(25_000);
+    h.tick();
+
+    assert.deepEqual(h.engine.allowByParent(), ["t1"]);
+    h.advance(600_000);
+    h.tick();
+    assert.equal(h.actions.softKillCalls, 0, "an exempted entry is never acted on");
+    assert.equal(h.actions.abortCalls, 0);
+    assert.equal(h.engine.list()[0].level, 0, "an exempted entry holds no level");
+    assert.ok(
+      h.notifications.some((n) => /allowed by parent/.test(n.message)),
+      "the pane notes the exemption",
+    );
+
+    // A later call is watched fresh, including the same command retried.
+    h.engine.onToolEnd({ toolCallId: "t1", isError: false });
+    startBash(h, "t2", "sleep 600");
+    h.advance(25_000);
+    h.tick();
+    assert.equal(h.actions.softKillCalls, 0, "the new call sits in its own grace");
+    h.advance(91_000);
+    h.tick();
+    assert.equal(h.actions.softKillCalls, 1, "the new call is escalated normally");
+  });
+
+  it("a named allow exempts only the call it names", () => {
+    const h = createHarness({
+      mode: "guard",
+      idleWarnSec: 10,
+      idleCriticalSec: 20,
+      parentAllowGraceSec: 90,
+    });
+    startBash(h, "a", "sleep 600");
+    startBash(h, "b", "npm run dev");
+    h.advance(25_000);
+    h.tick();
+
+    assert.deepEqual(h.engine.allowByParent("a"), ["a"]);
+    h.advance(91_000);
+    h.tick();
+    assert.equal(h.actions.abortCalls, 1, "only the unnamed call is acted on");
+    const levels = new Map(h.engine.list().map((entry) => [entry.toolCallId, entry.level]));
+    assert.equal(levels.get("a"), 0);
+    assert.equal(levels.get("b"), 2);
+  });
+
+  it("an allow with nothing hung or already acted on exempts nothing", () => {
+    const h = createHarness({ mode: "guard", idleWarnSec: 10, idleCriticalSec: 20 });
+    startBash(h, "t1", "sleep 600");
+    assert.deepEqual(h.engine.allowByParent(), [], "a quiet call is not exempted: never pre-arms");
+    assert.deepEqual(h.engine.allowByParent("nope"), [], "an unknown id exempts nothing");
+
+    h.advance(25_000);
+    h.tick();
+    assert.equal(h.actions.abortCalls, 1, "the action still fired after the dropped marker");
+    assert.deepEqual(h.engine.allowByParent(), [], "a marker after the action exempts nothing");
   });
 
   it("auto-resume is capped by maxAutoResumes", () => {

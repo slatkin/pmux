@@ -27,6 +27,7 @@ import {
 import {
   exitSidecarPath,
   removeExitSidecar,
+  writeAllowMarker,
   writeInterruptMarker,
   type PollResult,
 } from "./exit-sidecar.ts";
@@ -316,6 +317,11 @@ export interface Supervisor {
     params: { id?: string; name?: string },
     sendEscapeKey?: (surface: string) => void,
   ): { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> };
+  /** Write the allow marker at a running child's session file (parent-allow D4). */
+  allow(params: { id?: string; name?: string }): {
+    content: Array<{ type: "text"; text: string }>;
+    details: Record<string, unknown>;
+  };
   /** The running children, for the widget and `pmux_message`. */
   running(): readonly RunningSubagent[];
   /** Stop every watcher, both refresh intervals and the event stream. Final. */
@@ -1278,6 +1284,40 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     return { error: `Ambiguous subagent name "${requestedName}". Matches: ${candidates}` };
   }
 
+  /**
+   * Write the allow marker at the resolved running child's session file
+   * (parent-allow D4). Acknowledgement only: whether the marker exempts
+   * anything is the child's watchdog's call, reported through its own surfaces.
+   */
+  function handleSubagentAllow(params: { id?: string; name?: string }) {
+    const resolved = resolveInterruptTarget(params);
+    if ("error" in resolved) {
+      return {
+        content: [{ type: "text" as const, text: resolved.error }],
+        details: { error: resolved.error },
+      };
+    }
+
+    const running = resolved.running;
+    if (!writeAllowMarker(running.sessionFile)) {
+      const error = `Failed to write the allow marker at ${running.sessionFile}.allow.`;
+      return {
+        content: [{ type: "text" as const, text: error }],
+        details: { error, id: running.id, name: running.name },
+      };
+    }
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: `Allow marker written for subagent "${running.name}"; its watchdog decides what the marker exempts.`,
+        },
+      ],
+      details: { id: running.id, name: running.name, status: "allow_written" },
+    };
+  }
+
   function handleSubagentInterrupt(
     params: { id?: string; name?: string },
     sendEscapeKey?: (surface: string) => void,
@@ -1826,6 +1866,8 @@ export function createSupervisor(deps: SupervisorDeps): Supervisor {
     },
 
     interrupt: handleSubagentInterrupt,
+
+    allow: handleSubagentAllow,
 
     running(): readonly RunningSubagent[] {
       return Array.from(runningSubagents.values());

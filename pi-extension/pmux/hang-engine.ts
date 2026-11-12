@@ -63,6 +63,13 @@ export interface HangGuardSettings {
   actionCooldownSec: number;
   /** How often the guard re-evaluates running tools. */
   tickIntervalMs: number;
+  /**
+   * Parent-response grace, in seconds, that defers the critical-level action
+   * in a session the orchestrator can answer — the host resolves it from
+   * `PI_PMUX_SESSION` plus `PI_PMUX_GUARD_ALLOW_GRACE_SEC` and passes `0` for
+   * a session with no pmux parent, which acts at critical as before.
+   */
+  parentAllowGraceSec: number;
   classify: ClassifyRules;
 }
 
@@ -81,6 +88,7 @@ export const DEFAULT_GUARD_SETTINGS: HangGuardSettings = {
   maxAutoResumes: 1,
   actionCooldownSec: 60,
   tickIntervalMs: 1000,
+  parentAllowGraceSec: 90,
   classify: {},
 };
 
@@ -194,6 +202,10 @@ interface Entry {
   softKillDetail?: string;
   /** Set once we requested a turn abort for this tool. */
   abortRequested?: boolean;
+  /** Set when the parent's allow marker exempted this call (parent-allow D2). */
+  allowedByParent?: boolean;
+  /** While a parented session waits out the parent-response grace, the instant it ends. */
+  parentAllowDeadlineAt?: number;
 }
 
 export interface HangGuardEngine {
@@ -206,6 +218,14 @@ export interface HangGuardEngine {
   onAgentSettled(): void;
   onShutdown(): void;
   tick(): void;
+  /**
+   * Apply one consumed allow marker (parent-allow D1/D2): exempt the watched
+   * executions currently at warning or critical — every one of them when no
+   * `toolCallId` is named, otherwise only that one. An exempted entry is
+   * skipped by every later tick until the call ends. Returns the exempted
+   * tool call ids; an empty result means nothing was hung (never pre-arms).
+   */
+  allowByParent(toolCallId?: string): string[];
   list(): GuardEntryStatus[];
   stats(): GuardStats;
   hasRunning(): boolean;
@@ -393,6 +413,7 @@ export function createHangGuardEngine(deps: HangGuardDeps): HangGuardEngine {
     at: number,
   ): void {
     if (settings.mode === "observe" || !deps.actions) return;
+    if (entry.allowedByParent) return;
 
     if (entry.softKilledAt !== undefined) {
       if (entry.abortRequested) return;
@@ -403,6 +424,21 @@ export function createHangGuardEngine(deps: HangGuardDeps): HangGuardEngine {
     }
     if (entry.abortRequested) return;
     if (at < nextActionAt) return;
+
+    // Parent-response grace (parent-allow D3): the critical notification went
+    // out at the threshold; the action waits for the orchestrator's answer.
+    // A grace of 0 — the host's value for a session with no pmux parent —
+    // keeps today's behavior: the action fires at critical. A deadline that
+    // has already elapsed stays set: a pending killer must not re-arm the
+    // wait while its resolution is retried tick by tick.
+    if (Math.max(0, settings.parentAllowGraceSec) > 0) {
+      if (entry.parentAllowDeadlineAt === undefined) {
+        entry.parentAllowDeadlineAt = at + settings.parentAllowGraceSec * 1000;
+        return;
+      }
+      if (at < entry.parentAllowDeadlineAt) return;
+      // The grace ran out unanswered: fall through to the mode's action.
+    }
 
     if (settings.mode === "yolo") {
       const outcome = trySoftKill();
@@ -565,6 +601,9 @@ export function createHangGuardEngine(deps: HangGuardDeps): HangGuardEngine {
       const at = now();
 
       for (const entry of entries.values()) {
+        // An allowed execution is exempt for the rest of its call (parent-allow
+        // D2): no measurement, no level, no escalation.
+        if (entry.allowedByParent) continue;
         const result = measure(entry, settings, at);
         entry.basis = result.basis;
         entry.observedMs = result.observedMs;
@@ -611,11 +650,55 @@ export function createHangGuardEngine(deps: HangGuardDeps): HangGuardEngine {
       }
     },
 
+    allowByParent(toolCallId?: string): string[] {
+      const exempted: string[] = [];
+      for (const entry of entries.values()) {
+        if (entry.allowedByParent) continue;
+        // Allow answers a hang notice: only executions already at warning or
+        // critical are exempted, so a marker never pre-arms a later call.
+        if (entry.level < 1) continue;
+        // A late marker exempts nothing once the action has fired — the call
+        // is already ending (parent-allow D1's no-pre-arm consume drops it).
+        if (entry.softKilledAt !== undefined || entry.abortRequested) continue;
+        if (toolCallId !== undefined && entry.toolCallId !== toolCallId) continue;
+        entry.allowedByParent = true;
+        entry.level = 0;
+        entry.parentAllowDeadlineAt = undefined;
+        exempted.push(entry.toolCallId);
+        notify(
+          `Watchdog: ${entry.toolName} ${previewCommand(entry.command, 80)} — allowed by parent; ` +
+            "the watchdog is ignoring this call until it ends.",
+          "info",
+        );
+      }
+      return exempted;
+    },
+
     list(): GuardEntryStatus[] {
       const settings = deps.settings();
       const at = now();
       const out: GuardEntryStatus[] = [];
       for (const entry of entries.values()) {
+        // An exempted entry is not measured and holds no level (parent-allow D2).
+        if (entry.allowedByParent) {
+          out.push({
+            toolCallId: entry.toolCallId,
+            toolName: entry.toolName,
+            command: entry.command,
+            kind: entry.kind,
+            reason: entry.reason,
+            basis: entry.basis,
+            observedMs: entry.observedMs,
+            maxObservedMs: entry.maxObservedMs,
+            startedAt: entry.startedAt,
+            lastActivityAt: entry.lastActivityAt,
+            level: 0,
+            notifications: entry.notifications,
+            idleWhitelisted: entry.idleWhitelisted,
+            selfTimed: entry.selfTimed,
+          });
+          continue;
+        }
         const result = measure(entry, settings, at);
         out.push({
           toolCallId: entry.toolCallId,

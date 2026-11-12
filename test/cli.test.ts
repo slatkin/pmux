@@ -2282,6 +2282,36 @@ describe("cli.ts run", () => {
   });
 });
 
+describe("cli.ts allow", () => {
+  it("writes the allow marker next to the session file", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionPath = join(dir, "session.jsonl");
+      const res = await runCli(["allow", "--session", sessionPath], tmuxEnv());
+      assert.equal(res.code, 0);
+      assert.equal(existsSync(`${sessionPath}.allow`), true);
+      assert.match(res.stdout, /Allow marker written/);
+    });
+  });
+
+  it("overwrites an earlier marker and reports a missing --session as a usage error", async () => {
+    await withTempDirAsync(async (dir) => {
+      const sessionPath = join(dir, "session.jsonl");
+      writeFileSync(`${sessionPath}.allow`, '{"toolCallId":"t1"}');
+      const res = await runCli(["allow", "--session", sessionPath], tmuxEnv());
+      assert.equal(res.code, 0);
+      assert.equal(
+        readFileSync(`${sessionPath}.allow`, "utf8"),
+        "",
+        "the empty body exempts every hung call",
+      );
+
+      const missing = await runCli(["allow"], tmuxEnv());
+      assert.equal(missing.code, 1);
+      assert.match(missing.stderr, /missing --session/);
+    });
+  });
+});
+
 describe("cli.ts last-message", () => {
   function writeSession(path: string, entries: unknown[]): void {
     writeFileSync(path, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");

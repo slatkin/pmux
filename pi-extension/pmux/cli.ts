@@ -29,10 +29,12 @@ import {
 } from "./launch.ts";
 import { agentPrompt, callerPaneId, createSurface, readPaneOption, runInPane } from "./tmux.ts";
 import {
+  allowMarkerPath,
   exitSidecarPath,
   interpretExitSidecar,
   readExitSidecar,
   removeExitSidecar,
+  writeAllowMarker,
 } from "./exit-sidecar.ts";
 import { resolvePlacement } from "./placement.ts";
 import { encodePaneText } from "./pane-input.ts";
@@ -121,6 +123,7 @@ const USAGE = [
   "  node cli.ts start --name <child> --role <role> --cwd <dir> --brief <file> --parent <me> [--scratch <dir>] [--close-grace-ms <n>] [--report last|send] [--fallback]",
   "  node cli.ts send --to <pane> --text <text> [--ack-timeout <seconds>]",
   "  node cli.ts ack --session <file> --id <id>",
+  "  node cli.ts allow --session <file>",
   "  node cli.ts inbox (--follow | --once) [--parent <pane>]",
   "  node cli.ts resume --launch <spec> --prompt <file> [--name <child>]",
   "  node cli.ts run <spec> [<prompt>]",
@@ -1112,6 +1115,26 @@ async function spawnDialogCommand(values: CliValues, deps: CliDeps): Promise<num
   }
 }
 
+/**
+ * `allow`: write the allow marker next to a session file (parent-allow D4).
+ * The child's watchdog consumes it on its next tick and exempts the hung
+ * executions it covers — every one for the empty body this writes.
+ */
+function allowCommand(values: CliValues, deps: CliDeps): number {
+  const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
+  const writeErr = deps.stderr ?? ((text: string) => process.stderr.write(text));
+  try {
+    const session = required("--session", values.session);
+    if (!writeAllowMarker(session)) {
+      throw new Error(`could not write ${allowMarkerPath(session)}`);
+    }
+    write(`Allow marker written: ${allowMarkerPath(session)}\n`);
+    return 0;
+  } catch (error) {
+    return usageFailure(error, writeErr);
+  }
+}
+
 /** `last-message`: print a session's last assistant message. */
 function lastMessageCommand(values: CliValues, deps: CliDeps): number {
   const write = deps.stdout ?? ((text: string) => process.stdout.write(text));
@@ -1348,6 +1371,7 @@ export async function main(argv: string[], deps: CliDeps = {}): Promise<number> 
   if (command === "run") return runCommand(positionals.slice(1), deps);
   if (command === "send") return sendCommand(values as CliValues, deps);
   if (command === "ack") return ackCommand(values as CliValues, deps);
+  if (command === "allow") return allowCommand(values as CliValues, deps);
   if (command === "inbox") return inboxCommand(values as CliValues, deps);
   if (command === "roles") return rolesCommand(values as CliValues, deps);
   if (command === "reports") return reportsCommand(values as CliValues, deps);

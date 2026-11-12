@@ -427,6 +427,11 @@ popup — its action lands when the user finishes, so nothing is lost.
   ```
   The child extension's own 5-second nudge handles the common
   forgot-to-exit case; this one handles a silent stall.
+- A child's critical-hang message offers the allow move: when the silence is
+  legitimate (a long benchmark, a quiet build), run
+  `node <skill-dir>/launch.ts allow --session <session file>` to let the hung
+  command run to completion, or `pmux_interrupt` to stop it; if neither arrives
+  within the grace the message names, the child's watchdog acts.
 - Close the pane only for `error`, `ping` and crash panes once you are done
   with them: `tmux kill-pane -t <pane>`. A `done` or `handoff` pane closes
   itself after the close grace — there is nothing to close. Never close

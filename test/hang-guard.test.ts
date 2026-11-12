@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach, type MockTimers } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,7 +8,7 @@ import {
   createSubagentActivityRecorder,
   readSubagentActivityFile,
 } from "../pi-extension/pmux/activity.ts";
-import { resolveGuardConfig } from "../pi-extension/pmux/hang-guard.ts";
+import { resolveGuardConfig, parentHangMessage } from "../pi-extension/pmux/hang-guard.ts";
 import { createSoftKiller } from "../pi-extension/pmux/hang-guard.ts";
 import hangGuardExtension from "../pi-extension/pmux/hang-guard.ts";
 
@@ -25,6 +25,7 @@ const ENV_KEYS = [
   "PI_PMUX_NAME",
   "PI_PMUX_GUARD_MODE",
   "PI_PMUX_GUARD_DISABLED",
+  "PI_PMUX_GUARD_ALLOW_GRACE_SEC",
 ] as const;
 
 interface MockApi {
@@ -101,6 +102,9 @@ let savedRecorder: unknown;
 function stageChildEnv(overrides: Record<string, string | undefined> = {}): void {
   process.env.PI_PMUX_SESSION = sessionFile;
   process.env.PI_PMUX_AUTO_EXIT = "1";
+  // A staged child answers at critical at once; a test of the parent-response
+  // grace passes its own PI_PMUX_GUARD_ALLOW_GRACE_SEC here.
+  process.env.PI_PMUX_GUARD_ALLOW_GRACE_SEC = "0";
   delete process.env.PI_PMUX_EXTERNAL_PARENT;
   process.env.PI_PMUX_NAME = "Worker";
   for (const [key, value] of Object.entries(overrides)) {
@@ -357,6 +361,198 @@ describe("hang-guard extension", () => {
     first.dispatch("tool_execution_start", toolStart("t1", "sleep 600"));
     (t.mock.timers as MockTimers).tick(400_000);
     assert.equal(firstNotifies.length, 0, "the retired ticker never fires");
+  });
+});
+
+describe("hang-guard parent allow", () => {
+  it("a parented yolo child defers the soft kill and an allow marker saves the call", (t) => {
+    t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+    stageChildEnv({ PI_PMUX_GUARD_MODE: "yolo", PI_PMUX_GUARD_ALLOW_GRACE_SEC: "90" });
+    const activityFile = join(dir, "worker.activity.json");
+    const allowFile = `${sessionFile}.allow`;
+    (globalThis as unknown as Record<symbol, unknown>)[ACTIVITY_RECORDER_KEY] =
+      createSubagentActivityRecorder({ runningChildId: "worker", activityFile });
+
+    const mock = createMockApi();
+    hangGuardExtension(mock.api as never);
+    const notifies: NotifyRecord[] = [];
+    startSession(mock, createCtx(notifies));
+
+    mock.dispatch("tool_execution_start", toolStart("t1", "cargo bench"));
+    (t.mock.timers as MockTimers).tick(160_000); // critical at 150s
+
+    // The notification went out at the threshold and names the allow move.
+    const msgFile = `${sessionFile}.msg`;
+    assert.ok(existsSync(msgFile), "a critical hang steers the pi parent");
+    const payload = JSON.parse(readFileSync(msgFile, "utf8").trim().split("\n")[0]) as {
+      message: string;
+    };
+    assert.match(payload.message, /pmux_allow/);
+    assert.match(payload.message, /pmux_interrupt/);
+    assert.match(payload.message, /1m30s/, "the message carries the grace duration");
+    let read = readSubagentActivityFile(activityFile, "worker");
+    assert.ok(read.ok);
+    assert.equal(read.activity.hang?.level, 2, "the hang is published while the grace runs");
+    assert.equal(
+      notifies.some((n) => /soft-killed/.test(n.message)),
+      false,
+      "no soft kill during the grace",
+    );
+    assert.equal(existsSync(allowFile), false);
+
+    // The parent answers through the marker file.
+    writeFileSync(allowFile, "");
+    (t.mock.timers as MockTimers).tick(1_000);
+    assert.equal(existsSync(allowFile), false, "the tick consumes the marker");
+    read = readSubagentActivityFile(activityFile, "worker");
+    assert.ok(read.ok);
+    assert.equal(read.activity.hang, undefined, "the hang block retracts");
+    assert.ok(
+      notifies.some((n) => /allowed by parent/.test(n.message)),
+      "the pane notes the exemption",
+    );
+
+    // The call survives to its end; the watchdog never acted.
+    (t.mock.timers as MockTimers).tick(300_000);
+    assert.equal(
+      notifies.some((n) => /soft-killed/.test(n.message)),
+      false,
+      "an exempted call is never soft-killed",
+    );
+    mock.dispatch("tool_execution_end", { toolCallId: "t1" });
+  });
+
+  it("the grace elapsing without an answer fires the mode's action", async (t) => {
+    t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+    stageChildEnv({ PI_PMUX_GUARD_MODE: "yolo", PI_PMUX_GUARD_ALLOW_GRACE_SEC: "90" });
+    const activityFile = join(dir, "worker.activity.json");
+    (globalThis as unknown as Record<symbol, unknown>)[ACTIVITY_RECORDER_KEY] =
+      createSubagentActivityRecorder({ runningChildId: "worker", activityFile });
+
+    const mock = createMockApi();
+    hangGuardExtension(mock.api as never);
+    const notifies: NotifyRecord[] = [];
+    startSession(mock, createCtx(notifies));
+
+    mock.dispatch("tool_execution_start", toolStart("t1", "cargo bench"));
+    (t.mock.timers as MockTimers).tick(160_000);
+    assert.equal(
+      notifies.some((n) => /soft-killed/.test(n.message)),
+      false,
+      "no action at the threshold itself",
+    );
+
+    // The deadline passes and the soft kill fires (the real killer resolves
+    // between ticks; a real sleep flushes its resolution — setTimeout is not
+    // mocked here, and the first import of the SDK can take longer than a tick).
+    (t.mock.timers as MockTimers).tick(95_000);
+    for (let i = 0; i < 20 && !notifies.some((n) => /soft-killed/.test(n.message)); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      (t.mock.timers as MockTimers).tick(1_000);
+    }
+    assert.ok(
+      notifies.some((n) => /soft-killed/.test(n.message)),
+      "the unanswered grace ends in the soft kill",
+    );
+  });
+
+  it("a session with no pmux parent acts at critical with no deferral", (t) => {
+    t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+    stageChildEnv({ PI_PMUX_SESSION: undefined, PI_PMUX_GUARD_MODE: "guard" });
+
+    const mock = createMockApi();
+    hangGuardExtension(mock.api as never);
+    const notifies: NotifyRecord[] = [];
+    const abortLog: boolean[] = [];
+    startSession(mock, createCtx(notifies, abortLog));
+
+    mock.dispatch("tool_execution_start", toolStart("t1", "cargo bench"));
+    (t.mock.timers as MockTimers).tick(160_000);
+
+    assert.equal(abortLog.length, 1, "the abort fired at the critical threshold");
+  });
+
+  it("a named marker exempts one call and the other call still acts", (t) => {
+    t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+    stageChildEnv({ PI_PMUX_GUARD_MODE: "guard", PI_PMUX_GUARD_ALLOW_GRACE_SEC: "90" });
+    const activityFile = join(dir, "worker.activity.json");
+    const allowFile = `${sessionFile}.allow`;
+    (globalThis as unknown as Record<symbol, unknown>)[ACTIVITY_RECORDER_KEY] =
+      createSubagentActivityRecorder({ runningChildId: "worker", activityFile });
+
+    const mock = createMockApi();
+    hangGuardExtension(mock.api as never);
+    const notifies: NotifyRecord[] = [];
+    const abortLog: boolean[] = [];
+    startSession(mock, createCtx(notifies, abortLog));
+
+    mock.dispatch("tool_execution_start", toolStart("t1", "cargo bench"));
+    mock.dispatch("tool_execution_start", toolStart("t2", "sleep 600"));
+    (t.mock.timers as MockTimers).tick(160_000);
+    assert.equal(abortLog.length, 0, "both hangs wait in the grace");
+
+    writeFileSync(allowFile, JSON.stringify({ toolCallId: "t1" }));
+    (t.mock.timers as MockTimers).tick(1_000);
+    assert.equal(existsSync(allowFile), false, "the named marker is consumed");
+
+    (t.mock.timers as MockTimers).tick(95_000);
+    assert.equal(abortLog.length, 1, "the unnamed call's abort fired after the grace");
+    assert.ok(existsSync(markerFile), "the abort marker is the interrupt path's");
+    assert.ok(
+      !notifies.some((n) => /allowed by parent/.test(n.message) && /sleep 600/.test(n.message)),
+      "the unnamed call was never exempted",
+    );
+  });
+
+  it("a marker with nothing hung is dropped, and a late marker exempts nothing", (t) => {
+    t.mock.timers.enable({ apis: ["setInterval", "Date"] });
+    stageChildEnv({ PI_PMUX_GUARD_MODE: "guard", PI_PMUX_GUARD_ALLOW_GRACE_SEC: "90" });
+    const allowFile = `${sessionFile}.allow`;
+
+    const mock = createMockApi();
+    hangGuardExtension(mock.api as never);
+    const notifies: NotifyRecord[] = [];
+    const abortLog: boolean[] = [];
+    startSession(mock, createCtx(notifies, abortLog));
+
+    mock.dispatch("tool_execution_start", toolStart("t1", "sleep 600"));
+    // Nothing is at warning or critical yet: the marker is consumed and dropped.
+    writeFileSync(allowFile, "");
+    (t.mock.timers as MockTimers).tick(1_000);
+    assert.equal(existsSync(allowFile), false, "the dropped marker never pre-arms");
+    assert.equal(
+      notifies.some((n) => /allowed by parent/.test(n.message)),
+      false,
+    );
+
+    (t.mock.timers as MockTimers).tick(160_000); // critical, grace pending
+    (t.mock.timers as MockTimers).tick(95_000); // grace elapses, abort fires
+    assert.equal(abortLog.length, 1);
+
+    // A marker after the action exempts nothing: the call is already ending.
+    writeFileSync(allowFile, "");
+    (t.mock.timers as MockTimers).tick(1_000);
+    assert.equal(existsSync(allowFile), false, "the late marker is consumed and dropped");
+    assert.equal(
+      notifies.some((n) => /allowed by parent/.test(n.message)),
+      false,
+    );
+  });
+
+  it("names allow --session in the steering message for an external parent", () => {
+    const message = parentHangMessage({
+      childName: "Worker",
+      toolName: "bash",
+      command: "cargo bench",
+      basis: "idle",
+      observedMs: 160_000,
+      kind: "one-shot",
+      graceSec: 90,
+      externalParent: true,
+    });
+    assert.match(message, /allow --session/);
+    assert.match(message, /pmux_interrupt/);
+    assert.match(message, /1m30s/);
   });
 });
 

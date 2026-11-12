@@ -27,13 +27,14 @@ import { decodeChildEnv } from "./child-env.ts";
 import {
   DEFAULT_GUARD_SETTINGS,
   createHangGuardEngine,
+  formatDuration,
   resumeMessage,
   type GuardActionReport,
   type GuardMode,
   type HangGuardSettings,
   type SoftKillOutcome,
 } from "./hang-engine.ts";
-import { writeInterruptMarker } from "./exit-sidecar.ts";
+import { consumeAllowMarker, writeInterruptMarker } from "./exit-sidecar.ts";
 
 /** The ticker-stop function of the registration alive in this process. A
  * /reload re-runs registration; the new one retires the old ticker through
@@ -65,10 +66,34 @@ export function resolveGuardConfig(env: NodeJS.ProcessEnv): ResolvedGuardConfig 
   return { enabled: true, mode: isPmuxChild && nonInteractive ? "yolo" : "observe" };
 }
 
+/** Default parent-response grace for a pmux child, in seconds (parent-allow D3). */
+const DEFAULT_PARENT_ALLOW_GRACE_SEC = 90;
+
+/**
+ * The parent-response grace this session waits at critical before acting
+ * (parent-allow D3): 0 without `PI_PMUX_SESSION` — the action fires at critical
+ * as before — otherwise the `PI_PMUX_GUARD_ALLOW_GRACE_SEC` override or the
+ * 90 s default. A `0` override opts a child out of the wait.
+ */
+export function resolveParentAllowGraceSec(env: NodeJS.ProcessEnv): number {
+  if (!env.PI_PMUX_SESSION) return 0;
+  const raw = env.PI_PMUX_GUARD_ALLOW_GRACE_SEC;
+  if (raw !== undefined && raw !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return DEFAULT_PARENT_ALLOW_GRACE_SEC;
+}
+
 /** The engine settings this session runs with: defaults plus the resolved mode. */
 export function resolveGuardSettings(env: NodeJS.ProcessEnv): HangGuardSettings {
   const resolved = resolveGuardConfig(env);
-  return { ...DEFAULT_GUARD_SETTINGS, enabled: resolved.enabled, mode: resolved.mode };
+  return {
+    ...DEFAULT_GUARD_SETTINGS,
+    enabled: resolved.enabled,
+    mode: resolved.mode,
+    parentAllowGraceSec: resolveParentAllowGraceSec(env),
+  };
 }
 
 /**
@@ -159,7 +184,7 @@ export function fetchSharedRecorder(): SubagentActivityRecorder | null {
   return recorder;
 }
 
-/** Format one ParentMessage body: child, command, measurement and class. */
+/** Format one ParentMessage body: child, command, measurement, class and the allow move. */
 export function parentHangMessage(params: {
   childName: string;
   toolName: string;
@@ -167,15 +192,24 @@ export function parentHangMessage(params: {
   basis: SubagentActivityHang["basis"];
   observedMs: number;
   kind: SubagentActivityHang["kind"];
+  /** Parent-response grace the watchdog waits before acting (parent-allow D5). */
+  graceSec: number;
+  /** When true, the allow move is the external CLI's, not the pi tool. */
+  externalParent?: boolean;
 }): string {
   const observed =
     params.basis === "idle"
       ? `${Math.round(params.observedMs / 1000)}s without output`
       : `${Math.round(params.observedMs / 1000)}s of wall-clock runtime`;
+  const allow = params.externalParent
+    ? "run `allow --session <session file>` to let it finish"
+    : "call pmux_allow to let it finish";
   return [
     `${params.childName || "subagent"}: ${params.toolName} is likely stuck (${params.kind}, ${observed}).`,
     `command: ${params.command.replace(/\s+/g, " ").trim().slice(0, 200) || "(no command)"}`,
-    "The child's own watchdog is handling it; you can pmux_interrupt it or wait.",
+    "The child's own watchdog is holding its action for your answer: " +
+      `${allow}, or pmux_interrupt to stop it. If neither arrives, the watchdog acts in ` +
+      `${formatDuration(params.graceSec * 1000)}.`,
   ].join("\n");
 }
 
@@ -271,6 +305,8 @@ export default function hangGuardExtension(pi: ExtensionAPI) {
                   basis: entry.basis,
                   observedMs: entry.observedMs,
                   kind: entry.kind,
+                  graceSec: settings.parentAllowGraceSec,
+                  externalParent: childEnv.externalParent,
                 }),
               })}\n`,
               "utf8",
@@ -298,11 +334,27 @@ export default function hangGuardExtension(pi: ExtensionAPI) {
     }
   }
 
+  /**
+   * Consume one allow marker, if any (parent-allow D1/D2). The engine exempts
+   * the hung executions it names — all of them when the body is empty — and
+   * this retracts their published hang blocks at once. A marker consumed while
+   * nothing is at warning or critical is dropped: an allow never pre-arms.
+   */
+  function pollAllowMarker(): void {
+    if (!childEnv.sessionFile) return;
+    const marker = consumeAllowMarker(childEnv.sessionFile);
+    if (!marker) return;
+    for (const toolCallId of engine.allowByParent(marker.toolCallId)) {
+      if (publishedHangs.delete(toolCallId)) recorder?.hangUpdate(undefined);
+    }
+  }
+
   const ticker = setInterval(() => {
     if (stale) return;
     // Contain a throw inside the tick: pi's emit wraps handler failures, but a
     // future edit here must not crash the child — the watchdog keeps running.
     try {
+      pollAllowMarker();
       syncHangs();
       engine.tick();
     } catch (error) {

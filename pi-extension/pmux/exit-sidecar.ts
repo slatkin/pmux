@@ -138,3 +138,62 @@ export function takeInterruptMarker(sessionFile: string): boolean {
     return false;
   }
 }
+
+/** The allow marker next to a session file (parent-allow D1). */
+export function allowMarkerPath(sessionFile: string): string {
+  return `${sessionFile}.allow`;
+}
+
+/** One consumed allow marker: an optional `toolCallId` names one execution. */
+export interface AllowMarker {
+  toolCallId?: string;
+}
+
+/**
+ * Write the allow marker next to a session file with an empty body, which the
+ * child's watchdog reads as "exempt every watched execution at warning or
+ * critical". Never throws: a failed write only costs the parent its allow.
+ */
+export function writeAllowMarker(sessionFile: string): boolean {
+  try {
+    writeFileSync(allowMarkerPath(sessionFile), "");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read and delete the allow marker next to a session file, best-effort, in one
+ * consume step. Returns null when no marker is waiting. An empty or unparseable
+ * body exempts every hung execution; a JSON body naming a `toolCallId` exempts
+ * only that one (parent-allow D1). Never throws.
+ */
+export function consumeAllowMarker(sessionFile: string): AllowMarker | null {
+  let body: string;
+  try {
+    body = readFileSync(allowMarkerPath(sessionFile), "utf8");
+  } catch {
+    return null;
+  }
+  try {
+    rmSync(allowMarkerPath(sessionFile), { force: true });
+  } catch {
+    // Best effort: a marker that survives costs one repeated consume, and an
+    // exempted execution stays exempt until its call ends.
+  }
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as { toolCallId?: unknown }).toolCallId === "string" &&
+      (parsed as { toolCallId: string }).toolCallId !== ""
+    ) {
+      return { toolCallId: (parsed as { toolCallId: string }).toolCallId };
+    }
+  } catch {
+    // Unparseable body: fall through to the exempt-everything reading.
+  }
+  return {};
+}

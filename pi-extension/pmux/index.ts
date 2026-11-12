@@ -972,6 +972,56 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       },
     });
 
+  // ── pmux_allow tool ──
+  if (shouldRegister("pmux_allow"))
+    pi.registerTool({
+      name: "pmux_allow",
+      label: "Allow Hung Call",
+      description:
+        "Let a hung tool call in a running pi subagent run to completion. Writes the allow marker next to the child's session file; the child's watchdog exempts the call it covers and skips it until the call ends. Use this when a critical-hang steering message describes a command whose silence is legitimate (a long benchmark, a quiet build). The tool returns a write acknowledgement only; it does not cause a subagent result.",
+      parameters: Type.Object({
+        id: Type.Optional(Type.String({ description: "Exact running subagent id." })),
+        name: Type.Optional(Type.String({ description: "Exact running subagent display name." })),
+      }),
+
+      async execute(
+        _toolCallId,
+        params,
+      ): Promise<AgentToolResult<{ error?: string; id?: string; name?: string; status?: string }>> {
+        return currentSupervisor().allow(params);
+      },
+
+      renderCall(args, theme) {
+        const target = args.id ? `${args.id}` : (args.name ?? "(unknown)");
+        return new Text(
+          theme.fg("accent", "▸") +
+            " " +
+            theme.fg("toolTitle", theme.bold(target)) +
+            theme.fg("dim", " — allow hung call"),
+          0,
+          0,
+        );
+      },
+
+      renderResult(result, _opts, theme) {
+        const details = result.details as any;
+        if (details?.status === "allow_written") {
+          return new Text(
+            theme.fg("accent", "▸") +
+              " " +
+              theme.fg("toolTitle", theme.bold(details.name ?? details.id ?? "subagent")) +
+              theme.fg("dim", " — allow written"),
+            0,
+            0,
+          );
+        }
+
+        const first = result.content[0];
+        const text = first?.type === "text" ? first.text : "";
+        return new Text(theme.fg("dim", text), 0, 0);
+      },
+    });
+
   // ── pmux_message tool ──
   if (shouldRegister("pmux_message"))
     pi.registerTool({

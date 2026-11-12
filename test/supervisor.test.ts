@@ -1653,6 +1653,40 @@ describe("supervisor interrupt", () => {
   });
 });
 
+describe("supervisor allow", () => {
+  it("writes the allow marker at the running child's session file and acknowledges", async () => {
+    await withHarness(async (h, env) => {
+      const running = await h.supervisor.spawn(
+        { name: "Worker", task: "", agent: "plain-role" },
+        env.ctx,
+      );
+
+      const result = h.supervisor.allow({ name: "Worker" });
+      assert.match(result.content[0].text, /Allow marker written for subagent "Worker"/);
+      assert.equal(result.details.status, "allow_written");
+      assert.equal(
+        existsSync(`${running.sessionFile}.allow`),
+        true,
+        "the marker is at the session file",
+      );
+    });
+  });
+
+  it("fails for an unknown or ambiguous child like interrupt does", async () => {
+    await withHarness(async (h, env) => {
+      await h.supervisor.spawn({ name: "Worker", task: "", agent: "plain-role" }, env.ctx);
+      await h.supervisor.spawn({ name: "Worker", task: "", agent: "plain-role" }, env.ctx);
+
+      const unknown = h.supervisor.allow({ name: "Nobody" });
+      assert.match(unknown.content[0].text, /No running subagent named/);
+      assert.match(String(unknown.details.error), /No running subagent named/);
+
+      const ambiguous = h.supervisor.allow({ name: "Worker" });
+      assert.match(ambiguous.content[0].text, /Ambiguous subagent name/);
+    });
+  });
+});
+
 describe("supervisor roster", () => {
   it("builds the roster from the running map after add and remove", async () => {
     await withHarness(async (h, env) => {
