@@ -1,22 +1,25 @@
 /**
- * Unit tests for the role-editor helpers in agent-defs.ts (design D4/D5):
- * the frontmatter key writer, the three-source role listing, the
- * copy-on-first-edit write and the `pi --list-models` parser. All writes
- * land in temp directories; the package's bundled roles are only read.
+ * Unit tests for the role-editor helpers in agent-defs.ts (designs D3/D4):
+ * the frontmatter key writer, the multi-key save, the three-source role
+ * listing, the copy-on-first-save write, the `enabledModels` reader and
+ * scope, and the `pi --list-models` parser. All writes land in temp
+ * directories; the package's bundled roles are only read.
  */
 import "./host-env.ts";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  enabledScope,
   getBundledAgentsDir,
   listModels,
   listRoles,
   parseAgentDefinition,
   parseModelList,
+  readEnabledModels,
   setFrontmatterKey,
-  writeRoleKey,
+  writeRoleKeys,
   type RoleInfo,
 } from "../pi-extension/pmux/agent-defs.ts";
 import { tempDirHelpers } from "./temp-dir.ts";
@@ -197,8 +200,70 @@ describe("listRoles", () => {
   });
 });
 
-describe("writeRoleKey", () => {
-  it("copies a built-in role to the user agents dir on the first edit", () => {
+describe("writeRoleKeys", () => {
+  it("writes three staged keys in one save", () => {
+    withTempDir((dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+      const file = join(cwd, ".pi", "agents", "worker.md");
+      writeFileSync(file, ROLE);
+      const role = listRoles(cwd, agentDir).find((entry) => entry.name === "worker")!;
+      const written = writeRoleKeys(
+        role,
+        { model: "b/y", "model-fallback": "a/z", thinking: "low" },
+        { agentDir },
+      );
+      assert.equal(written, file);
+      assert.equal(
+        readFileSync(file, "utf8"),
+        ROLE.replace("model: a/x", "model: b/y")
+          .replace("thinking: high", "thinking: low")
+          .replace("thinking: low\n", "thinking: low\nmodel-fallback: a/z\n"),
+      );
+      // One whole-file replace: no temp file is left beside the role.
+      assert.deepEqual(readdirSync(join(cwd, ".pi", "agents")), ["worker.md"]);
+    });
+  });
+
+  it("mixes a removal with sets in one save", () => {
+    withTempDir((dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+      const file = join(cwd, ".pi", "agents", "worker.md");
+      writeFileSync(file, ROLE.replace("model: a/x\n", "model: a/x\nmodel-fallback: a/z\n"));
+      const role = listRoles(cwd, agentDir).find((entry) => entry.name === "worker")!;
+      writeRoleKeys(role, { model: null, thinking: "max" }, { agentDir });
+      const text = readFileSync(file, "utf8");
+      assert.equal(text.includes("model: a/x"), false);
+      assert.ok(text.includes("model-fallback: a/z"));
+      assert.ok(text.includes("thinking: max"));
+      // The unfixed key fell between them and keeps its place.
+      assert.ok(text.indexOf("model-fallback") < text.indexOf("thinking"));
+    });
+  });
+
+  it("keeps a CRLF file's endings in a multi-key save", () => {
+    withTempDir((dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(join(cwd, ".pi", "agents"), { recursive: true });
+      const file = join(cwd, ".pi", "agents", "worker.md");
+      const crlf = ROLE.replace(/\n/g, "\r\n");
+      writeFileSync(file, crlf);
+      const role = listRoles(cwd, agentDir).find((entry) => entry.name === "worker")!;
+      writeRoleKeys(role, { model: "b/y", "model-fallback": "a/z" }, { agentDir });
+      assert.equal(
+        readFileSync(file, "utf8"),
+        crlf
+          .replace("model: a/x\r\n", "model: b/y\r\n")
+          .replace("thinking: high\r\n---", "thinking: high\r\nmodel-fallback: a/z\r\n---"),
+      );
+    });
+  });
+
+  it("copies a built-in role to the user agents dir on the first save", () => {
     withTempDir((dir) => {
       const agentDir = join(dir, "agent");
       const bundled = join(getBundledAgentsDir(), "claude-code.md");
@@ -208,13 +273,18 @@ describe("writeRoleKey", () => {
         path: bundled,
         source: "built-in",
       };
-      const written = writeRoleKey(role, "model", "opus-x", { agentDir });
+      const written = writeRoleKeys(role, { model: "opus-x", thinking: "high" }, { agentDir });
       const copy = join(agentDir, "agents", "claude-code.md");
       assert.equal(written, copy);
-      // The copy is the whole built-in file plus the one edited line.
-      assert.equal(readFileSync(copy, "utf8"), setFrontmatterKey(before, "model", "opus-x"));
-      // The package file is unchanged.
+      // The copy is the whole built-in file plus both edited lines, so no
+      // reader ever sees a copy without the edit.
+      assert.equal(
+        readFileSync(copy, "utf8"),
+        setFrontmatterKey(setFrontmatterKey(before, "model", "opus-x"), "thinking", "high"),
+      );
+      // The package file is unchanged, and the copy is the only new file.
       assert.equal(readFileSync(bundled, "utf8"), before);
+      assert.deepEqual(readdirSync(join(agentDir, "agents")), ["claude-code.md"]);
       // And the role now resolves with source `user`.
       const listed = listRoles(join(dir, "work"), agentDir).find(
         (entry) => entry.name === "claude-code",
@@ -223,7 +293,7 @@ describe("writeRoleKey", () => {
     });
   });
 
-  it("edits only the user copy on a second edit", () => {
+  it("edits only the user copy on a second save", () => {
     withTempDir((dir) => {
       const agentDir = join(dir, "agent");
       mkdirSync(join(agentDir, "agents"), { recursive: true });
@@ -233,7 +303,7 @@ describe("writeRoleKey", () => {
       const bundledBefore = readFileSync(bundled, "utf8");
       const role = listRoles(join(dir, "work"), agentDir).find((entry) => entry.name === "scout")!;
       assert.equal(role.source, "user");
-      const written = writeRoleKey(role, "thinking", "high", { agentDir });
+      const written = writeRoleKeys(role, { thinking: "high" }, { agentDir });
       assert.equal(written, copy);
       assert.equal(
         readFileSync(copy, "utf8"),
@@ -251,7 +321,7 @@ describe("writeRoleKey", () => {
       const file = join(cwd, ".pi", "agents", "fixer.md");
       writeFileSync(file, "---\nmodel: a/x\n---\n\nbody\n");
       const role = listRoles(cwd, agentDir).find((entry) => entry.name === "fixer")!;
-      writeRoleKey(role, "model", null, { agentDir });
+      writeRoleKeys(role, { model: null }, { agentDir });
       const after = listRoles(cwd, agentDir).find((entry) => entry.name === "fixer");
       assert.ok(after);
       assert.equal(after.model, undefined);
@@ -266,11 +336,124 @@ describe("writeRoleKey", () => {
       const file = join(cwd, ".pi", "agents", "fixer.md");
       writeFileSync(file, "---\nname: fixer\nmodel: a/x\n---\n\nbody\n");
       const role = listRoles(cwd, agentDir).find((entry) => entry.name === "fixer")!;
-      const written = writeRoleKey(role, "model", "b/y", { agentDir });
+      const written = writeRoleKeys(role, { model: "b/y" }, { agentDir });
       assert.equal(written, file);
       assert.equal(readFileSync(file, "utf8"), "---\nname: fixer\nmodel: b/y\n---\n\nbody\n");
       assert.equal(existsSync(join(agentDir, "agents")), false);
     });
+  });
+});
+
+describe("readEnabledModels", () => {
+  /** A temp dir pair with the given settings files written. */
+  function withSettings(
+    files: { cwd?: unknown; agentDir?: unknown },
+    check: (dirs: { cwd: string; agentDir: string }) => void,
+  ): void {
+    withTempDir((dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      mkdirSync(agentDir, { recursive: true });
+      if (files.cwd !== undefined) {
+        mkdirSync(join(cwd, ".pi"), { recursive: true });
+        writeFileSync(join(cwd, ".pi", "settings.json"), files.cwd as string);
+      }
+      if (files.agentDir !== undefined) {
+        writeFileSync(join(agentDir, "settings.json"), files.agentDir as string);
+      }
+      check({ cwd, agentDir });
+    });
+  }
+
+  it("reads the project settings file first", () => {
+    withSettings(
+      {
+        cwd: JSON.stringify({ enabledModels: ["p/one"] }),
+        agentDir: JSON.stringify({ enabledModels: ["p/two"] }),
+      },
+      ({ cwd, agentDir }) => assert.deepEqual(readEnabledModels(cwd, agentDir), ["p/one"]),
+    );
+  });
+
+  it("falls back to the agent dir when the project file does not set the key", () => {
+    withSettings(
+      {
+        cwd: JSON.stringify({ theme: "dark" }),
+        agentDir: JSON.stringify({ enabledModels: ["p/two"] }),
+      },
+      ({ cwd, agentDir }) => assert.deepEqual(readEnabledModels(cwd, agentDir), ["p/two"]),
+    );
+  });
+
+  it("returns null when neither file sets the key", () => {
+    withSettings({}, ({ cwd, agentDir }) => {
+      assert.equal(readEnabledModels(cwd, agentDir), null);
+    });
+  });
+
+  it("treats invalid JSON as unset", () => {
+    withSettings(
+      { cwd: "{not json", agentDir: JSON.stringify({ enabledModels: ["p/two"] }) },
+      ({ cwd, agentDir }) => assert.deepEqual(readEnabledModels(cwd, agentDir), ["p/two"]),
+    );
+  });
+
+  it("treats a value that is not an array of strings as unset", () => {
+    for (const value of ["p/one", [1, 2], { a: 1 }, null, ["p/one", 2]]) {
+      withSettings({ cwd: JSON.stringify({ enabledModels: value }) }, ({ cwd, agentDir }) => {
+        assert.equal(readEnabledModels(cwd, agentDir), null, `value ${JSON.stringify(value)}`);
+      });
+    }
+  });
+});
+
+describe("enabledScope", () => {
+  const MODELS = [
+    "claude-bridge/claude-opus-5-5",
+    "devin/gpt-6-astra",
+    "devin/swe-2",
+    "openrouter/deepseek/deepseek-v4.1-flash",
+  ];
+
+  it("keeps the setting's order for exact entries", () => {
+    assert.deepEqual(enabledScope(["devin/swe-2", "claude-bridge/claude-opus-5-5"], MODELS), [
+      "devin/swe-2",
+      "claude-bridge/claude-opus-5-5",
+    ]);
+  });
+
+  it("expands a glob entry in model-list order", () => {
+    assert.deepEqual(enabledScope(["devin/*"], MODELS), ["devin/gpt-6-astra", "devin/swe-2"]);
+  });
+
+  it("ignores a thinking-level suffix", () => {
+    assert.deepEqual(enabledScope(["devin/swe-2:high"], MODELS), ["devin/swe-2"]);
+  });
+
+  it("matches a model id alone", () => {
+    assert.deepEqual(enabledScope(["swe-2"], MODELS), ["devin/swe-2"]);
+  });
+
+  it("matches a model id that holds a slash", () => {
+    assert.deepEqual(enabledScope(["deepseek/deepseek-v4.1-flash"], MODELS), [
+      "openrouter/deepseek/deepseek-v4.1-flash",
+    ]);
+  });
+
+  it("matches case-insensitively and skips an entry with no match", () => {
+    assert.deepEqual(enabledScope(["nobody/nothing", "DEVIN/SWE-2"], MODELS), ["devin/swe-2"]);
+  });
+
+  it("lists a model that two entries match once", () => {
+    assert.deepEqual(enabledScope(["devin/swe-2", "devin/*"], MODELS), [
+      "devin/swe-2",
+      "devin/gpt-6-astra",
+    ]);
+  });
+
+  it("returns nothing for an empty setting", () => {
+    assert.deepEqual(enabledScope([], MODELS), []);
   });
 });
 

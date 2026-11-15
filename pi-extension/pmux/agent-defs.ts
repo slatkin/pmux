@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -159,6 +158,15 @@ export interface RoleInfo {
   thinking?: string;
 }
 
+/** The thinking values the spec fixes (`pi --help`'s list), in cycle order. */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/** The keys the role editor may change, in the order a save writes them. */
+export const ROLE_KEYS = ["model", "model-fallback", "thinking"] as const;
+
+/** One editable role key. */
+export type RoleKey = (typeof ROLE_KEYS)[number];
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -266,34 +274,135 @@ export function listRoles(cwd: string, agentDir: string): RoleInfo[] {
   return roles;
 }
 
+/** The staged edits of one save: a key's new value, or null to remove it. */
+export type RoleChanges = Partial<Record<RoleKey, string | null>>;
+
 /**
- * Apply one frontmatter edit to the role's winning file.
+ * Apply a set of frontmatter edits to a role's file in one atomic write.
  *
- * For a `built-in` role the first edit copies the package file whole to
- * `<agentDir>/agents/<name>.md` (creating the directory) and edits the
- * copy; the package file never changes. Both the copy and the edit write
- * go through a temp file in the same directory plus a rename, so a reader
- * sees the old file or the new file. Returns the path of the file written.
+ * The text is read at save time — the built-in package file for a
+ * `built-in` role, else the winning file — so an edit made by hand while
+ * the panel was open survives. Each staged key is folded onto the text in
+ * the fixed order `model`, `model-fallback`, `thinking` with
+ * `setFrontmatterKey`. A `built-in` role's target is
+ * `<agentDir>/agents/<name>.md`, created with its directory: the package
+ * file never changes, and no reader sees a copy without the edits. One
+ * temp file in the target's directory plus one rename is the whole write.
+ * Returns the path of the file written.
  */
-export function writeRoleKey(
+export function writeRoleKeys(
   role: RoleInfo,
-  key: string,
-  value: string | null,
+  changes: RoleChanges,
   options: { agentDir: string },
 ): string {
-  let target = role.path;
-  if (role.source === "built-in") {
-    target = join(options.agentDir, "agents", `${role.name}.md`);
-    mkdirSync(dirname(target), { recursive: true });
-    const copyTmp = `${target}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
-    copyFileSync(role.path, copyTmp);
-    renameSync(copyTmp, target);
+  const builtIn = role.source === "built-in";
+  const target = builtIn ? join(options.agentDir, "agents", `${role.name}.md`) : role.path;
+  if (builtIn) mkdirSync(dirname(target), { recursive: true });
+
+  let next = readFileSync(role.path, "utf8");
+  for (const key of ROLE_KEYS) {
+    if (!(key in changes)) continue;
+    next = setFrontmatterKey(next, key, changes[key] ?? null);
   }
-  const next = setFrontmatterKey(readFileSync(target, "utf8"), key, value);
   const tmp = `${target}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
   writeFileSync(tmp, next, "utf8");
   renameSync(tmp, target);
   return target;
+}
+
+/**
+ * The `enabledModels` list one settings file sets, or null when the file is
+ * missing, unreadable, not valid JSON, or the value is not an array of
+ * strings — every such form counts as not setting the key.
+ */
+function readEnabledModelsFile(path: string): string[] | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return null;
+  const value = (data as { enabledModels?: unknown }).enabledModels;
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) return null;
+  return value as string[];
+}
+
+/**
+ * pi's `enabledModels` setting for a role editor open (design D4):
+ * `<cwd>/.pi/settings.json` when that file sets the key, else
+ * `<agentDir>/settings.json`, else null.
+ */
+export function readEnabledModels(cwd: string, agentDir: string): string[] | null {
+  return (
+    readEnabledModelsFile(join(cwd, ".pi", "settings.json")) ??
+    readEnabledModelsFile(join(agentDir, "settings.json"))
+  );
+}
+
+/** The thinking-level suffix an `enabledModels` entry may carry. */
+const THINKING_SUFFIX = new RegExp(`:(${THINKING_LEVELS.join("|")})$`, "i");
+
+/**
+ * Translate one `enabledModels` glob: `*` to `.*`, `?` to `.`, a `[...]`
+ * class kept as written, and every other character escaped. The result is
+ * anchored and case-insensitive.
+ */
+function globToRegExp(pattern: string): RegExp {
+  let source = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i]!;
+    if (ch === "*") {
+      source += ".*";
+    } else if (ch === "?") {
+      source += ".";
+    } else if (ch === "[") {
+      const close = pattern.indexOf("]", i + 1);
+      if (close === -1) {
+        source += "\\[";
+      } else {
+        source += pattern.slice(i, close + 1);
+        i = close;
+      }
+    } else {
+      source += escapeRegExp(ch);
+    }
+  }
+  return new RegExp(`^${source}$`, "i");
+}
+
+/**
+ * The models an `enabledModels` pattern list selects, in pattern order and
+ * without repeats (design D4).
+ *
+ * A trailing `:<thinking level>` is stripped. A pattern with `*`, `?` or
+ * `[` is a case-insensitive anchored glob; any other pattern is an exact
+ * case-insensitive match. Both test `provider/model` and the model id, the
+ * part after the first `/`. An entry that matches no listed model is
+ * skipped. pi also matches plain entries fuzzily; this does not, so an
+ * entry pi resolves only that way is reachable through the picker's all
+ * models scope instead.
+ */
+export function enabledScope(patterns: readonly string[], models: readonly string[]): string[] {
+  const selected: string[] = [];
+  const taken = new Set<string>();
+  for (const entry of patterns) {
+    const pattern = entry.replace(THINKING_SUFFIX, "");
+    const glob = /[*?[]/.test(pattern) ? globToRegExp(pattern) : null;
+    const exact = pattern.toLowerCase();
+    for (const model of models) {
+      if (taken.has(model)) continue;
+      const slash = model.indexOf("/");
+      const id = slash === -1 ? model : model.slice(slash + 1);
+      const hit = glob
+        ? glob.test(model) || glob.test(id)
+        : model.toLowerCase() === exact || id.toLowerCase() === exact;
+      if (!hit) continue;
+      taken.add(model);
+      selected.push(model);
+    }
+  }
+  return selected;
 }
 
 /** The shape of a `pi --list-models` run, injectable for tests. */

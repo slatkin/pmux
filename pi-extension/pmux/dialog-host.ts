@@ -57,6 +57,8 @@ export const DIALOG_WIDTH_MARGIN = 4;
 export interface DialogOpenState {
   state: "open";
   pid: number;
+  /** One line per save the dialog has already made, when it records any. */
+  progress?: string[];
 }
 
 /** `{"state":"done", ...result}` — the dialog completed; result fields ride along. */
@@ -75,8 +77,17 @@ export type DialogState = DialogOpenState | DialogDoneState | DialogCancelState;
 /** How the outer side's wait ended. */
 export type DialogOutcome =
   | { kind: "done"; result: Record<string, unknown> }
-  | { kind: "cancel" }
+  | { kind: "cancel"; progress?: string[] }
   | { kind: "still-open"; line: string };
+
+/** The saved lines an `open` record carries, or undefined for none. */
+function openProgress(data: unknown): string[] | undefined {
+  const progress = (data as { progress?: unknown }).progress;
+  if (!Array.isArray(progress) || progress.some((line) => typeof line !== "string")) {
+    return undefined;
+  }
+  return progress as string[];
+}
 
 /**
  * Read the state file. Returns the parsed record, or null when the file is
@@ -90,7 +101,9 @@ export function readDialogState(path: string): DialogState | null {
     const state = (data as { state?: unknown }).state;
     if (state === "open") {
       const pid = (data as { pid?: unknown }).pid;
-      return typeof pid === "number" && Number.isInteger(pid) ? { state: "open", pid } : null;
+      if (typeof pid !== "number" || !Number.isInteger(pid)) return null;
+      const progress = openProgress(data);
+      return { state: "open", pid, ...(progress !== undefined ? { progress } : {}) };
     }
     if (state === "done" || state === "cancel") return data as DialogState;
     return null;
@@ -115,6 +128,24 @@ export function dialogStatePath(env: NodeJS.ProcessEnv = process.env): string | 
 /** The inner side's first write: the dialog is up, and this is its pid. */
 export function markDialogOpen(path: string, pid: number = process.pid): void {
   writeDialogState(path, { state: "open", pid });
+}
+
+/**
+ * Record the lines of the saves a dialog has already made (design D5).
+ * The `open` record gains `progress`, so the caller can still report those
+ * saves when the popup dies before a final record. Called after each save
+ * with every line so far.
+ */
+export function markDialogProgress(
+  path: string,
+  lines: readonly string[],
+  pid: number = process.pid,
+): void {
+  writeDialogState(path, {
+    state: "open",
+    pid,
+    ...(lines.length > 0 ? { progress: [...lines] } : {}),
+  });
 }
 
 /** The inner side's completed write; `result` fields spread into the record. */
@@ -341,13 +372,16 @@ export async function runDialog(
         }
       } else if (!pidAlive(openPid)) {
         // A dead inner pid with no final state is a cancel; read once more
-        // in case the final write raced this check.
+        // in case the final write raced this check. A dialog that recorded
+        // its saves hands them back with the cancel (design D5).
         const last = readDialogState(statePath);
         if (last?.state === "done") {
           const { state: _state, ...result } = last;
           return { kind: "done", result };
         }
-        return { kind: "cancel" };
+        const progress =
+          last?.state === "open" && last.progress !== undefined ? last.progress : undefined;
+        return progress !== undefined ? { kind: "cancel", progress } : { kind: "cancel" };
       }
       if (args.stopAfterMs !== undefined && now() - start >= args.stopAfterMs) {
         keepDir = true;

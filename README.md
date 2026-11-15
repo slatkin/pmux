@@ -114,11 +114,13 @@ popup at the role list, `/pmux-spawn <role>` opens it at the brief step,
 and `/pmux-spawn <role> <task>` starts the child at once. The `pmux_spawn`
 tool is unchanged.
 
-`/pmux-roles` opens the role editor: every role once, with its source and
-its `model`, `model-fallback` and `thinking`, each editable or removable.
-The first edit of a built-in role copies the file to
-`~/.pi/agent/agents/` and edits the copy — the package file is never
-written.
+`/pmux-roles` opens the role editor: the role list, then a panel for the
+chosen role with its `model`, `model-fallback` and `thinking`. Edits stay
+staged until `s` saves them in one write; the model rows open a picker
+that shows pi's `enabledModels` first and every model on Tab. The editor
+stays open, so one open can edit several roles, and the result line names
+every save. The first save of a built-in role writes the user copy with
+the edits already in it — the package file is never written.
 
 `/pmux-reports` opens the report viewer: the reports children sent to the
 caller's pane, newest first, each with its sender, time and

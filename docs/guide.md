@@ -182,6 +182,12 @@ cannot invoke them. Each dialog is a small program in the popup that gets
 the caller's cwd, agent directory and editor or pager variables through
 the popup environment, so the tmux server's environment is never used.
 Escape always cancels, and a cancel changes nothing and starts nothing.
+Each list moves with Up and Down, enters with Enter and takes a typed
+filter: the list keeps the items that contain every space-separated word
+of the filter, case-insensitively (`glm flash` finds
+`opencode-go/glm-5.3-flash`). A filter without a space matches as a plain
+substring. Escape cancels the current list; the role editor's panel and
+picker are the steps that name where their cancel returns.
 
 On the Claude Code path the skill command waits at most 100 seconds for
 the dialog, then prints `dialog still open; it finishes in the popup` and
@@ -220,21 +226,52 @@ row shows the file that wins the existing resolution order, its source —
 `project`, `user` or `built-in` — and its `model`, `model-fallback` and
 `thinking` values. A file without valid frontmatter is not listed.
 
-Three keys are editable: `model` and `model-fallback` take a
-`provider/model` pair from `pi --list-models` (a failure shows the error
-and offers no model values), `thinking` takes one of `off`, `minimal`,
-`low`, `medium`, `high`, `xhigh` or `max`, and each key offers a remove
-choice. An edit replaces the key's line in place, appends it as the last
-frontmatter line when absent, or deletes the line; every other byte of the
-file is unchanged and the write is atomic.
+Enter on a role opens its panel: a title that names the role and its
+source, then one row each for `model`, `model-fallback` and `thinking`,
+with the value a save will write, or an absent mark. A row whose value
+differs from the file shows a changed mark. Up and Down move between the
+rows. Nothing is written until `s` saves every staged change of the role
+in one atomic write and returns to the role list. Escape discards the
+staged changes and writes nothing, and `d` stages the removal of the
+selected row's key.
 
-Copy-on-edit: when the winning file is the package's built-in file, the
-first edit copies it whole to `<user agents directory>/<role>.md` and
-applies the edit to the copy — the built-in file is never written, and the
-dialog says the edit creates a user copy before it writes. Later edits
-change only the copy. A project or user file is edited in place. An edit
-applies to children started after it: a running child keeps its model, and
-a resumed child keeps the model in its launch record.
+On the `thinking` row, Left and Right step backwards and forwards through
+the absent mark and `off`, `minimal`, `low`, `medium`, `high`, `xhigh`
+and `max`, wrapping at both ends; Enter steps forward. On a `model` or
+`model-fallback` row Enter opens the model picker. It opens on the models
+that pi's `enabledModels` setting selects, in the setting's order —
+`<cwd>/.pi/settings.json` first, then the user `settings.json` — and Tab
+switches to every model `pi --list-models` printed. The typed filter
+stays across Tab. The row's current value is marked and selected when the
+picker opens; Enter stages the chosen model and returns to the panel, and
+Escape returns with the row unchanged.
+
+The panel footer says what the keys do, and shows the `pi --list-models`
+error when that command fails: the editor then shows no model values,
+Enter on a model row opens nothing, and the `thinking` row stays
+editable.
+
+An edit replaces the key's line in place, appends it as the last
+frontmatter line when absent, or deletes the line; every other byte of the
+file is unchanged, and all staged keys of one save reach the file in one
+atomic replace.
+
+The editor stays open after a save or a discard, so one open can edit
+several roles. Escape in the role list closes it, and the result line
+names every save of the open — the role, each changed key with its new
+value or its removal, and the file — or says that no role file changed.
+When the popup is killed after a save, the caller still reports that
+save.
+
+Copy-on-save: when the winning file is the package's built-in file, the
+first save writes `<user agents directory>/<role>.md` as the whole
+built-in file with the staged keys already applied, in one atomic write —
+the built-in file is never written, and the panel says the save creates a
+user copy, with the copy's path, before the user saves. Later saves change
+only the copy, and the role then lists with source `user`. A project or
+user file is edited in place. An edit applies to children started after
+it: a running child keeps its model, and a resumed child keeps the model
+in its launch record.
 
 ### `/pmux-reports`: the report viewer
 

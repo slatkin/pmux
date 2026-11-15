@@ -6,14 +6,16 @@
 import "./host-env.ts";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import {
   DIALOG_HOST_LIMIT_MS,
   DIALOG_POLL_MS,
   DIALOG_STATE_ENV,
   DIALOG_STILL_OPEN_LINE,
   markDialogOpen,
+  markDialogProgress,
   popupSizeArgs,
+  readDialogState,
   runDialog,
   writeDialogDone,
   type RunDialogArgs,
@@ -419,6 +421,64 @@ describe("dialog host", () => {
         assert.equal(argv[w + 1], "44");
         assert.equal(argv[h + 1], "20");
       });
+    });
+  });
+});
+
+describe("dialog save progress", () => {
+  const SAVES = ["worker: model = b/y (/w/worker.md)", "scout: removed thinking (/w/scout.md)"];
+
+  it("records the save lines on the open record and reads them back", async () => {
+    await withTempDirAsync(async (dir) => {
+      const path = `${dir}/state.json`;
+      markDialogOpen(path, 4242);
+      markDialogProgress(path, SAVES, 4242);
+      assert.deepEqual(readDialogState(path), { state: "open", pid: 4242, progress: SAVES });
+    });
+  });
+
+  it("keeps an open record without progress when there is nothing to report", async () => {
+    await withTempDirAsync(async (dir) => {
+      const path = `${dir}/state.json`;
+      markDialogOpen(path, 7);
+      markDialogProgress(path, [], 7);
+      assert.deepEqual(readDialogState(path), { state: "open", pid: 7 });
+    });
+  });
+
+  it("drops a malformed progress field", async () => {
+    await withTempDirAsync(async (dir) => {
+      const path = `${dir}/state.json`;
+      for (const progress of ["text", [1, 2], [{ line: "x" }], null]) {
+        writeFileSync(path, JSON.stringify({ state: "open", pid: 7, progress }));
+        assert.deepEqual(
+          readDialogState(path),
+          { state: "open", pid: 7 },
+          `progress ${JSON.stringify(progress)}`,
+        );
+      }
+    });
+  });
+
+  it("carries the recorded saves on a cancel when the inner pid died", async () => {
+    await withTempDirAsync(async (dir) => {
+      const clock = fakeClock();
+      // The inner side saved twice, then the popup was killed: the record
+      // stays `open` with progress, and the pid is gone.
+      const popup = fakePopup({ markOpen: true, pid: 4242 });
+      const outcome = await runDialog(dialogArgs(), {
+        openPopup: (args) => {
+          const handle = popup.openPopup(args);
+          markDialogProgress(popup.statePath(), SAVES, 4242);
+          return handle;
+        },
+        now: clock.now,
+        sleep: clock.sleep,
+        pidAlive: () => false,
+        makeDir: () => dir,
+      });
+      assert.deepEqual(outcome, { kind: "cancel", progress: SAVES });
+      assert.equal(existsSync(dir), false);
     });
   });
 });

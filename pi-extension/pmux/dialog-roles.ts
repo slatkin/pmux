@@ -1,5 +1,5 @@
 /**
- * The role editor dialog (role-editor capability; designs D1, D4 and D5).
+ * The role editor dialog (role-editor capability; designs D1, D2, D5 and D6).
  *
  * `rolesDialogOuter` is the outer side: it opens the popup over the caller's
  * pane through `runDialog` and returns the one result line the host prints —
@@ -7,63 +7,89 @@
  * Code `pmux-roles` skill prints it on stdout.
  *
  * `rolesDialogInner` is the inner side: `cli.ts roles --inner` runs it in the
- * popup. It lists the roles `listRoles` resolves for the caller's cwd, then
- * the key choice (`model`, `model-fallback`, `thinking`), then the value
- * list — the `provider/model` pairs `pi --list-models` prints for the model
- * keys, the fixed thinking levels for `thinking`, and a remove choice on
- * each. For a built-in role the value step's confirm line announces that the
- * edit creates a user copy, before the first write. The outcome goes to the
- * state file: `done` with the result line, or `cancel`.
- *
- * The model list is fetched once per dialog; when `pi --list-models` fails
- * the dialog shows its error on the list footers and the model keys are not
- * editable.
+ * popup. It reads `enabledModels` and the model list once, then runs an
+ * editor loop over three screens: the role list, the role panel and the
+ * model picker. The panel stages `model`, `model-fallback` and `thinking`
+ * edits for one role; `s` writes them in one atomic save and `s`/Escape
+ * return to the role list, which stays open for the next role. Escape in the
+ * role list ends the open. The outcome goes to the state file: `done` with
+ * every save line, or `cancel` when the open saved nothing. Each save is
+ * recorded in the `open` record's `progress`, so a killed popup still
+ * reports the saves it made.
  */
 import { join } from "node:path";
-import { listModels, listRoles, writeRoleKey, type RoleInfo } from "./agent-defs.ts";
+import {
+  enabledScope,
+  listModels,
+  listRoles,
+  readEnabledModels,
+  writeRoleKeys,
+  ROLE_KEYS,
+  THINKING_LEVELS,
+  type RoleChanges,
+  type RoleInfo,
+  type RoleKey,
+} from "./agent-defs.ts";
 import {
   dialogStatePath,
   markDialogOpen,
+  markDialogProgress,
   runDialog,
   writeDialogCancel,
   writeDialogDone,
   DIALOG_STATE_ENV,
   type RunDialogDeps,
 } from "./dialog-host.ts";
-import { chooseFromList, type ListChoice, type ListDialogOptions } from "./dialog-ui.ts";
+import {
+  chooseFromList,
+  chooseFromPanel,
+  chooseFromPicker,
+  initPanelState,
+  initPickerState,
+  panelChanges,
+  stagePanelValue,
+  ABSENT_MARK,
+  type ListChoice,
+  type ListDialogOptions,
+  type PanelDialogOptions,
+  type PanelState,
+  type PickerDialogOptions,
+  type PickerState,
+} from "./dialog-ui.ts";
 
 /** The popup title (`-T`) and each list's title line. */
 export const ROLES_DIALOG_TITLE = "pmux roles";
 
-/** The thinking values the spec fixes (`pi --help`'s list). */
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export { THINKING_LEVELS };
 
-/** Every key the editor may change. */
-const ROLE_KEYS = ["model", "model-fallback", "thinking"] as const;
-
-/** The keys whose values `pi --list-models` supplies. */
-const MODEL_KEYS: ReadonlySet<string> = new Set(["model", "model-fallback"]);
-
-/** The value-list row that deletes the key. */
+/** The value-list row that deletes the key (kept for the size hint). */
 const REMOVE_CHOICE = "(remove)";
 
-/** The mark a row shows when a frontmatter value is absent. */
-const ABSENT_MARK = "—";
-
-/** The list-widget shape the inner side reads keys through. */
+/** The list-widget shape the inner side reads the role list through. */
 export type RolesChoose = (
   items: readonly string[],
   options?: ListDialogOptions,
 ) => Promise<ListChoice | null>;
 
+/** The role panel screen, as the tests inject it. */
+export type RolesPanel = (state: PanelState, options?: PanelDialogOptions) => Promise<PanelState>;
+
+/** The model picker screen, as the tests inject it. */
+export type RolesPick = (state: PickerState, options?: PickerDialogOptions) => Promise<PickerState>;
+
 /**
  * Injected pieces for both sides of the roles dialog; every default is the
  * real thing. The `RunDialogDeps` fields cover the outer side's wait, the
- * two additions cover the inner side's TTY and `pi --list-models` call.
+ * `choose`/`panel`/`pick` fields the inner side's three screens, and
+ * `listModels` the `pi --list-models` call.
  */
 export interface RolesDialogDeps extends RunDialogDeps {
   /** The list widget; defaults to `chooseFromList` on the popup's TTY. */
   choose?: RolesChoose;
+  /** The role panel; defaults to `chooseFromPanel` on the popup's TTY. */
+  panel?: RolesPanel;
+  /** The model picker; defaults to `chooseFromPicker` on the popup's TTY. */
+  pick?: RolesPick;
   /** The model list; defaults to `pi --list-models` through `resolvePiCommand`. */
   listModels?: () => string[];
 }
@@ -98,52 +124,101 @@ export function rolesSizeHints(cwd: string, agentDir: string): { width: number; 
 }
 
 /**
- * The inner side's list sequence. Returns the result line for the `done`
- * record, or null when the user cancelled. `models` is null (with
- * `modelsError` set) when `pi --list-models` failed: the error rides the
- * list footers and the model keys leave the key list.
+ * One save's line (design D6): the role, each changed key with its new value
+ * or its removal in the fixed key order, and the file written.
  */
-async function collectRoleEdit(
-  args: { cwd: string; agentDir: string },
-  choose: RolesChoose,
-  models: string[] | null,
-  modelsError: string | null,
-): Promise<string | null> {
-  const roles = listRoles(args.cwd, args.agentDir);
-  if (roles.length === 0) return "no roles found";
+function saveLine(role: string, changes: RoleChanges, target: string): string {
+  const parts: string[] = [];
+  for (const key of ROLE_KEYS) {
+    if (!(key in changes)) continue;
+    const value = changes[key] ?? null;
+    parts.push(value === null ? `removed ${key}` : `${key} = ${value}`);
+  }
+  return `${role}: ${parts.join(", ")} (${target})`;
+}
 
-  const roleChoice = await choose(roles.map(roleRow), {
+/** What the editor loop reads besides the screens. */
+interface EditorContext {
+  cwd: string;
+  agentDir: string;
+  statePath: string;
+  /** The `provider/model` list, or null when `pi --list-models` failed. */
+  models: string[] | null;
+  modelsError: string | null;
+  /** The models `enabledModels` selects, in its order. */
+  enabled: string[];
+  choose: RolesChoose;
+  panel: RolesPanel;
+  pick: RolesPick;
+}
+
+/**
+ * Run the editor loop (design D2): the role list, then the role panel, then
+ * the model picker and back. A save writes the staged changes in one
+ * `writeRoleKeys` call and records its line as progress; a discard returns
+ * to the role list with nothing written. The role list is re-read after
+ * every save, so the new values and a `user` copy show at once. Resolves
+ * with the done line, or null when the open saved nothing.
+ */
+async function collectRoleEdits(context: EditorContext): Promise<string | null> {
+  const { cwd, agentDir, statePath, models, modelsError, enabled } = context;
+  const saved: string[] = [];
+  const doneLine = (): string | null => (saved.length > 0 ? saved.join("; ") : null);
+  // The model list's error rides the role list's footer, as it always has.
+  const roleListOptions: ListDialogOptions = {
     title: ROLES_DIALOG_TITLE,
     ...(modelsError !== null ? { footer: modelsError } : {}),
-  });
-  if (roleChoice === null) return null;
-  const role = roles[roleChoice.index]!;
+  };
 
-  const keys = ROLE_KEYS.filter((key) => models !== null || !MODEL_KEYS.has(key));
-  const keyChoice = await choose([...keys], {
-    title: `${role.name}: choose a key`,
-    ...(modelsError !== null ? { footer: modelsError } : {}),
-  });
-  if (keyChoice === null) return null;
-  const key = keyChoice.item;
+  for (;;) {
+    const roles = listRoles(cwd, agentDir);
+    if (roles.length === 0) return saved.length > 0 ? saved.join("; ") : "no roles found";
+    const roleChoice = await context.choose(roles.map(roleRow), roleListOptions);
+    if (roleChoice === null) return doneLine();
+    const role = roles[roleChoice.index]!;
 
-  const base = key === "thinking" ? [...THINKING_LEVELS] : (models ?? []);
-  // A built-in role's first write copies the package file to the user's
-  // agents directory (design D4): the confirm line says so before Enter.
-  const valueChoice = await choose([...base, REMOVE_CHOICE], {
-    title: `${role.name}: ${key}`,
-    footer:
-      role.source === "built-in"
-        ? `edits create a user copy: ${join(args.agentDir, "agents", `${role.name}.md`)}`
-        : (modelsError ?? undefined),
-  });
-  if (valueChoice === null) return null;
+    // A built-in role's first save creates the user copy: the panel says so
+    // before the save (spec: "Copy notice before the save").
+    const copyPath =
+      role.source === "built-in" ? join(agentDir, "agents", `${role.name}.md`) : undefined;
+    const panelOptions: PanelDialogOptions = {
+      ...(copyPath !== undefined ? { copyPath } : {}),
+      ...(modelsError !== null ? { modelsError } : {}),
+    };
+    let panel = initPanelState({
+      role: role.name,
+      source: role.source,
+      values: role,
+      hasModels: models !== null,
+    });
 
-  const value = valueChoice.item === REMOVE_CHOICE ? null : valueChoice.item;
-  const target = writeRoleKey(role, key, value, { agentDir: args.agentDir });
-  return value === null
-    ? `${role.name}: removed ${key} (${target})`
-    : `${role.name}: ${key} = ${value} (${target})`;
+    for (;;) {
+      const shown = await context.panel(panel, panelOptions);
+      if (shown.outcome.type === "discard") break;
+      if (shown.outcome.type === "pick") {
+        const key: RoleKey = shown.outcome.key;
+        const staged = shown.rows.find((row) => row.key === key)?.staged ?? null;
+        const picked = await context.pick(
+          initPickerState(enabled, models ?? [], staged ?? undefined),
+          { title: `${role.name}: ${key}` },
+        );
+        // Escape in the picker returns to the panel with the row unchanged.
+        panel = stagePanelValue(
+          shown,
+          key,
+          picked.list.outcome.type === "chosen" ? picked.list.outcome.item : staged,
+        );
+        continue;
+      }
+      // A save with nothing staged writes no file and returns to the list.
+      const changes = panelChanges(shown);
+      if (Object.keys(changes).length === 0) break;
+      const target = writeRoleKeys(role, changes, { agentDir });
+      saved.push(saveLine(role.name, changes, target));
+      markDialogProgress(statePath, saved);
+      break;
+    }
+  }
 }
 
 /** What the inner command line gives the dialog. */
@@ -159,8 +234,8 @@ export interface RolesInnerArgs {
 }
 
 /**
- * Run the role editor inside the popup: write `open`, run the lists, write
- * `done` (the result line) or `cancel`. Throws when the state-file env is
+ * Run the role editor inside the popup: write `open`, run the loop, write
+ * `done` (every save line) or `cancel`. Throws when the state-file env is
  * missing — the outer side's `open` deadline treats a thrown inner as a
  * failed popup. A failure after `open` becomes a `done` record whose line
  * carries the error, so the user sees it instead of a silent cancel.
@@ -176,7 +251,6 @@ export async function rolesDialogInner(
   }
   markDialogOpen(statePath);
 
-  const choose = deps.choose ?? chooseFromList;
   let models: string[] | null;
   let modelsError: string | null = null;
   try {
@@ -185,10 +259,23 @@ export async function rolesDialogInner(
     models = null;
     modelsError = errorMessage(error);
   }
+  // The setting and the scope are read once per open: `pi --list-models`
+  // and the settings files do not change while the panel is up.
+  const enabled = enabledScope(readEnabledModels(args.cwd, args.agentDir) ?? [], models ?? []);
 
   let line: string | null;
   try {
-    line = await collectRoleEdit(args, choose, models, modelsError);
+    line = await collectRoleEdits({
+      cwd: args.cwd,
+      agentDir: args.agentDir,
+      statePath,
+      models,
+      modelsError,
+      enabled,
+      choose: deps.choose ?? chooseFromList,
+      panel: deps.panel ?? chooseFromPanel,
+      pick: deps.pick ?? chooseFromPicker,
+    });
   } catch (error) {
     writeDialogDone(statePath, { line: `role edit failed: ${errorMessage(error)}` });
     return;
@@ -211,9 +298,10 @@ export interface RolesOuterArgs {
 
 /**
  * Open the role editor in a popup over the caller's pane and return the
- * result line to report: the inner side's line on `done`, a cancelled line
- * on `cancel`, or the still-open line after `stopAfterMs`. Throws when no
- * popup can open (outside tmux, a `display-popup` error, no `open` state).
+ * result line to report: the inner side's line on `done`, the recorded save
+ * lines (or the cancelled line) on `cancel`, or the still-open line after
+ * `stopAfterMs`. Throws when no popup can open (outside tmux, a
+ * `display-popup` error, no `open` state).
  */
 export async function rolesDialogOuter(
   args: RolesOuterArgs,
@@ -246,6 +334,11 @@ export async function rolesDialogOuter(
     const line = outcome.result.line;
     return typeof line === "string" && line.length > 0 ? line : "done";
   }
-  if (outcome.kind === "cancel") return "role editor closed; no role file changed";
+  if (outcome.kind === "cancel") {
+    // A killed popup still reports the saves it made (design D5).
+    return outcome.progress !== undefined && outcome.progress.length > 0
+      ? outcome.progress.join("; ")
+      : "role editor closed; no role file changed";
+  }
   return outcome.line;
 }

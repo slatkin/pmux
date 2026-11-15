@@ -4,13 +4,23 @@
  * ANSI codes and reads keys through `node:readline` `emitKeypressEvents`.
  *
  * The keyboard model: Up/Down move the selection, typed characters narrow
- * the list to items containing them (case-insensitive), Backspace widens it
- * again, Enter chooses the selected item, Escape cancels. Editor and pager
- * steps hand the TTY to a child process through `runOnTty` (`spawnSync`
- * with `stdio: "inherit"`) and take raw mode back after it.
+ * the list to items containing every typed word (case-insensitive),
+ * Backspace widens it again, Enter chooses the selected item, Escape
+ * cancels. Editor and pager steps hand the TTY to a child process through
+ * `runOnTty` (`spawnSync` with `stdio: "inherit"`) and take raw mode back
+ * after it.
+ *
+ * The role editor adds two screens on the same plumbing (design D2): a
+ * model picker over two item arrays with Tab to swap them, and a role
+ * panel whose rows stage frontmatter edits until `s` saves them.
  */
 import { spawnSync } from "node:child_process";
 import { emitKeypressEvents } from "node:readline";
+
+import { THINKING_LEVELS, type RoleInfo, type RoleKey, type RoleSource } from "./agent-defs.ts";
+
+/** The mark a row shows when a frontmatter value is absent. */
+export const ABSENT_MARK = "—";
 
 /** The key shape the reducer reads; readline's `Key` is compatible. */
 export interface ListKey {
@@ -35,14 +45,41 @@ export interface ListState {
   outcome: ListOutcome;
 }
 
-export function initListState(items: readonly string[]): ListState {
-  return { items, filter: "", selected: 0, outcome: { type: "pending" } };
+export function initListState(
+  items: readonly string[],
+  options: { selected?: number } = {},
+): ListState {
+  const selected = Math.max(0, Math.min(items.length - 1, options.selected ?? 0));
+  return { items, filter: "", selected, outcome: { type: "pending" } };
 }
 
-/** The rows the filter keeps: a case-insensitive substring match. */
+/**
+ * The items a filter keeps: it splits the typed text on spaces, drops empty
+ * words, and keeps an item that contains every word (design D7). A filter
+ * without a space therefore matches as a plain substring, as it always did.
+ */
+function filterWords(items: readonly string[], filter: string): string[] {
+  const words = filter
+    .toLowerCase()
+    .split(" ")
+    .filter((word) => word.length > 0);
+  if (words.length === 0) return [...items];
+  return items.filter((item) => {
+    const text = item.toLowerCase();
+    return words.every((word) => text.includes(word));
+  });
+}
+
+/** The rows the filter keeps. */
 export function filteredItems(state: ListState): string[] {
-  const needle = state.filter.toLowerCase();
-  return state.items.filter((item) => item.toLowerCase().includes(needle));
+  return filterWords(state.items, state.filter);
+}
+
+/** An item's row in the filtered view, or 0 when the item is not shown. */
+function selectedInView(items: readonly string[], filter: string, item?: string): number {
+  if (item === undefined) return 0;
+  const index = filterWords(items, filter).indexOf(item);
+  return index === -1 ? 0 : index;
 }
 
 /** True when every character is printable (no control bytes, no DEL). */
@@ -141,9 +178,19 @@ export interface ListDialogOptions {
   title?: string;
   /** A hint line drawn under the list (the confirm line). */
   footer?: string;
+  /** The row the list opens on, an index in `items`; defaults to the top. */
+  selected?: number;
+  /** The item the renderer marks, an index in `items`; unmarked when unset. */
+  marked?: number;
   input?: NodeJS.ReadStream;
   output?: NodeJS.WriteStream;
 }
+
+/** The marker a list draws in front of the marked item. */
+const ITEM_MARKER = "● ";
+
+/** The room the marked-item column takes when a list marks an item. */
+const MARKER_WIDTH = ITEM_MARKER.length;
 
 /** The rows a list draw takes besides the items: filter line plus chrome. */
 function chromeLines(options: ListDialogOptions, width: number): number {
@@ -194,20 +241,84 @@ export function renderListLines(
   if (filtered.length === 0) {
     lines.push("(no matches)");
   } else {
-    const wrapped = filtered.map((item) => itemLines(item, width));
+    // A marked list keeps a column for the marker, so the items stay aligned.
+    const marked = options.marked;
+    const column = marked === undefined ? 0 : MARKER_WIDTH;
+    const wrapped = filtered.map((item) => itemLines(item, Math.max(1, width - column)));
     const { start, end } = listWindow(wrapped, state.selected, maxRows);
     let budget = maxRows;
     draw: for (const [row, item] of wrapped.slice(start, end).entries()) {
-      const chosen = start + row === state.selected;
+      const index = start + row;
+      const chosen = index === state.selected;
+      const prefix =
+        marked === undefined ? "" : index === marked ? ITEM_MARKER : " ".repeat(column);
       for (const line of item) {
         // A lone item taller than the window clips at the budget.
         if (budget-- === 0) break draw;
-        lines.push(chosen ? `\x1b[7m${line}\x1b[0m` : line);
+        const text = `${prefix}${line}`;
+        lines.push(chosen ? `\x1b[7m${text}\x1b[0m` : text);
       }
     }
   }
   if (options.footer) lines.push(...wrapLine(options.footer, width));
   return lines;
+}
+
+/** What a screen draws with: the terminal size the runner reads at each draw. */
+interface ScreenSize {
+  rows: number;
+  columns: number;
+}
+
+/** The two streams a screen runs on. */
+interface ScreenStreams {
+  input?: NodeJS.ReadStream;
+  output?: NodeJS.WriteStream;
+}
+
+/**
+ * The TTY loop every screen shares: draw, read keys in raw mode, hand each
+ * key to the reducer, and resolve with the final state once `finished`
+ * holds. The reducer decides every key; the renderer only draws.
+ */
+function runScreen<S>(
+  initial: S,
+  streams: ScreenStreams,
+  step: (state: S, key: ListKey) => S,
+  finished: (state: S) => boolean,
+  draw: (state: S, size: ScreenSize) => string[],
+): Promise<S> {
+  const input = streams.input ?? process.stdin;
+  const output = streams.output ?? process.stdout;
+  let state = initial;
+
+  return new Promise((resolve) => {
+    const render = (): void => {
+      const lines = draw(state, { rows: output.rows ?? 24, columns: output.columns ?? 80 });
+      output.write(`\x1b[H${lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`);
+    };
+
+    const finish = (): void => {
+      input.off("keypress", onKeypress);
+      if (input.isTTY) input.setRawMode(false);
+      input.pause();
+      output.write("\x1b[?25h");
+      resolve(state);
+    };
+
+    const onKeypress = (_str: string, key: ListKey): void => {
+      state = step(state, key);
+      if (finished(state)) finish();
+      else render();
+    };
+
+    emitKeypressEvents(input);
+    if (input.isTTY) input.setRawMode(true);
+    input.resume();
+    input.on("keypress", onKeypress);
+    output.write("\x1b[2J\x1b[H\x1b[?25l");
+    render();
+  });
 }
 
 /**
@@ -219,46 +330,322 @@ export function chooseFromList(
   items: readonly string[],
   options: ListDialogOptions = {},
 ): Promise<ListChoice | null> {
-  const input = options.input ?? process.stdin;
-  const output = options.output ?? process.stdout;
-  let state = initListState(items);
+  const { input, output, ...rest } = options;
+  return runScreen(
+    initListState(items, { selected: options.selected }),
+    {
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
+    },
+    reduceListKey,
+    (state) => state.outcome.type !== "pending",
+    (state, size) => renderListLines(state, size, rest),
+  ).then((state) =>
+    state.outcome.type === "chosen"
+      ? { index: state.outcome.index, item: state.outcome.item }
+      : null,
+  );
+}
 
-  return new Promise((resolve) => {
-    const draw = (): void => {
-      const lines = renderListLines(
-        state,
-        { rows: output.rows ?? 24, columns: output.columns ?? 80 },
-        options,
-      );
-      output.write(`\x1b[H${lines.map((line) => `\x1b[2K${line}`).join("\r\n")}\x1b[J`);
-    };
+/**
+ * The model picker's two scopes (design D2): the models `enabledModels`
+ * selects, and every model `pi --list-models` printed.
+ */
+export type PickerScope = "enabled" | "all";
 
-    const finish = (choice: ListChoice | null): void => {
-      input.off("keypress", onKeypress);
-      if (input.isTTY) input.setRawMode(false);
-      input.pause();
-      output.write("\x1b[?25h");
-      resolve(choice);
-    };
+/**
+ * The picker wraps the list state: it holds both item arrays and the active
+ * one, so Tab swaps the array under the same filter and selection rule.
+ */
+export interface PickerState {
+  enabled: readonly string[];
+  all: readonly string[];
+  scope: PickerScope;
+  /** The row's value before the picker opened: marked and selected when shown. */
+  current?: string;
+  list: ListState;
+}
 
-    const onKeypress = (_str: string, key: ListKey): void => {
-      state = reduceListKey(state, key);
-      if (state.outcome.type === "pending") {
-        draw();
-      } else if (state.outcome.type === "chosen") {
-        finish({ index: state.outcome.index, item: state.outcome.item });
-      } else {
-        finish(null);
-      }
-    };
+/** The picker's draw and stream options; the title names the row. */
+export interface PickerDialogOptions {
+  title?: string;
+  input?: NodeJS.ReadStream;
+  output?: NodeJS.WriteStream;
+}
 
-    emitKeypressEvents(input);
-    if (input.isTTY) input.setRawMode(true);
-    input.resume();
-    input.on("keypress", onKeypress);
-    output.write("\x1b[2J\x1b[H\x1b[?25l");
-    draw();
+/** The item index the picker marks: the row's current value, when shown. */
+export function pickerMarked(state: PickerState): number | undefined {
+  if (state.current === undefined) return undefined;
+  const index = state.list.items.indexOf(state.current);
+  return index === -1 ? undefined : index;
+}
+
+/**
+ * Open the picker on the enabled models, or on all models when the setting
+ * selects none. The current value is marked and selected when the active
+ * array holds it; otherwise the picker opens at the top.
+ */
+export function initPickerState(
+  enabled: readonly string[],
+  all: readonly string[],
+  current?: string,
+): PickerState {
+  const scope: PickerScope = enabled.length > 0 ? "enabled" : "all";
+  const items = scope === "enabled" ? enabled : all;
+  return {
+    enabled,
+    all,
+    scope,
+    ...(current !== undefined ? { current } : {}),
+    list: initListState(items, { selected: selectedInView(items, "", current) }),
+  };
+}
+
+/**
+ * One step of the picker: Tab swaps the item array (the filter stays, the
+ * selection moves to the marked item or the top), and every other key is the
+ * list's. Tab does nothing when `enabled` is empty.
+ */
+export function reducePickerKey(state: PickerState, key: ListKey): PickerState {
+  if (state.list.outcome.type !== "pending") return state;
+  if (key.name !== "tab") return { ...state, list: reduceListKey(state.list, key) };
+  if (state.enabled.length === 0) return state;
+  const scope: PickerScope = state.scope === "enabled" ? "all" : "enabled";
+  const items = scope === "enabled" ? state.enabled : state.all;
+  return {
+    ...state,
+    scope,
+    list: {
+      items,
+      filter: state.list.filter,
+      selected: selectedInView(items, state.list.filter, state.current),
+      outcome: { type: "pending" },
+    },
+  };
+}
+
+/** The scope line under the picker: the active array and the Tab toggle. */
+export function pickerScopeLine(state: PickerState): string {
+  if (state.enabled.length === 0) return "all models";
+  return state.scope === "enabled" ? "enabled models  tab: all" : "all models  tab: enabled";
+}
+
+/** The picker's draw lines: the list, with the scope line as its footer. */
+export function renderPickerLines(
+  state: PickerState,
+  size: { rows: number; columns: number },
+  options: PickerDialogOptions,
+): string[] {
+  const marked = pickerMarked(state);
+  return renderListLines(state.list, size, {
+    ...(options.title !== undefined ? { title: options.title } : {}),
+    footer: pickerScopeLine(state),
+    ...(marked !== undefined ? { marked } : {}),
   });
+}
+
+/**
+ * Run the picker on a terminal: the list's keys plus Tab. Resolves with the
+ * final state — a chosen or cancelled list outcome.
+ */
+export function chooseFromPicker(
+  state: PickerState,
+  options: PickerDialogOptions = {},
+): Promise<PickerState> {
+  const { input, output, ...rest } = options;
+  return runScreen(
+    state,
+    {
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
+    },
+    reducePickerKey,
+    (current) => current.list.outcome.type !== "pending",
+    (current, size) => renderPickerLines(current, size, rest),
+  );
+}
+
+/** One row of the role panel: the file's value and the value a save writes. */
+export interface PanelRow {
+  key: RoleKey;
+  /** The value read from the file when the panel opened; null for absent. */
+  file: string | null;
+  /** The value a save writes; null for a removal. */
+  staged: string | null;
+}
+
+/** Where the panel stands; `pending` keeps reading keys. */
+export type PanelOutcome =
+  { type: "pending" } | { type: "pick"; key: RoleKey } | { type: "save" } | { type: "discard" };
+
+/** The role panel's state (design D2). */
+export interface PanelState {
+  role: string;
+  source: RoleSource;
+  /** False when `pi --list-models` failed: Enter opens no picker. */
+  hasModels: boolean;
+  rows: PanelRow[];
+  selected: number;
+  outcome: PanelOutcome;
+}
+
+/** The panel's draw and stream options: the footer facts the state lacks. */
+export interface PanelDialogOptions {
+  /** The user copy path a built-in role's save creates. */
+  copyPath?: string;
+  /** The `pi --list-models` error, drawn as the footer when there is no copy. */
+  modelsError?: string;
+  input?: NodeJS.ReadStream;
+  output?: NodeJS.WriteStream;
+}
+
+/** The panel's key-hint line. */
+const PANEL_HINT_LINE = "↑↓ move  ←→ thinking  enter pick  d clear  s save  esc discard";
+
+/** The order the panel's `thinking` row cycles in: absent, then the levels. */
+const THINKING_CYCLE: readonly (string | null)[] = [null, ...THINKING_LEVELS];
+
+/** One step of the thinking cycle; an unknown value counts as absent. */
+export function cycleThinking(value: string | null, step: number): string | null {
+  const index = value === null ? 0 : THINKING_CYCLE.indexOf(value);
+  const at = index === -1 ? 0 : index;
+  const size = THINKING_CYCLE.length;
+  return THINKING_CYCLE[(at + step + size) % size] ?? null;
+}
+
+/** The panel's rows in the fixed key order, with the file's values. */
+export function initPanelState(args: {
+  role: string;
+  source: RoleSource;
+  values: Pick<RoleInfo, "model" | "modelFallback" | "thinking">;
+  hasModels: boolean;
+}): PanelState {
+  const values: Record<RoleKey, string | null> = {
+    model: args.values.model ?? null,
+    "model-fallback": args.values.modelFallback ?? null,
+    thinking: args.values.thinking ?? null,
+  };
+  return {
+    role: args.role,
+    source: args.source,
+    hasModels: args.hasModels,
+    rows: (["model", "model-fallback", "thinking"] as const).map((key) => ({
+      key,
+      file: values[key],
+      staged: values[key],
+    })),
+    selected: 0,
+    outcome: { type: "pending" },
+  };
+}
+
+/** Stage one row's value and clear the outcome, so the panel keeps reading. */
+export function stagePanelValue(state: PanelState, key: RoleKey, value: string | null): PanelState {
+  return {
+    ...state,
+    rows: state.rows.map((row) => (row.key === key ? { ...row, staged: value } : row)),
+    outcome: { type: "pending" },
+  };
+}
+
+/**
+ * One step of the role panel: Up/Down move between rows, Left and Right
+ * cycle the `thinking` row, Enter opens the picker on a model row (one
+ * forward cycle on `thinking`), `d` stages a removal, `s` saves and Escape
+ * discards.
+ */
+export function reducePanelKey(state: PanelState, key: ListKey): PanelState {
+  if (state.outcome.type !== "pending") return state;
+  const row = state.rows[state.selected]!;
+  const plain = key.ctrl !== true && key.meta !== true;
+  switch (key.name) {
+    case "escape":
+      return { ...state, outcome: { type: "discard" } };
+    case "up":
+      return { ...state, selected: Math.max(0, state.selected - 1) };
+    case "down":
+      return { ...state, selected: Math.min(state.rows.length - 1, state.selected + 1) };
+    case "left":
+      return row.key === "thinking"
+        ? stagePanelValue(state, "thinking", cycleThinking(row.staged, -1))
+        : state;
+    case "right":
+      return row.key === "thinking"
+        ? stagePanelValue(state, "thinking", cycleThinking(row.staged, 1))
+        : state;
+    case "return":
+    case "enter":
+      if (row.key === "thinking") {
+        return stagePanelValue(state, "thinking", cycleThinking(row.staged, 1));
+      }
+      return state.hasModels ? { ...state, outcome: { type: "pick", key: row.key } } : state;
+    default:
+      break;
+  }
+  if (plain && key.name === "d") return stagePanelValue(state, row.key, null);
+  if (plain && key.name === "s") return { ...state, outcome: { type: "save" } };
+  return state;
+}
+
+/** The staged changes a save writes, in the fixed key order. */
+export function panelChanges(state: PanelState): Partial<Record<RoleKey, string | null>> {
+  const changes: Partial<Record<RoleKey, string | null>> = {};
+  for (const row of state.rows) {
+    if (row.staged === row.file) continue;
+    changes[row.key] = row.staged;
+  }
+  return changes;
+}
+
+/** The footer: a built-in role's copy notice, else the model list's error. */
+function panelFooter(state: PanelState, options: PanelDialogOptions): string | undefined {
+  if (state.source === "built-in" && options.copyPath !== undefined) {
+    return `edits create a user copy: ${options.copyPath}`;
+  }
+  return options.modelsError;
+}
+
+/** The panel's draw lines: title, the three rows, the footer and the hints. */
+export function renderPanelLines(
+  state: PanelState,
+  size: { rows: number; columns: number },
+  options: PanelDialogOptions,
+): string[] {
+  const width = Math.max(1, size.columns);
+  const lines: string[] = [...wrapLine(`${state.role}  [${state.source}]`, width)];
+  for (const [index, row] of state.rows.entries()) {
+    const mark = row.staged ?? ABSENT_MARK;
+    const changed = row.staged !== row.file ? "  *" : "";
+    const text = `  ${row.key.padEnd("model-fallback".length)} ${mark}${changed}`;
+    for (const line of wrapLine(text, width)) {
+      lines.push(index === state.selected ? `\x1b[7m${line}\x1b[0m` : line);
+    }
+  }
+  const footer = panelFooter(state, options);
+  if (footer !== undefined) lines.push(...wrapLine(footer, width));
+  lines.push(...wrapLine(PANEL_HINT_LINE, width));
+  return lines;
+}
+
+/**
+ * Run the role panel on a terminal. Resolves with the final state: a `pick`
+ * (the row's key), a `save`, or a `discard`.
+ */
+export function chooseFromPanel(
+  state: PanelState,
+  options: PanelDialogOptions = {},
+): Promise<PanelState> {
+  const { input, output, ...rest } = options;
+  return runScreen(
+    state,
+    {
+      ...(input !== undefined ? { input } : {}),
+      ...(output !== undefined ? { output } : {}),
+    },
+    reducePanelKey,
+    (current) => current.outcome.type !== "pending",
+    (current, size) => renderPanelLines(current, size, rest),
+  );
 }
 
 /**

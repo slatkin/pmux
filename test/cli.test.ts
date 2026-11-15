@@ -52,15 +52,32 @@ import {
   appendReportRegistration,
   readReportLog,
 } from "../pi-extension/pmux/report-receipt.ts";
-import { DIALOG_STATE_ENV, writeDialogDone } from "../pi-extension/pmux/dialog-host.ts";
-import { rolesSizeHints } from "../pi-extension/pmux/dialog-roles.ts";
+import {
+  DIALOG_STATE_ENV,
+  markDialogOpen,
+  markDialogProgress,
+  writeDialogDone,
+} from "../pi-extension/pmux/dialog-host.ts";
+import {
+  rolesSizeHints,
+  type RolesDialogDeps,
+  type RolesPanel,
+  type RolesPick,
+} from "../pi-extension/pmux/dialog-roles.ts";
 import {
   initListState,
+  pickerMarked,
   reduceListKey,
+  reducePanelKey,
+  reducePickerKey,
   type ListDialogOptions,
   type ListKey,
+  type PanelDialogOptions,
+  type PanelState,
+  type PickerDialogOptions,
+  type PickerState,
 } from "../pi-extension/pmux/dialog-ui.ts";
-import { getBundledAgentsDir } from "../pi-extension/pmux/agent-defs.ts";
+import { getBundledAgentsDir, setFrontmatterKey } from "../pi-extension/pmux/agent-defs.ts";
 import { REPORT_PROTOCOL } from "../pi-extension/pmux/launch-build.ts";
 import {
   type SpawnDialogDeps,
@@ -2366,6 +2383,8 @@ describe("cli.ts last-message", () => {
 const ENTER: ListKey = { name: "return" };
 const ESCAPE: ListKey = { name: "escape" };
 const DOWN: ListKey = { name: "down" };
+const LEFT: ListKey = { name: "left" };
+const RIGHT: ListKey = { name: "right" };
 const typed = (text: string): ListKey[] => [...text].map((ch) => ({ sequence: ch }));
 
 /** Drive the real list reducer with a key script; returns the choice or null. */
@@ -2435,24 +2454,118 @@ function restorePaneFake(): void {
 
 // ─── cli.ts roles ──────────────────────────────────────────────────────
 
+/** One panel draw the scripted screen answered. */
+interface SeenPanel {
+  state: PanelState;
+  options: PanelDialogOptions;
+  /** Whether the copy the options name existed when the panel opened. */
+  copyExisted: boolean | null;
+}
+
+/** One picker draw the scripted screen answered. */
+interface SeenPick {
+  state: PickerState;
+  options: PickerDialogOptions;
+}
+
+/** Drive the real panel reducer from a key stream until it reports an outcome. */
+function scriptedPanel(keys: ListKey[], seen: SeenPanel[]): RolesPanel {
+  return async (state, options = {}) => {
+    seen.push({
+      state,
+      options,
+      copyExisted: options.copyPath !== undefined ? existsSync(options.copyPath) : null,
+    });
+    let next = state;
+    while (next.outcome.type === "pending") {
+      const key = keys.shift();
+      assert.ok(key, "the panel's key script ran out");
+      next = reducePanelKey(next, key);
+    }
+    return next;
+  };
+}
+
+/** Drive the real picker reducer from a key stream until the list reports an outcome. */
+function scriptedPick(keys: ListKey[], seen: SeenPick[]): RolesPick {
+  return async (state, options = {}) => {
+    seen.push({ state, options });
+    let next = state;
+    while (next.list.outcome.type === "pending") {
+      const key = keys.shift();
+      assert.ok(key, "the picker's key script ran out");
+      next = reducePickerKey(next, key);
+    }
+    return next;
+  };
+}
+
+/** Run an outer or inner command with the dialog deps injected. */
+async function runCliWith(
+  argv: string[],
+  env: NodeJS.ProcessEnv,
+  dialog: RolesDialogDeps,
+): Promise<CliResult> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const code = await main(argv, {
+    env,
+    stdout: (text) => stdout.push(text),
+    stderr: (text) => stderr.push(text),
+    sleep: async () => {},
+    dialog,
+  });
+  return { code, stdout: stdout.join(""), stderr: stderr.join("") };
+}
+
 describe("cli.ts roles", () => {
   interface RolesInnerRun {
     code: number;
     stdout: string;
     stderr: string;
     seen: SeenList[];
+    panels: SeenPanel[];
+    picks: SeenPick[];
     state: { state: string; line?: string } | null;
   }
 
-  /** Run `roles --inner` against temp dirs with scripted lists and models. */
+  interface RolesInnerOptions {
+    /** One key script per role-list draw. */
+    roleKeys: ListKey[][];
+    /** One key stream across every panel draw of the open. */
+    panelKeys?: ListKey[];
+    /** One key stream across every picker draw of the open. */
+    pickKeys?: ListKey[];
+    /** The model list; defaults to `["prov/m1", "prov/m2"]`. */
+    models?: string[] | Error;
+    /** The project `enabledModels` setting written to `<cwd>/.pi/settings.json`. */
+    projectSettings?: unknown;
+    /** The user `enabledModels` setting written to `<agentDir>/settings.json`. */
+    agentSettings?: unknown;
+  }
+
+  /** Run `roles --inner` against temp dirs with scripted screens and models. */
   async function runRolesInner(
     dirs: { cwd: string; agentDir: string; statePath: string },
-    keyScripts: ListKey[][],
-    models: string[] | Error = ["prov/m1", "prov/m2"],
+    options: RolesInnerOptions,
   ): Promise<RolesInnerRun> {
     const stdout: string[] = [];
     const stderr: string[] = [];
     const seen: SeenList[] = [];
+    const panels: SeenPanel[] = [];
+    const picks: SeenPick[] = [];
+    const models = options.models ?? ["prov/m1", "prov/m2"];
+    if (options.projectSettings !== undefined) {
+      mkdirSync(join(dirs.cwd, ".pi"), { recursive: true });
+      writeFileSync(
+        join(dirs.cwd, ".pi", "settings.json"),
+        JSON.stringify(options.projectSettings),
+      );
+    }
+    if (options.agentSettings !== undefined) {
+      mkdirSync(dirs.agentDir, { recursive: true });
+      writeFileSync(join(dirs.agentDir, "settings.json"), JSON.stringify(options.agentSettings));
+    }
     const code = await main(
       ["roles", "--inner", "--cwd", dirs.cwd, "--agent-dir", dirs.agentDir, "--pane", "%21"],
       {
@@ -2461,7 +2574,9 @@ describe("cli.ts roles", () => {
         stderr: (text) => stderr.push(text),
         sleep: async () => {},
         dialog: {
-          choose: scriptedChoose(keyScripts, seen),
+          choose: scriptedChoose(options.roleKeys, seen),
+          panel: scriptedPanel(options.panelKeys ?? [], panels),
+          pick: scriptedPick(options.pickKeys ?? [], picks),
           listModels: () => {
             if (models instanceof Error) throw models;
             return models;
@@ -2472,7 +2587,7 @@ describe("cli.ts roles", () => {
     const state = existsSync(dirs.statePath)
       ? (JSON.parse(readFileSync(dirs.statePath, "utf8")) as RolesInnerRun["state"])
       : null;
-    return { code, stdout: stdout.join(""), stderr: stderr.join(""), seen, state };
+    return { code, stdout: stdout.join(""), stderr: stderr.join(""), seen, panels, picks, state };
   }
 
   it("sends the inner dialog argv to display-popup and prints the result line", async () => {
@@ -2575,43 +2690,6 @@ describe("cli.ts roles", () => {
     });
   });
 
-  it("opens the spawn popup at the editor floor when a role is named", async () => {
-    await withTempDirAsync(async (dir) => {
-      const cwd = join(dir, "work");
-      const agentDir = join(dir, "agent");
-      writeRole(cwd, "scout", "model: m", "Scout body.");
-      const calls: string[][] = [];
-      __setTmuxExecForTests__((args) => {
-        calls.push(args);
-        if (args[0] === "display-message" && args.at(-1) === "#{pane_width} #{pane_height}") {
-          return "200 60";
-        }
-        if (args[0] === "display-popup") {
-          writeDialogDone(`${popupEnvValue(args, DIALOG_STATE_ENV)}`, { state: "cancel" });
-        }
-        return "";
-      });
-      try {
-        const res = await runCli(
-          ["spawn-dialog", "--cwd", cwd, "--agent-dir", agentDir, "--args", "scout"],
-          tmuxEnv(),
-        );
-        assert.equal(res.code, 0);
-        assert.equal(res.stdout, "nothing started\n");
-      } finally {
-        restorePaneFake();
-      }
-      const argv = calls.find((args) => args[0] === "display-popup");
-      assert.ok(argv, "expected a display-popup call");
-      // The brief step runs in the same popup, so the width keeps the
-      // editor's floor and the height keeps the `80%` share.
-      const w = argv.indexOf("-w");
-      const h = argv.indexOf("-h");
-      assert.equal(argv[w + 1], "80");
-      assert.equal(argv[h + 1], "80%");
-    });
-  });
-
   it("leaves VISUAL, EDITOR and PAGER out of the popup env when the caller lacks them", async () => {
     await withTempDirAsync(async (dir) => {
       const cwd = join(dir, "work");
@@ -2634,6 +2712,49 @@ describe("cli.ts roles", () => {
     });
   });
 
+  it("reports a cancel as the no-change line when the open saved nothing", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      usePopupExec({ state: "cancel" });
+      try {
+        const res = await runCli(["roles", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv());
+        assert.equal(res.code, 0);
+        assert.equal(res.stdout, "role editor closed; no role file changed\n");
+      } finally {
+        restorePaneFake();
+      }
+    });
+  });
+
+  it("reports the saves recorded before the popup was killed", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      mkdirSync(cwd, { recursive: true });
+      const line = "worker: model = b/y (/work/.pi/agents/worker.md)";
+      __setTmuxExecForTests__((args) => {
+        if (args[0] === "display-popup") {
+          // The inner side saved, then its pid died before a final record.
+          const path = popupEnvValue(args, DIALOG_STATE_ENV)!;
+          markDialogOpen(path, 4242);
+          markDialogProgress(path, [line], 4242);
+        }
+        return "";
+      });
+      try {
+        const res = await runCliWith(["roles", "--cwd", cwd, "--agent-dir", agentDir], tmuxEnv(), {
+          pidAlive: () => false,
+        });
+        assert.equal(res.code, 0);
+        assert.equal(res.stdout, `${line}\n`);
+      } finally {
+        restorePaneFake();
+      }
+    });
+  });
+
   it("refuses before any popup call outside tmux", async () => {
     const { calls } = usePopupExec({ line: "unreached" });
     try {
@@ -2647,86 +2768,289 @@ describe("cli.ts roles", () => {
     assert.deepEqual(calls, []);
   });
 
-  it("edits a project role file in place through injected keys", async () => {
+  it("writes three staged keys in one save", async () => {
     await withTempDirAsync(async (dir) => {
       const cwd = join(dir, "work");
       const agentDir = join(dir, "agent");
       writeRole(cwd, "worker", "name: worker\nmodel: a/x\nthinking: high", "Worker body.");
-      const run = await runRolesInner({ cwd, agentDir, statePath: join(dir, "state.json") }, [
-        [...typed("wor"), ENTER],
-        [ENTER],
-        [DOWN, ENTER],
-      ]);
+      const file = join(cwd, ".pi", "agents", "worker.md");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        {
+          roleKeys: [[...typed("wor"), ENTER], [ESCAPE]],
+          // model pick, model-fallback pick, then the thinking cycle and save.
+          panelKeys: [ENTER, DOWN, ENTER, DOWN, RIGHT, { name: "s", sequence: "s" }],
+          pickKeys: [DOWN, ENTER, ENTER],
+        },
+      );
       assert.equal(run.code, 0);
       assert.equal(run.stderr, "");
       assert.equal(run.state?.state, "done");
-      assert.match(run.state?.line ?? "", /worker: model = prov\/m2/);
-      const text = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      const text = readFileSync(file, "utf8");
       assert.ok(text.includes("model: prov/m2"));
-      assert.ok(text.includes("thinking: high"));
+      assert.ok(text.includes("model-fallback: prov/m1"));
+      assert.ok(text.includes("thinking: xhigh"));
+      // One atomic replace per save: no temp file stays beside the role.
+      assert.deepEqual(readdirSync(join(cwd, ".pi", "agents")), ["worker.md"]);
       // A project file is edited in place: no user copy was made.
       assert.equal(existsSync(join(agentDir, "agents", "worker.md")), false);
+      assert.equal(
+        run.state?.line,
+        `worker: model = prov/m2, model-fallback = prov/m1, thinking = xhigh (${file})`,
+      );
     });
   });
 
-  it("copies a built-in role to the user agents dir on the first edit", async () => {
+  it("shows the new values on the role list after a save", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x\nthinking: high", "Worker body.");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        {
+          roleKeys: [[...typed("wor"), ENTER], [ESCAPE]],
+          panelKeys: [DOWN, DOWN, RIGHT, { name: "s", sequence: "s" }],
+        },
+      );
+      assert.equal(run.state?.state, "done");
+      // The role list is drawn twice: before the panel and after the save.
+      assert.equal(run.seen.length, 2);
+      assert.ok(run.seen[1]!.items.some((item) => item.includes("thinking: xhigh")));
+      assert.ok(run.seen[1]!.items.every((item) => !item.includes("thinking: high  ")));
+    });
+  });
+
+  it("writes no file on a save with nothing staged and returns to the list", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x", "Worker body.");
+      const file = join(cwd, ".pi", "agents", "worker.md");
+      const before = readFileSync(file, "utf8");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        {
+          roleKeys: [[...typed("wor"), ENTER], [ESCAPE]],
+          panelKeys: [{ name: "s", sequence: "s" }],
+        },
+      );
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(readFileSync(file, "utf8"), before);
+      assert.equal(run.seen.length, 2);
+    });
+  });
+
+  it("discards staged changes on Escape and keeps the file's values", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x", "Worker body.");
+      const file = join(cwd, ".pi", "agents", "worker.md");
+      const before = readFileSync(file, "utf8");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        {
+          roleKeys: [[...typed("wor"), ENTER], [ESCAPE]],
+          panelKeys: [ENTER, ESCAPE],
+          pickKeys: [ENTER],
+        },
+      );
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(readFileSync(file, "utf8"), before);
+      // The role list still shows the old value.
+      assert.ok(run.seen[1]!.items.some((item) => item.includes("model: a/x")));
+    });
+  });
+
+  it("edits two roles in one open", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x\nthinking: high", "Worker body.");
+      writeRole(cwd, "scout", "name: scout\nmodel: a/y\nthinking: low", "Scout body.");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        {
+          roleKeys: [[...typed("wor"), ENTER], [...typed("sco"), ENTER], [ESCAPE]],
+          panelKeys: [
+            DOWN,
+            DOWN,
+            RIGHT,
+            { name: "s", sequence: "s" },
+            DOWN,
+            DOWN,
+            LEFT,
+            { name: "s", sequence: "s" },
+          ],
+        },
+      );
+      assert.equal(run.code, 0);
+      assert.equal(run.state?.state, "done");
+      const worker = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      const scout = readFileSync(join(cwd, ".pi", "agents", "scout.md"), "utf8");
+      assert.ok(worker.includes("thinking: xhigh"));
+      assert.ok(scout.includes("thinking: minimal"));
+      // The result line names both saves.
+      assert.match(
+        run.state?.line ?? "",
+        /^worker: thinking = xhigh \(.*\); scout: thinking = minimal \(/,
+      );
+    });
+  });
+
+  it("keeps the row's value when the picker is left with Escape", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: prov/m2\nthinking: high", "Worker body.");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        {
+          roleKeys: [[...typed("wor"), ENTER], [ESCAPE]],
+          panelKeys: [ENTER, DOWN, DOWN, RIGHT, { name: "s", sequence: "s" }],
+          pickKeys: [ESCAPE],
+        },
+      );
+      assert.equal(run.state?.state, "done");
+      const text = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      assert.ok(text.includes("model: prov/m2"));
+      assert.ok(text.includes("thinking: xhigh"));
+      // The panel reopened with the model row's value from before the picker.
+      assert.equal(run.panels[1]!.state.rows[0]!.staged, "prov/m2");
+    });
+  });
+
+  it("marks and selects the row's current value when the picker opens", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: prov/m2", "Worker body.");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        {
+          roleKeys: [[...typed("wor"), ENTER], [ESCAPE]],
+          panelKeys: [ENTER, ESCAPE],
+          pickKeys: [ESCAPE],
+        },
+      );
+      assert.equal(run.picks.length, 1);
+      assert.equal(run.picks[0]!.state.current, "prov/m2");
+      assert.equal(pickerMarked(run.picks[0]!.state), 1);
+      assert.equal(run.picks[0]!.state.list.selected, 1);
+    });
+  });
+
+  it("opens the picker on the project's enabledModels in their order", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: prov/m1", "Worker body.");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        {
+          roleKeys: [[...typed("wor"), ENTER], [ESCAPE]],
+          panelKeys: [ENTER, ESCAPE],
+          pickKeys: [ESCAPE],
+          models: ["prov/m1", "prov/m2", "other/m3"],
+          projectSettings: { enabledModels: ["prov/m2", "prov/m1"] },
+        },
+      );
+      assert.equal(run.picks[0]!.state.scope, "enabled");
+      assert.deepEqual(run.picks[0]!.state.list.items, ["prov/m2", "prov/m1"]);
+      assert.equal(pickerMarked(run.picks[0]!.state), 1);
+    });
+  });
+
+  it("opens the picker on all models when neither settings file sets the scope", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: prov/m1", "Worker body.");
+      const models = ["prov/m1", "prov/m2"];
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        {
+          roleKeys: [[...typed("wor"), ENTER], [ESCAPE]],
+          panelKeys: [ENTER, ESCAPE],
+          pickKeys: [ESCAPE],
+          models,
+        },
+      );
+      assert.equal(run.picks[0]!.state.scope, "all");
+      assert.deepEqual(run.picks[0]!.state.list.items, models);
+    });
+  });
+
+  it("shows the copy notice before the first save of a built-in role", async () => {
     await withTempDirAsync(async (dir) => {
       const cwd = join(dir, "work");
       mkdirSync(cwd, { recursive: true });
       const agentDir = join(dir, "agent");
       const bundled = join(getBundledAgentsDir(), "visual-tester.md");
       const before = readFileSync(bundled, "utf8");
-      const run = await runRolesInner({ cwd, agentDir, statePath: join(dir, "state.json") }, [
-        [...typed("vis"), ENTER],
-        [DOWN, DOWN, ENTER],
-        [DOWN, DOWN, ENTER],
-      ]);
-      assert.equal(run.code, 0);
-      assert.equal(run.state?.state, "done");
-      // The value step's confirm line announced the user copy.
-      const valueList = run.seen[2];
-      assert.match(valueList?.footer ?? "", /edits create a user copy/);
       const copy = join(agentDir, "agents", "visual-tester.md");
-      assert.equal(existsSync(copy), true);
-      assert.ok(readFileSync(copy, "utf8").includes("thinking: low"));
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        {
+          roleKeys: [[...typed("vis"), ENTER], [ESCAPE]],
+          // No thinking line: one Right lands on the first level, `off`.
+          panelKeys: [DOWN, DOWN, RIGHT, { name: "s", sequence: "s" }],
+        },
+      );
+      assert.equal(run.state?.state, "done");
+      // The panel named the copy path, and nothing existed there yet.
+      assert.equal(run.panels[0]!.options.copyPath, copy);
+      assert.equal(run.panels[0]!.copyExisted, false);
+      // The copy is the built-in file with the staged key, and the role now
+      // lists with source `user`.
+      assert.equal(readFileSync(copy, "utf8"), setFrontmatterKey(before, "thinking", "off"));
       assert.equal(readFileSync(bundled, "utf8"), before);
+      assert.ok(run.seen[1]!.items.some((item) => item.startsWith("visual-tester  [user]")));
     });
   });
 
-  it("writes cancel when the user presses Escape and changes no file", async () => {
-    await withTempDirAsync(async (dir) => {
-      const cwd = join(dir, "work");
-      const agentDir = join(dir, "agent");
-      writeRole(cwd, "worker", "name: worker\nmodel: a/x", "Worker body.");
-      const before = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
-      const run = await runRolesInner({ cwd, agentDir, statePath: join(dir, "state.json") }, [
-        [ESCAPE],
-      ]);
-      assert.equal(run.code, 0);
-      assert.equal(run.state?.state, "cancel");
-      assert.equal(readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8"), before);
-    });
-  });
-
-  it("shows the pi --list-models error and keeps the model keys out of the key list", async () => {
+  it("shows the pi --list-models error and offers no picker", async () => {
     await withTempDirAsync(async (dir) => {
       const cwd = join(dir, "work");
       const agentDir = join(dir, "agent");
       writeRole(cwd, "worker", "name: worker\nmodel: a/x", "Worker body.");
       const run = await runRolesInner(
         { cwd, agentDir, statePath: join(dir, "state.json") },
-        [[...typed("wor"), ENTER], [ENTER], [DOWN, DOWN, DOWN, DOWN, ENTER]],
-        new Error("pi --list-models failed: no pi on PATH"),
+        {
+          roleKeys: [[...typed("wor"), ENTER], [ESCAPE]],
+          // Enter on the model row does nothing, so the keys reach thinking.
+          panelKeys: [ENTER, DOWN, DOWN, RIGHT, { name: "s", sequence: "s" }],
+          models: new Error("pi --list-models failed: no pi on PATH"),
+        },
+      );
+      assert.equal(run.state?.state, "done");
+      assert.match(run.panels[0]!.options.modelsError ?? "", /no pi on PATH/);
+      assert.equal(run.picks.length, 0);
+      const text = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      assert.ok(text.includes("model: a/x"));
+      assert.ok(text.includes("thinking: off"));
+      assert.equal(
+        run.state?.line,
+        `worker: thinking = off (${join(cwd, ".pi", "agents", "worker.md")})`,
+      );
+    });
+  });
+
+  it("writes cancel when the user closes the editor without a save", async () => {
+    await withTempDirAsync(async (dir) => {
+      const cwd = join(dir, "work");
+      const agentDir = join(dir, "agent");
+      writeRole(cwd, "worker", "name: worker\nmodel: a/x", "Worker body.");
+      const before = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
+      const run = await runRolesInner(
+        { cwd, agentDir, statePath: join(dir, "state.json") },
+        { roleKeys: [[ESCAPE]] },
       );
       assert.equal(run.code, 0);
-      assert.equal(run.state?.state, "done");
-      // The error rides the list footers, and the key list offers thinking only.
-      assert.match(run.seen[0]?.footer ?? "", /pi --list-models failed: no pi on PATH/);
-      assert.deepEqual(run.seen[1]?.items, ["thinking"]);
-      // "high" is the fifth thinking level: off, minimal, low, medium, high.
-      assert.match(run.state?.line ?? "", /worker: thinking = high/);
-      const text = readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8");
-      assert.ok(text.includes("thinking: high"));
+      assert.equal(run.state?.state, "cancel");
+      assert.equal(readFileSync(join(cwd, ".pi", "agents", "worker.md"), "utf8"), before);
+      assert.equal(run.panels.length, 0);
     });
   });
 
