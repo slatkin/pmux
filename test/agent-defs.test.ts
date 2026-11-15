@@ -455,6 +455,13 @@ describe("enabledScope", () => {
   it("returns nothing for an empty setting", () => {
     assert.deepEqual(enabledScope([], MODELS), []);
   });
+
+  it("skips a glob whose class does not compile", () => {
+    assert.deepEqual(enabledScope(["[z-a]", "devin/*"], MODELS), [
+      "devin/gpt-6-astra",
+      "devin/swe-2",
+    ]);
+  });
 });
 
 describe("parseModelList", () => {

@@ -239,9 +239,21 @@ describe("dialog list rendering", () => {
   });
 
   it("keeps the mark on its item in the filtered view", () => {
-    const state = type(initListState(["alpha", "beta", "gamma"]), "a");
+    const state = type(initListState(["alpha", "beta", "gamma"]), "mm");
     const lines = renderListLines(state, { rows: 24, columns: 80 }, { marked: 2 });
-    assert.deepEqual(lines, ["> a", "\x1b[7m  alpha\x1b[0m", "  beta", "● gamma"]);
+    assert.deepEqual(lines, ["> mm", "\x1b[7m● gamma\x1b[0m"]);
+  });
+
+  it("follows the marked item when the filter drops earlier rows", () => {
+    const state = type(initListState(["one", "two", "three"]), "t");
+    const lines = renderListLines(state, { rows: 24, columns: 80 }, { marked: 2 });
+    assert.deepEqual(lines, ["> t", "\x1b[7m  two\x1b[0m", "● three"]);
+  });
+
+  it("marks no row when the filter hides the marked item", () => {
+    const state = type(initListState(["zz", "aa", "cc"]), "a");
+    const lines = renderListLines(state, { rows: 24, columns: 80 }, { marked: 0 });
+    assert.deepEqual(lines, ["> a", "\x1b[7maa\x1b[0m"]);
   });
 });
 

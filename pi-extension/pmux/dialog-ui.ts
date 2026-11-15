@@ -242,16 +242,18 @@ export function renderListLines(
     lines.push("(no matches)");
   } else {
     // A marked list keeps a column for the marker, so the items stay aligned.
-    const marked = options.marked;
-    const column = marked === undefined ? 0 : MARKER_WIDTH;
+    // `marked` is an index in `items`; the draw works on the filtered view,
+    // so the marker follows the item, not the position.
+    const markedItem = options.marked === undefined ? undefined : state.items[options.marked];
+    const marked = markedItem === undefined ? -1 : filtered.indexOf(markedItem);
+    const column = marked === -1 ? 0 : MARKER_WIDTH;
     const wrapped = filtered.map((item) => itemLines(item, Math.max(1, width - column)));
     const { start, end } = listWindow(wrapped, state.selected, maxRows);
     let budget = maxRows;
     draw: for (const [row, item] of wrapped.slice(start, end).entries()) {
       const index = start + row;
       const chosen = index === state.selected;
-      const prefix =
-        marked === undefined ? "" : index === marked ? ITEM_MARKER : " ".repeat(column);
+      const prefix = marked === -1 ? "" : index === marked ? ITEM_MARKER : " ".repeat(column);
       for (const line of item) {
         // A lone item taller than the window clips at the budget.
         if (budget-- === 0) break draw;

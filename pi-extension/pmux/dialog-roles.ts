@@ -259,12 +259,11 @@ export async function rolesDialogInner(
     models = null;
     modelsError = errorMessage(error);
   }
-  // The setting and the scope are read once per open: `pi --list-models`
-  // and the settings files do not change while the panel is up.
-  const enabled = enabledScope(readEnabledModels(args.cwd, args.agentDir) ?? [], models ?? []);
-
   let line: string | null;
   try {
+    // The setting and the scope are read once per open: `pi --list-models`
+    // and the settings files do not change while the panel is up.
+    const enabled = enabledScope(readEnabledModels(args.cwd, args.agentDir) ?? [], models ?? []);
     line = await collectRoleEdits({
       cwd: args.cwd,
       agentDir: args.agentDir,

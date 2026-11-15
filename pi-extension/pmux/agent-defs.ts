@@ -346,9 +346,10 @@ const THINKING_SUFFIX = new RegExp(`:(${THINKING_LEVELS.join("|")})$`, "i");
 /**
  * Translate one `enabledModels` glob: `*` to `.*`, `?` to `.`, a `[...]`
  * class kept as written, and every other character escaped. The result is
- * anchored and case-insensitive.
+ * anchored and case-insensitive. A class the RegExp constructor rejects
+ * (for example `[z-a]`) returns null: the entry selects nothing.
  */
-function globToRegExp(pattern: string): RegExp {
+function globToRegExp(pattern: string): RegExp | null {
   let source = "";
   for (let i = 0; i < pattern.length; i++) {
     const ch = pattern[i]!;
@@ -368,7 +369,11 @@ function globToRegExp(pattern: string): RegExp {
       source += escapeRegExp(ch);
     }
   }
-  return new RegExp(`^${source}$`, "i");
+  try {
+    return new RegExp(`^${source}$`, "i");
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -379,8 +384,9 @@ function globToRegExp(pattern: string): RegExp {
  * `[` is a case-insensitive anchored glob; any other pattern is an exact
  * case-insensitive match. Both test `provider/model` and the model id, the
  * part after the first `/`. An entry that matches no listed model is
- * skipped. pi also matches plain entries fuzzily; this does not, so an
- * entry pi resolves only that way is reachable through the picker's all
+ * skipped, and so is a glob whose class does not compile. pi also
+ * matches plain entries fuzzily; this does not, so an entry pi resolves
+ * only that way is reachable through the picker's all
  * models scope instead.
  */
 export function enabledScope(patterns: readonly string[], models: readonly string[]): string[] {
@@ -388,7 +394,9 @@ export function enabledScope(patterns: readonly string[], models: readonly strin
   const taken = new Set<string>();
   for (const entry of patterns) {
     const pattern = entry.replace(THINKING_SUFFIX, "");
-    const glob = /[*?[]/.test(pattern) ? globToRegExp(pattern) : null;
+    const globLike = /[*?[]/.test(pattern);
+    const glob = globLike ? globToRegExp(pattern) : null;
+    if (globLike && glob === null) continue;
     const exact = pattern.toLowerCase();
     for (const model of models) {
       if (taken.has(model)) continue;
