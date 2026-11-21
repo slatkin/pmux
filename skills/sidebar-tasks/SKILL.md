@@ -15,6 +15,11 @@ command reads `TMUX_PANE` itself and records for the pane it runs in, so
 run it in your own pane's shell, the way your shell tool already runs.
 Outside tmux the commands record nothing and exit 0.
 
+Run `pmux-explorer` only as `task-describe`, `task-set` or `task-update`.
+With no subcommand it opens the interactive sidebar TUI in your pane and
+blocks on its input — a hang. Any other name fails fast with usage, but
+still records nothing.
+
 The list is one file per pane, `/tmp/pmux-explorer-tasks<PANE>.json`. A new
 session starts with an empty list: the sidebar clears the pane's store at
 session start.
